@@ -10,7 +10,10 @@ import RoleGate from '../components/RoleGate.jsx';
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/customers', label: 'Customers', icon: Users },
-  { to: '/zones', label: 'Zones', icon: MapPinned, roles: ['admin'] },
+  // View is available to any authenticated staff role that needs zone
+  // context (Phase 3 Module 1 discovery: "no legitimate role is excluded
+  // from viewing") — ungated. Create/Edit stays admin-only at the page level.
+  { to: '/zones', label: 'Zones', icon: MapPinned },
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList },
   { to: '/billing', label: 'Billing & Invoices', icon: Receipt, permission: 'billing.view' },
 ];

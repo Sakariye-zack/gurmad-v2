@@ -10,6 +10,13 @@ export default defineConfig({
   server: {
     port: 5180,
     proxy: {
+      // V2's own domain APIs (Zones, and future Core/Master Data modules)
+      // live on the new V2 backend. Must be registered before the generic
+      // '/api' rule below, since Vite proxy matching is first-match-wins.
+      '/api/v2': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://localhost:5000',
         changeOrigin: true,
