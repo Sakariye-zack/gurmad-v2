@@ -21,7 +21,13 @@ export default function AppShell() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
       {!useMobileShell && <Sidebar />}
-      <main style={{ flex: 1, padding: useMobileShell ? '16px' : '24px', paddingBottom: useMobileShell ? '80px' : '24px', maxWidth: '1400px' }}>
+      {/* minWidth: 0 overrides the flex item's default min-width:auto — without
+          it, wide content (e.g. DataTable) refuses to shrink below its
+          natural width and pushes the whole page wider than the viewport.
+          Found during Phase 3 Module 1 tablet-width QA (844px page vs 768px
+          viewport); DataTable's own overflow-x:auto wrapper only works once
+          this ancestor is actually allowed to shrink to the flexed width. */}
+      <main style={{ flex: 1, minWidth: 0, padding: useMobileShell ? '16px' : '24px', paddingBottom: useMobileShell ? '80px' : '24px', maxWidth: '1400px' }}>
         <Outlet />
       </main>
       {useMobileShell && <MobileTabBar />}

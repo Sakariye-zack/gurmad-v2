@@ -7,6 +7,14 @@ const router = express.Router();
 const VALID_STATUSES = ['active', 'inactive'];
 const ZONE_CODE_RE = /^[A-Z0-9][A-Z0-9-]{1,49}$/;
 
+// Strict: parseInt() alone would silently truncate "1 OR 1=1" or "1abc" to
+// 1 and resolve it as a valid id. Not exploitable (queries are parameterized)
+// but it's a real validation gap — found during Phase 3 Module 1 QA.
+function parseStrictId(raw) {
+  if (!/^\d+$/.test(raw)) return null;
+  return parseInt(raw, 10);
+}
+
 function validateZoneInput(body, { partial = false } = {}) {
   const errors = [];
   const out = {};
@@ -94,8 +102,8 @@ router.get('/', authenticateToken, async (req, res) => {
 
 // GET /api/v2/zones/:id
 router.get('/:id', authenticateToken, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id)) {
+  const id = parseStrictId(req.params.id);
+  if (id === null) {
     return res.status(400).json({ error: { message: 'Invalid zone id.', code: 'VALIDATION' } });
   }
   try {
@@ -142,8 +150,8 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
 
 // PUT /api/v2/zones/:id — admin only.
 router.put('/:id', authenticateToken, requireRole('admin'), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id)) {
+  const id = parseStrictId(req.params.id);
+  if (id === null) {
     return res.status(400).json({ error: { message: 'Invalid zone id.', code: 'VALIDATION' } });
   }
   const { errors, data } = validateZoneInput(req.body, { partial: true });

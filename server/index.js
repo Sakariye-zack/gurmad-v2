@@ -26,6 +26,12 @@ app.use((err, req, res, next) => {
   if (err && err.message === 'Not allowed by CORS') {
     return res.status(500).json({ error: { message: 'Not allowed by CORS', code: 'CORS' } });
   }
+  // express.json() throws a SyntaxError for a malformed body — that's a
+  // client error, not a server failure. Found during Phase 3 Module 1 QA
+  // (was surfacing as a 500).
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ error: { message: 'Malformed JSON in request body.', code: 'VALIDATION' } });
+  }
   res.status(500).json({ error: { message: 'Unexpected server error.', code: 'INTERNAL' } });
 });
 
