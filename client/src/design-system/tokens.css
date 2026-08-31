@@ -1,0 +1,99 @@
+/* Gurmad V2 — Design Tokens
+   Source of truth: GURMAD_V2/03_UI_UX/Design_System.md §2-4
+   Light palette on :root; dark overrides via prefers-color-scheme and
+   an explicit [data-theme] override, per the artifact-design convention
+   this whole program has followed. */
+
+:root {
+  --brand: #2f7d3e;
+  --brand-dark: #1f5a2a;
+  --bg: #f7f8f6;
+  --surface: #ffffff;
+  --border: #e0e3dc;
+  --text: #1c231d;
+  --text-muted: #5b6358;
+  --success: #2f7d3e;
+  --success-bg: #e5f3e5;
+  --warning: #a3730a;
+  --warning-bg: #fbf0dd;
+  --danger: #b23a3a;
+  --danger-bg: #fbe9e7;
+  --info: #2563a8;
+  --info-bg: #e5eefa;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --shadow-sm: 0 1px 2px rgba(28, 35, 29, 0.06);
+  --shadow-md: 0 4px 14px rgba(28, 35, 29, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --brand: #7fc98a;
+    --brand-dark: #5da968;
+    --bg: #14170f;
+    --surface: #1b1f16;
+    --border: #2c3325;
+    --text: #e8ebe2;
+    --text-muted: #a3ac97;
+    --success: #7fc98a;
+    --success-bg: #1c3320;
+    --warning: #e0b054;
+    --warning-bg: #3a2f13;
+    --danger: #e08a83;
+    --danger-bg: #3a1f1c;
+    --info: #6fa8dc;
+    --info-bg: #1c2c3a;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme='dark'] {
+  --brand: #7fc98a;
+  --brand-dark: #5da968;
+  --bg: #14170f;
+  --surface: #1b1f16;
+  --border: #2c3325;
+  --text: #e8ebe2;
+  --text-muted: #a3ac97;
+  --success: #7fc98a;
+  --success-bg: #1c3320;
+  --warning: #e0b054;
+  --warning-bg: #3a2f13;
+  --danger: #e08a83;
+  --danger-bg: #3a1f1c;
+  --info: #6fa8dc;
+  --info-bg: #1c2c3a;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+h1, h2, h3 { font-family: var(--font-display); font-weight: 800; margin: 0; text-wrap: balance; }
+h1 { font-size: 28px; }
+h2 { font-size: 22px; }
+h3 { font-size: 18px; }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
