@@ -24,9 +24,17 @@ async function request(path, options = {}) {
   try { body = await res.json(); } catch { /* no body */ }
 
   if (!res.ok) {
-    const message = (body && body.error) || `Request failed (${res.status})`;
+    // Two backends, two error shapes: the reference T2.8-F backend returns
+    // { error: "string" }; the V2 domain backends (Zones, Customers, ...)
+    // return { error: { message, code } }. Found as a real bug during
+    // Phase 3 Module 2 QA — an unhandled object was passed straight to
+    // Error(), rendering as the literal text "[object Object]" in every
+    // toast/inline error sourced from a V2 backend.
+    const errBody = body && body.error;
+    const message = (errBody && typeof errBody === 'object' ? errBody.message : errBody) || `Request failed (${res.status})`;
     const err = new Error(message);
     err.status = res.status;
+    err.code = errBody && typeof errBody === 'object' ? errBody.code : undefined;
     throw err;
   }
   return body;

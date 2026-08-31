@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { runMigrations } = require('./db');
 const zonesRouter = require('./routes/zones');
+const customersRouter = require('./routes/customers');
 
 const app = express();
 app.use(express.json());
@@ -20,6 +21,7 @@ app.use(cors({
 
 app.get('/api/v2/health', (req, res) => res.json({ ok: true, service: 'gurmad-v2-server' }));
 app.use('/api/v2/zones', zonesRouter);
+app.use('/api/v2/customers', customersRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
