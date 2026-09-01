@@ -482,6 +482,97 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_customer_id ON debts(customer_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_invoice_id ON debts(invoice_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);`);
+
+  // ============================================================
+  // Phase 3 Module 7 — Cashout & Cash Reconciliation. Approved via
+  // Phase3_Module07_Cashout_Discovery.md's OD-1/OD-3/OD-4/OD-5 and the
+  // subsequent UX-refinement direction. Additive only.
+  //
+  // The ONE approved touch to CLOSED Module 6: debts.cashout_id below.
+  // Deliberately NOT adding a payments.cashout_id column (that would be
+  // a SECOND Module 6 touch beyond the single one explicitly approved
+  // — "If anything beyond that is required: STOP and report"). Instead,
+  // a cashout reconciles against payments read-only, scoped by
+  // cashier_id + a [period_start, period_end) time window stored on
+  // the cashout itself; double-counting is prevented at write time by
+  // rejecting a new cashout whose window overlaps an existing
+  // non-voided cashout for the same cashier (routes/cashouts.js), not
+  // by a DB constraint on payments. This is the smallest-isolated-
+  // mechanism resolution to the reconciliation requirement without
+  // expanding Module 6's own already-closed schema.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashouts (
+      id SERIAL PRIMARY KEY,
+      cashout_number VARCHAR(20) UNIQUE NOT NULL,
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      cashier_id INTEGER NOT NULL,
+      head_of_cashiers_id INTEGER NOT NULL,
+      period_start TIMESTAMP NOT NULL,
+      period_end TIMESTAMP NOT NULL,
+      expected_amount NUMERIC NOT NULL,
+      actual_amount NUMERIC NOT NULL CHECK (actual_amount >= 0),
+      cash_amount NUMERIC NOT NULL DEFAULT 0,
+      zaad_amount NUMERIC NOT NULL DEFAULT 0,
+      edahab_amount NUMERIC NOT NULL DEFAULT 0,
+      slsh_amount NUMERIC NOT NULL DEFAULT 0,
+      shortage NUMERIC NOT NULL DEFAULT 0 CHECK (shortage >= 0),
+      surplus NUMERIC NOT NULL DEFAULT 0 CHECK (surplus >= 0),
+      shortage_reason TEXT,
+      remarks TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','voided')),
+      approved_by INTEGER,
+      approved_at TIMESTAMP,
+      rejection_reason TEXT,
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      -- Not both a shortfall and an overage on the same reconciliation.
+      CONSTRAINT not_both_shortage_and_surplus CHECK (shortage = 0 OR surplus = 0)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_zone_id ON cashouts(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_cashier_id ON cashouts(cashier_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_status ON cashouts(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_period ON cashouts(cashier_id, period_start, period_end);`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS cashout_number_seq;`);
+
+  // Signed document + supporting evidence — a small, reusable attachment
+  // table scoped to this module only (explicitly NOT a general Document
+  // Management System, per instruction). document_type is a fixed,
+  // reused-not-invented category list matching exactly what was asked
+  // for. Never overwritten in place — a new signed copy is a new row,
+  // preserving both the system-generated document and every uploaded
+  // signed copy, per the explicit "never overwrite" instruction.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_attachments (
+      id SERIAL PRIMARY KEY,
+      cashout_id INTEGER NOT NULL REFERENCES cashouts(id) ON DELETE RESTRICT,
+      document_type VARCHAR(30) NOT NULL CHECK (document_type IN (
+        'signed_cashout_form', 'deposit_slip', 'cash_handover_evidence',
+        'receipt', 'shortage_explanation', 'approval_document', 'other'
+      )),
+      original_filename VARCHAR(255) NOT NULL,
+      storage_path VARCHAR(500) NOT NULL,
+      mime_type VARCHAR(100),
+      file_size INTEGER,
+      uploaded_by INTEGER NOT NULL,
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_attachments_cashout_id ON cashout_attachments(cashout_id);`);
+
+  // The ONE approved additive touch to CLOSED Module 6's own table —
+  // nullable, so a debt created independently of a cashout (an invoice-
+  // originated debt, or a standalone one) is entirely unaffected.
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS cashout_id INTEGER REFERENCES cashouts(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_cashout_id ON debts(cashout_id);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
