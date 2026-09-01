@@ -12,6 +12,7 @@ const invoicesRouter = require('./routes/invoices');
 const paymentsRouter = require('./routes/payments');
 const debtsRouter = require('./routes/debts');
 const exchangeRatesRouter = require('./routes/exchangeRates');
+const cashoutsRouter = require('./routes/cashouts');
 
 const app = express();
 app.use(express.json());
@@ -38,6 +39,7 @@ app.use('/api/v2/invoices', invoicesRouter);
 app.use('/api/v2/payments', paymentsRouter);
 app.use('/api/v2/debts', debtsRouter);
 app.use('/api/v2/exchange-rates', exchangeRatesRouter);
+app.use('/api/v2/cashouts', cashoutsRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
