@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Wallet2, Printer, Upload, CheckCircle2, XCircle, Ban } from 'lucide-react';
+import { ArrowLeft, Wallet2, Printer, Upload, CheckCircle2, XCircle, Ban, FileDown } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
@@ -25,11 +25,23 @@ export default function CashoutDetailPage() {
   const rejectMut = useRejectCashout(id);
   const voidMut = useVoidCashout(id);
   const toast = useToast();
+  const [downloading, setDownloading] = useState(false);
   const cashout = data?.data;
 
   if (isLoading) return <LoadingState label="Loading cashout…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!cashout) return null;
+
+  async function handleDownloadDocx() {
+    setDownloading(true);
+    try {
+      await apiClient.downloadAuthorizedFile(`/v2/cashouts/${id}/document.docx`, `${cashout.cashout_number}.docx`);
+    } catch (err) {
+      toast.error(err.message || 'Failed to download document.');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function handleApprove() {
     try { await approveMut.mutateAsync(); toast.success('Cashout approved.'); }
@@ -75,6 +87,7 @@ export default function CashoutDetailPage() {
         actions={
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <Button variant="secondary" icon={Printer} onClick={handlePrint}>Print / Download PDF</Button>
+            <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? 'Preparing…' : 'Download Word (.docx)'}</Button>
             <RoleGate roles={['admin', 'head_of_cashiers']}>
               <Button variant="secondary" icon={Upload} onClick={() => setUploadOpen(true)}>Upload Signed Copy</Button>
             </RoleGate>

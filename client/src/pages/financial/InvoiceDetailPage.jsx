@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Receipt, XCircle } from 'lucide-react';
+import { ArrowLeft, Receipt, XCircle, FileDown, Printer } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import { apiClient } from '../../lib/apiClient.js';
 import { useInvoice, useVoidInvoice, useReversePayment } from '../../hooks/useFinancial.js';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
@@ -15,11 +16,23 @@ export default function InvoiceDetailPage() {
   const voidInvoice = useVoidInvoice(id);
   const reversePayment = useReversePayment(id);
   const toast = useToast();
+  const [downloading, setDownloading] = useState(false);
   const invoice = data?.data;
 
   if (isLoading) return <LoadingState label="Loading invoice…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!invoice) return null;
+
+  async function handleDownloadDocx() {
+    setDownloading(true);
+    try {
+      await apiClient.downloadAuthorizedFile(`/v2/invoices/${id}/document.docx`, `${invoice.invoice_number}.docx`);
+    } catch (err) {
+      toast.error(err.message || 'Failed to download document.');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function handleVoid(reason) {
     try { await voidInvoice.mutateAsync(reason); toast.success('Invoice voided.'); setVoidOpen(false); }
@@ -51,22 +64,45 @@ export default function InvoiceDetailPage() {
         title={invoice.invoice_number}
         subtitle={`${invoice.customer_name} (${invoice.customer_number})`}
         actions={
-          invoice.status !== 'voided' && (
-            <RoleGate roles={['admin']}>
-              <Button variant="danger" icon={XCircle} onClick={() => setVoidOpen(true)}>Void Invoice</Button>
-            </RoleGate>
-          )
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <Button variant="secondary" icon={Printer} onClick={() => window.print()}>Print / Download PDF</Button>
+            <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? 'Preparing…' : 'Download Word (.docx)'}</Button>
+            {invoice.status !== 'voided' && (
+              <RoleGate roles={['admin']}>
+                <Button variant="danger" icon={XCircle} onClick={() => setVoidOpen(true)}>Void Invoice</Button>
+              </RoleGate>
+            )}
+          </div>
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          .invoice-print-document, .invoice-print-document * { visibility: visible; }
+          .invoice-print-document { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; color: #000; background: #fff; }
+        }
+      `}</style>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }} className="no-print">
         <StatCard label="Invoice Total" value={`${invoice.currency} ${parseFloat(invoice.invoice_total).toFixed(2)}`} icon={Receipt} />
         <StatCard label="Paid" value={`$${(balance.paid ?? 0).toFixed?.(2) ?? balance.paid}`} accent="var(--success)" />
         <StatCard label="Outstanding" value={`$${(balance.outstanding ?? 0).toFixed?.(2) ?? balance.outstanding}`} accent={balance.outstanding > 0 ? 'var(--danger)' : 'var(--success)'} />
         <StatCard label="Status" value={<StatusBadge status={invoice.status} map={STATUS_MAP} />} />
       </div>
 
-      <div style={{ marginBottom: '20px' }}>
+      <Card className="invoice-print-document" style={{ padding: '24px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--brand)', paddingBottom: '16px', marginBottom: '16px' }}>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 900, color: 'var(--brand)' }}>GURMAD</div>
+            <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px' }}>Invoice</div>
+          </div>
+          <div style={{ textAlign: 'right', fontSize: '12px' }}>
+            <div><strong>Invoice No.</strong> {invoice.invoice_number}</div>
+            <div><strong>Date</strong> {new Date(invoice.created_at).toLocaleDateString()}</div>
+            <div><strong>Customer</strong> {invoice.customer_name} ({invoice.customer_number})</div>
+          </div>
+        </div>
         <DetailGrid items={[
           { label: 'Customer', value: <Link to={`/customers/${invoice.customer_id}`}>{invoice.customer_name}</Link> },
           { label: 'Discount', value: `${invoice.currency} ${parseFloat(invoice.discount_amount).toFixed(2)}` },
@@ -78,7 +114,7 @@ export default function InvoiceDetailPage() {
             { label: 'Voided at', value: new Date(invoice.voided_at).toLocaleString() },
           ] : []),
         ]} />
-      </div>
+      </Card>
 
       <span style={sectionLabelStyle}>Payment History</span>
       {invoice.payments.length === 0 && (

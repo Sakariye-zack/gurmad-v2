@@ -5,6 +5,7 @@ const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { computeExpectedForPeriod, hasOverlappingCashout, EPSILON } = require('../lib/cashoutCalculations');
+const { buildCashoutDocx } = require('../lib/documentGenerators');
 
 const router = express.Router();
 
@@ -117,6 +118,31 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     res.json({ data: { ...cashout, debt: debt.rows[0] || null, attachments: attachments.rows, reconciliation: recon } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load cashout.', code: 'INTERNAL' } });
+  }
+});
+
+// Real, downloadable .docx of the same official document rendered on
+// screen — same authorization boundary as the JSON detail route (zone-
+// scoped, VIEW_ROLES). Additive to this module only, no change to any
+// other route's shape.
+router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
+  try {
+    const coRes = await pool.query(`SELECT cashouts.*, zones.name AS zone_name FROM cashouts LEFT JOIN zones ON cashouts.zone_id = zones.id WHERE cashouts.id = $1`, [id]);
+    if (coRes.rows.length === 0) return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } });
+    const cashout = coRes.rows[0];
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && cashout.zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
+    }
+    const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
+    const buffer = await buildCashoutDocx(cashout, recon);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${cashout.cashout_number}.docx"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to generate document.', code: 'INTERNAL' } });
   }
 });
 

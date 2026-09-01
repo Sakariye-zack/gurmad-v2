@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getInvoiceBalance } = require('../lib/financialCalculations');
+const { buildInvoiceDocx } = require('../lib/documentGenerators');
 
 const router = express.Router();
 
@@ -92,6 +93,39 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     res.json({ data: { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load invoice.', code: 'INTERNAL' } });
+  }
+});
+
+// Real, downloadable .docx of the invoice — additive only, same
+// authorization boundary as the JSON detail route, per explicit request
+// (Module 6 is CLOSED; this adds a new route only, no schema/API-shape
+// change to any existing endpoint).
+router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid invoice id.', code: 'VALIDATION' } });
+  try {
+    const invRes = await pool.query(
+      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number, customers.zone_id
+       FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.id = $1`,
+      [id]
+    );
+    if (invRes.rows.length === 0) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
+    const invoice = invRes.rows[0];
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && invoice.zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this invoice.', code: 'FORBIDDEN' } });
+    }
+    const balance = await getInvoiceBalance(id);
+    const payments = await pool.query(
+      `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
+      [id]
+    );
+    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.docx"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to generate document.', code: 'INTERNAL' } });
   }
 });
 

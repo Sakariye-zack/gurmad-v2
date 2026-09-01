@@ -74,6 +74,28 @@ async function fetchAuthorizedFileUrl(path) {
   return URL.createObjectURL(blob);
 }
 
+// Triggers a browser save-as for an authorized binary response (e.g. a
+// generated .docx) — never a plain <a href> to a static path, since every
+// V2 document download requires the same auth check as viewing it.
+async function downloadAuthorizedFile(path, filename) {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try { const body = await res.json(); message = (body?.error?.message || body?.error) || message; } catch { /* no body */ }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const apiClient = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
@@ -81,6 +103,7 @@ export const apiClient = {
   del: (path, data) => request(path, { method: 'DELETE', ...(data ? { body: JSON.stringify(data) } : {}) }),
   uploadFile,
   fetchAuthorizedFileUrl,
+  downloadAuthorizedFile,
   setToken: (token) => localStorage.setItem('gurmad_v2_token', token),
   clearToken: () => localStorage.removeItem('gurmad_v2_token'),
   getToken,
