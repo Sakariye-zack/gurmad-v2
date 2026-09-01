@@ -40,11 +40,47 @@ async function request(path, options = {}) {
   return body;
 }
 
+// File uploads (Module 7 — Cashout attachments): no Content-Type header set
+// explicitly — the browser sets multipart/form-data with the correct
+// boundary itself; setting it manually breaks the boundary. Same
+// auth/error-shape handling as every other request.
+async function uploadFile(path, formData) {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  let body = null;
+  try { body = await res.json(); } catch { /* no body */ }
+  if (!res.ok) {
+    const errBody = body && body.error;
+    const message = (errBody && typeof errBody === 'object' ? errBody.message : errBody) || `Request failed (${res.status})`;
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+// Authorized binary fetch (signed documents, receipts) — never a plain
+// <a href> to a static path (Module 7's document-security requirement).
+// Returns an object URL the caller must revoke when done.
+async function fetchAuthorizedFileUrl(path) {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`Failed to load file (${res.status})`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export const apiClient = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
   del: (path, data) => request(path, { method: 'DELETE', ...(data ? { body: JSON.stringify(data) } : {}) }),
+  uploadFile,
+  fetchAuthorizedFileUrl,
   setToken: (token) => localStorage.setItem('gurmad_v2_token', token),
   clearToken: () => localStorage.removeItem('gurmad_v2_token'),
   getToken,

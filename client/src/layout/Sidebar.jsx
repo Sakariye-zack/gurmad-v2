@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -34,6 +34,11 @@ const NAV = [
   { to: '/billing', label: 'Billing', icon: Wallet, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
   { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
   { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  // Module 7 — Cashout & Cash Reconciliation. Head of Cashiers manages it;
+  // Gudoomiye approves (zone-scoped); Zone Accountant/Cashier view only;
+  // Collector has no financial nav entry at all, matching every other
+  // financial page's own boundary.
+  { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
 ];
 
 export default function Sidebar() {

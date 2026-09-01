@@ -18,6 +18,8 @@ import InvoicesListPage from '../pages/financial/InvoicesListPage.jsx';
 import InvoiceDetailPage from '../pages/financial/InvoiceDetailPage.jsx';
 import BillingView from '../pages/financial/BillingView.jsx';
 import DebtsView from '../pages/financial/DebtsView.jsx';
+import CashoutsListPage from '../pages/financial/CashoutsListPage.jsx';
+import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
@@ -51,6 +53,8 @@ export const router = createBrowserRouter([
       { path: 'financial/invoices', element: <InvoicesListPage /> },
       { path: 'financial/invoices/:id', element: <InvoiceDetailPage /> },
       { path: 'financial/debts', element: <DebtsView /> },
+      { path: 'financial/cashouts', element: <CashoutsListPage /> },
+      { path: 'financial/cashouts/:id', element: <CashoutDetailPage /> },
       { path: 'billing', element: <BillingView /> },
     ],
   },
