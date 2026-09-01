@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { validateResourceAssignment } = require('../lib/collectionValidation');
+const { validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment } = require('../lib/collectionValidation');
 
 const router = express.Router();
 
@@ -207,7 +207,8 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
        GROUP BY tasks.id ORDER BY tasks.id`,
       [id]
     );
-    res.json({ data: { ...batch, progress: progress.rows[0] || null, tasks: tasks.rows } });
+    const capacity = await computeBatchCapacity(id);
+    res.json({ data: { ...batch, progress: progress.rows[0] || null, tasks: tasks.rows, capacity } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load batch.', code: 'INTERNAL' } });
   }
@@ -388,10 +389,24 @@ router.post('/:id/tasks', authenticateToken, requireRole(...WRITE_ROLES), async 
       const check = await validateResourceAssignment(r.resource_type, r.resource_id, batch);
       if (!check.ok) return res.status(check.code === 'NOT_FOUND' ? 400 : 409).json({ error: { message: check.error, code: check.code } });
     }
+    const truckResource = resources.find((r) => r.resource_type === 'truck');
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Row-lock the batch for the whole capacity-check-then-write sequence
+      // — same concurrency-safety principle as every other batch mutation
+      // (T2.3 pattern) — so two simultaneous truck-assigning requests can't
+      // both read a stale load and both pass.
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [id]);
+      if (truckResource) {
+        const capCheck = await assertCapacityForTruckAssignment(id, truckResource.resource_id, client);
+        if (!capCheck.ok) {
+          await client.query('ROLLBACK');
+          await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch.capacity_block', entityType: 'batch', entityId: id, before: null, after: { truck_id: truckResource.resource_id, reason: capCheck.error } });
+          return res.status(409).json({ error: { message: capCheck.error, code: capCheck.code } });
+        }
+      }
       const taskRes = await client.query(`INSERT INTO tasks (batch_id, status) VALUES ($1, 'pending') RETURNING *`, [id]);
       const task = taskRes.rows[0];
       for (const r of resources) {
@@ -434,9 +449,30 @@ router.post('/:id/tasks/:taskId/resources', authenticateToken, requireRole(...WR
     const check = await validateResourceAssignment(resource_type, resource_id, batch);
     if (!check.ok) return res.status(check.code === 'NOT_FOUND' ? 400 : 409).json({ error: { message: check.error, code: check.code } });
 
-    const inserted = await pool.query(`INSERT INTO task_resources (task_id, resource_type, resource_id, role_note) VALUES ($1,$2,$3,$4) RETURNING *`, [taskId, resource_type, resource_id, role_note || null]);
-    await pool.query(`INSERT INTO task_resource_history (task_id, resource_type, resource_id, action, performed_by) VALUES ($1,$2,$3,'assigned',$4)`, [taskId, resource_type, resource_id, req.user.id]);
-    await pool.query(`UPDATE batches SET status = 'assigned', assigned_at = COALESCE(assigned_at, NOW()) WHERE id = $1 AND status = 'draft'`, [id]);
+    const client = await pool.connect();
+    let inserted;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [id]);
+      if (resource_type === 'truck') {
+        const capCheck = await assertCapacityForTruckAssignment(id, resource_id, client);
+        if (!capCheck.ok) {
+          await client.query('ROLLBACK');
+          await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch.capacity_block', entityType: 'batch', entityId: id, before: null, after: { truck_id: resource_id, reason: capCheck.error } });
+          return res.status(409).json({ error: { message: capCheck.error, code: capCheck.code } });
+        }
+      }
+      const insertedRes = await client.query(`INSERT INTO task_resources (task_id, resource_type, resource_id, role_note) VALUES ($1,$2,$3,$4) RETURNING *`, [taskId, resource_type, resource_id, role_note || null]);
+      inserted = insertedRes;
+      await client.query(`INSERT INTO task_resource_history (task_id, resource_type, resource_id, action, performed_by) VALUES ($1,$2,$3,'assigned',$4)`, [taskId, resource_type, resource_id, req.user.id]);
+      await client.query(`UPDATE batches SET status = 'assigned', assigned_at = COALESCE(assigned_at, NOW()) WHERE id = $1 AND status = 'draft'`, [id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'task_resource.assign', entityType: 'task_resource', entityId: inserted.rows[0].id, before: null, after: inserted.rows[0] });
     res.status(201).json({ data: inserted.rows[0] });
   } catch (err) {
@@ -506,6 +542,17 @@ router.put('/:id/tasks/:taskId/status', authenticateToken, requireRole('admin', 
         if (!check.ok) {
           return res.status(409).json({ error: { message: `Task cannot start: ${check.error}`, code: 'DR7_STALE_ASSIGNMENT' } });
         }
+      }
+      // Capacity task-start re-validation: the same stale-data protection
+      // principle as DR-7's own task-start check (a batch valid at truck-
+      // assignment time can become over-capacity later via reschedule-in).
+      // Uses current authoritative data, never a value cached from
+      // assignment time.
+      const capacity = await computeBatchCapacity(id);
+      if (capacity && capacity.status === 'over') {
+        return res.status(409).json({
+          error: { message: `Task cannot start: truck capacity exceeded. Capacity: ${capacity.capacity}. Required: ${capacity.load} (excess: ${capacity.load - capacity.capacity}).`, code: 'CAPACITY_STALE_ASSIGNMENT' },
+        });
       }
     }
 
@@ -627,14 +674,38 @@ router.post('/:id/customers/:customerId/reschedule', authenticateToken, requireR
           await client.query('ROLLBACK');
           return res.status(400).json({ error: { message: `Cannot reschedule into a ${targetBatch.rows[0].status} batch.`, code: 'VALIDATION' } });
         }
-        // Simplification (documented, not the current system's full dynamic
-        // permission-catalog mechanism): cross-zone reschedule is admin-only
-        // in this checkpoint, since zone-scoped roles (gudoomiye/
-        // zone_accountant) are per-zone by construction.
+        // Module 5 final review, OD-3 hardening: cross-zone reschedule is
+        // allowed for admin unconditionally (already zone-unrestricted by
+        // construction); for gudoomiye/zone_accountant it requires the
+        // narrowly-scoped employees.can_reschedule_cross_zone flag on their
+        // own linked employee record (resolved by user_id, never by name —
+        // same OD-2 identity chain as every other ownership check in this
+        // module) — not a blanket role check, and not a new permission
+        // catalog/engine.
         if (targetBatch.rows[0].zone_id !== sourceBatch.zone_id && (req.user.role || '').toLowerCase() !== 'admin') {
-          await client.query('ROLLBACK');
-          return res.status(403).json({ error: { message: 'Cross-zone reschedule requires an admin.', code: 'FORBIDDEN' } });
+          const myEmpId = await resolveEmployeeIdForUser(req.user);
+          const canCrossZone = myEmpId !== null && (await client.query(
+            'SELECT can_reschedule_cross_zone FROM employees WHERE id = $1', [myEmpId]
+          )).rows[0]?.can_reschedule_cross_zone === true;
+          if (!canCrossZone) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ error: { message: 'Cross-zone reschedule requires the can_reschedule_cross_zone permission, which you do not have.', code: 'FORBIDDEN' } });
+          }
         }
+      }
+
+      // Lock the target batch too — reschedule is the one real "add a
+      // customer to an existing (possibly already-trucked) batch" pathway
+      // in V2 today, so it's the pathway that must enforce truck capacity.
+      // Locking both the source batch_customers row (above) and this
+      // target batch row means two concurrent reschedules into the same
+      // target can never both pass a stale capacity check.
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [targetBatchId]);
+      const capCheck = await assertCapacityForAddition(targetBatchId, 1, client);
+      if (!capCheck.ok) {
+        await client.query('ROLLBACK');
+        await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch.capacity_block', entityType: 'batch', entityId: targetBatchId, before: null, after: { attempted_addition: 1, reason: capCheck.error } });
+        return res.status(409).json({ error: { message: capCheck.error, code: capCheck.code } });
       }
 
       const updated = await client.query(

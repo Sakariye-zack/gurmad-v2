@@ -380,6 +380,33 @@ router.put('/:id/status', authenticateToken, requireRole(...WRITE_ROLES), async 
   }
 });
 
+// PUT /:id/reschedule-permission — Module 5 final review, added here as a
+// small, dedicated, isolated endpoint (not a change to the general
+// validateEmployeeInput allowlist) per the explicit instruction: smallest
+// isolated authorization mechanism for the Reschedule operation, not a
+// global RBAC/permission-catalog migration. Admin-only to grant; the
+// permission itself is checked in routes/batches.js's reschedule route.
+router.put('/:id/reschedule-permission', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });
+  const canCrossZone = req.body?.can_reschedule_cross_zone;
+  if (typeof canCrossZone !== 'boolean') {
+    return res.status(400).json({ error: { message: 'can_reschedule_cross_zone must be a boolean.', code: 'VALIDATION' } });
+  }
+  try {
+    const existing = await pool.query('SELECT id, can_reschedule_cross_zone FROM employees WHERE id = $1', [id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: { message: 'Employee not found.', code: 'NOT_FOUND' } });
+    const result = await pool.query(
+      `UPDATE employees SET can_reschedule_cross_zone = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, can_reschedule_cross_zone`,
+      [canCrossZone, id]
+    );
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'employee.reschedule_permission_change', entityType: 'employee', entityId: id, before: existing.rows[0], after: result.rows[0] });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to update reschedule permission.', code: 'INTERNAL' } });
+  }
+});
+
 // DELETE deliberately not implemented — archive via /:id/status instead,
 // per the explicit instruction not to introduce a hard-delete that can
 // destroy historical HR data.

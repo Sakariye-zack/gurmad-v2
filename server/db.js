@@ -176,6 +176,18 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_driver_id ON trucks(driver_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_collector_id ON trucks(collector_id);`);
 
+  // Module 5 final review: the smallest isolated authorization mechanism
+  // for cross-zone Reschedule, per explicit instruction NOT to migrate the
+  // global RBAC architecture (checkRole vs requirePermission) in this
+  // checkpoint. One additive, narrowly-scoped boolean column on the
+  // already-frozen employees table (ALTER TABLE, not touching Module 3's
+  // own CREATE TABLE block) — default false for everyone, meaning nobody
+  // can cross-zone-reschedule unless explicitly granted. Admin is
+  // unaffected (already zone-unrestricted by construction). This is a
+  // permission specific to one operation, not a new general permission
+  // catalog/engine.
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS can_reschedule_cross_zone BOOLEAN NOT NULL DEFAULT false;`);
+
   // Phase 3 Module 5 — Collection Operations (Cycles / Batches / Batch
   // Customers / Tasks / Task Resources). Target model is the current
   // system's newer batches/task_resources shape (OD-approved) — the older
