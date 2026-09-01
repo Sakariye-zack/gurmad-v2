@@ -362,6 +362,126 @@ async function runMigrations() {
     LEFT JOIN batch_customers bc ON bc.batch_id = b.id
     GROUP BY b.id;
   `);
+
+  // ============================================================
+  // Phase 3 Module 6 — Financial Billing Foundation (Invoices /
+  // Billing-Payments / Debts / Exchange Rates). Approved via
+  // Phase3_Module06_FinancialBilling_Implementation_Spec.md.
+  // All additive — zero changes to any Zones/Customers/Employees/
+  // Trucks/Collection Operations table (Modules 1-5, CLOSED).
+  // ============================================================
+
+  // 1. exchange_rates — append-only rate history (OD-3). Never
+  // UPDATEd or DELETEd by any route; history is guaranteed by
+  // construction, matching task_resource_history's own precedent.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exchange_rates (
+      id SERIAL PRIMARY KEY,
+      rate NUMERIC NOT NULL CHECK (rate > 0),
+      effective_from TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      set_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exchange_rates_effective_from ON exchange_rates(effective_from DESC);`);
+  // Seed exactly one baseline rate if none exists yet — otherwise the
+  // first SLSH payment anyone attempts has nothing to reference.
+  // Matches the reference system's own bootstrap default (11000).
+  await pool.query(`
+    INSERT INTO exchange_rates (rate, effective_from, set_by)
+    SELECT 11000, CURRENT_TIMESTAMP, 0
+    WHERE NOT EXISTS (SELECT 1 FROM exchange_rates);
+  `);
+
+  // 2. invoices — the financial document/obligation (OD-2, OD-6).
+  // `status` is a CACHED, recomputed-on-every-payment-write column —
+  // the ONLY code path allowed to write it is
+  // lib/financialCalculations.js's recalculateInvoiceStatus(). No
+  // route may assign it directly (enforced by code review discipline,
+  // not a DB trigger — consistent with how V2 enforces every other
+  // cross-cutting rule so far).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id SERIAL PRIMARY KEY,
+      invoice_number VARCHAR(20) UNIQUE NOT NULL,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+      batch_customer_id INTEGER REFERENCES batch_customers(id) ON DELETE SET NULL,
+      invoice_total NUMERIC NOT NULL CHECK (invoice_total >= 0),
+      discount_amount NUMERIC NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),
+      currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+      status VARCHAR(20) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','partial','paid','voided')),
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT,
+      collector_name_snapshot VARCHAR(100),
+      truck_name_snapshot VARCHAR(100),
+      zone_name_snapshot VARCHAR(100),
+      notes TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices(customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_batch_customer_id ON invoices(batch_customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS invoice_number_seq;`);
+
+  // 3. payments — the money-movement ledger (OD-4). Append-oriented:
+  // no DELETE route will ever be exposed. amount_usd is computed and
+  // STORED at write time so a later exchange-rate change can never
+  // alter a historical payment's USD value (non-negotiable rule #3/#4).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
+      amount NUMERIC NOT NULL CHECK (amount > 0),
+      currency VARCHAR(10) NOT NULL,
+      method VARCHAR(20) NOT NULL CHECK (method IN ('cash','zaad','edahab','slsh','debt')),
+      amount_usd NUMERIC NOT NULL,
+      exchange_rate_id INTEGER REFERENCES exchange_rates(id),
+      cashier_id INTEGER NOT NULL,
+      reference_code VARCHAR(50),
+      status VARCHAR(20) NOT NULL DEFAULT 'recorded' CHECK (status IN ('recorded','reversed')),
+      reversed_at TIMESTAMP,
+      reversed_by INTEGER,
+      reversed_reason TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT slsh_requires_rate CHECK (
+        (currency = 'USD' AND exchange_rate_id IS NULL) OR
+        (currency = 'SLSH' AND exchange_rate_id IS NOT NULL)
+      ),
+      CONSTRAINT reversal_requires_reason CHECK (
+        status != 'reversed' OR (reversed_at IS NOT NULL AND reversed_by IS NOT NULL AND reversed_reason IS NOT NULL)
+      )
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_cashier_id ON payments(cashier_id);`);
+
+  // 4. debts — built fresh in V2 (never existed here before this
+  // module), including the OD-1 invoice_id FK from day one — not a
+  // later migration of existing data, since none exists yet.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debts (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+      invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+      amount NUMERIC NOT NULL CHECK (amount > 0),
+      currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+      description TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','paid')),
+      settled_at TIMESTAMP,
+      settled_by INTEGER,
+      settlement_override_reason TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_customer_id ON debts(customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_invoice_id ON debts(invoice_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
