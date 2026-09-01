@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ClipboardList, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import CapacityPanel from '../../components/collection/CapacityPanel.jsx';
 import { useBatches, useCreateBatch, useCycles } from '../../hooks/useCollectionOps.js';
 import { useZonesList, useCustomers } from '../../hooks/useCustomers.js';
 
@@ -50,7 +51,7 @@ export default function BatchesListPage() {
         isEmpty={!isLoading && !error && batches.length === 0}
         emptyTitle="No batches yet"
         emptySubtitle="Create the first batch to start assigning collection work."
-        columns={[{ label: 'Batch' }, { label: 'Zone' }, { label: 'Type' }, { label: 'Customers' }, { label: 'Status' }]}
+        columns={[{ label: 'Batch' }, { label: 'Zone' }, { label: 'Type' }, { label: 'Customers' }, { label: 'Capacity' }, { label: 'Status' }]}
       >
         {batches.map((b) => (
           <tr key={b.id} onClick={() => navigate(`/collection-cycles/batches/${b.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
@@ -61,6 +62,7 @@ export default function BatchesListPage() {
               {b.commercial_shift && <span style={{ color: 'var(--text-muted)' }}> ({b.commercial_shift})</span>}
             </td>
             <td style={cellStyle} className="tabular-nums">{b.total_customers}</td>
+            <td style={cellStyle}><CapacityPanel capacity={b.capacity} compact /></td>
             <td style={cellStyle}><StatusBadge status={STATUS_LABELS[b.status]} map={{ draft: 'info', assigned: 'warning', 'in progress': 'warning', 'partially completed': 'warning', completed: 'success', cancelled: 'danger' }} /></td>
           </tr>
         ))}

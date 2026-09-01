@@ -117,6 +117,18 @@ async function validateResourceAssignment(resourceType, resourceId, batch) {
 // user's own capacity requirement describes ("Batch load", "Batch
 // Capacity"). This is a scope adaptation to V2's current data shape, not a
 // reinterpretation of the unit itself.
+// "Near Capacity" threshold: NO business rule defines one anywhere in the
+// approved V2 documentation or the current system's own Design Spec
+// reference. Hoisted here as the ONE place this number is defined (never
+// duplicated in the frontend — the frontend only ever reads the `status`
+// string this function returns, plus `nearCapacityThresholdPercent` for
+// display, never re-deriving the threshold itself) — per the explicit
+// instruction not to hardcode it in multiple places, and to treat it as
+// provisional/configurable, not an irreversible business rule, until a
+// real operational decision sets it. "Over Capacity" is NOT provisional —
+// load > capacity, the capacity number itself is the authoritative limit.
+const NEAR_CAPACITY_THRESHOLD = 0.9; // 90% — PROVISIONAL, see comment above.
+
 async function computeBatchCapacity(batchId, client = pool) {
   const batchRes = await client.query('SELECT id FROM batches WHERE id = $1', [batchId]);
   if (batchRes.rows.length === 0) return null;
@@ -145,18 +157,10 @@ async function computeBatchCapacity(batchId, client = pool) {
   }
   const remaining = capacity - load;
   const utilizationPercent = capacity > 0 ? Math.round((load / capacity) * 1000) / 10 : null;
-  // "Near Capacity" threshold: NO business rule defines one anywhere in the
-  // approved V2 documentation or the current system's own Design Spec
-  // reference — a provisional 90% is used here (disclosed explicitly, per
-  // the instruction "use a clearly documented provisional threshold only
-  // if necessary, otherwise report that a business threshold is required").
-  // "Over Capacity" is NOT provisional — load > capacity, the capacity
-  // number itself is the authoritative limit, exactly as specified.
-  const PROVISIONAL_NEAR_CAPACITY_THRESHOLD = 0.9;
   let status = 'within';
   if (load > capacity) status = 'over';
-  else if (capacity > 0 && load / capacity >= PROVISIONAL_NEAR_CAPACITY_THRESHOLD) status = 'near';
-  return { truckId, capacity, load, remaining, utilizationPercent, status };
+  else if (capacity > 0 && load / capacity >= NEAR_CAPACITY_THRESHOLD) status = 'near';
+  return { truckId, capacity, load, remaining, utilizationPercent, status, nearCapacityThresholdPercent: NEAR_CAPACITY_THRESHOLD * 100 };
 }
 
 // Called before any operation that would ADD customers to a batch that

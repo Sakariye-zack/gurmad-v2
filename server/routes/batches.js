@@ -97,7 +97,15 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
        ${whereSql} ORDER BY batches.created_at DESC`,
       params
     );
-    res.json({ data: result.rows });
+    // Capacity requirement (final hardening pass): the Batch List must show
+    // capacity too, not just Batch Detail. Computed per row (list sizes in
+    // this system are small — a handful of open batches per zone/cycle, not
+    // thousands) rather than a bulk SQL rewrite of computeBatchCapacity's
+    // own logic, which would risk the two implementations drifting apart.
+    const withCapacity = await Promise.all(
+      result.rows.map(async (b) => ({ ...b, capacity: await computeBatchCapacity(b.id) }))
+    );
+    res.json({ data: withCapacity });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to list batches.', code: 'INTERNAL' } });
   }

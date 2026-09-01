@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ClipboardList, Play, Flag, XCircle, Plus, Trash2, CalendarClock } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import CapacityPanel, { CapacityPreview } from '../../components/collection/CapacityPanel.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import {
   useBatch, useBatchCustomers, useStartBatch, useCloseCycleOnBatch, useCancelBatch,
@@ -83,6 +84,11 @@ export default function BatchDetailPage() {
         ]} />
       </div>
 
+      <span style={sectionLabelStyle}>Capacity</span>
+      <div style={{ marginBottom: '20px' }}>
+        <CapacityPanel capacity={batch.capacity} />
+      </div>
+
       <span style={sectionLabelStyle}>Tasks &amp; Resources</span>
       <RoleGate roles={['admin', 'gudoomiye']}>
         <div style={{ marginBottom: '12px' }}>
@@ -130,6 +136,11 @@ function TaskCard({ task, batchId, currentUserRole }) {
   const removeResource = useRemoveResource(batchId, task.id);
   const taskStatus = useTaskStatus(batchId, task.id);
   const isAdminOrGud = currentUserRole === 'admin' || currentUserRole === 'gudoomiye';
+  // Task-start blocking (final hardening pass, §D): a capacity or DR-7
+  // stale-assignment block must stay visible on the card, not just flash
+  // as a toast — the server's exact message (capacity/current load/excess)
+  // is shown inline until the user acts again.
+  const [startBlockedMessage, setStartBlockedMessage] = useState(null);
 
   async function handleRemove(r) {
     const reason = window.prompt(`Reason for removing this ${r.resource_type}?`);
@@ -140,10 +151,15 @@ function TaskCard({ task, batchId, currentUserRole }) {
     } catch (err) { toast.error(err.message || 'Something went wrong.'); }
   }
   async function handleStatus(status) {
+    setStartBlockedMessage(null);
     try {
       await taskStatus.mutateAsync(status);
       toast.success(`Task status changed to ${status}.`);
-    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    } catch (err) {
+      const message = err.message || 'Something went wrong.';
+      toast.error(message);
+      if (status === 'in_progress' && /capacity|DR-7|assignment/i.test(message)) setStartBlockedMessage(message);
+    }
   }
 
   return (
@@ -168,6 +184,11 @@ function TaskCard({ task, batchId, currentUserRole }) {
           </span>
         ))}
       </div>
+      {startBlockedMessage && (
+        <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--danger-bg)', color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>
+          Task Start blocked: {startBlockedMessage}
+        </div>
+      )}
     </Card>
   );
 }
@@ -183,8 +204,16 @@ function AddTaskContent({ onClose, batchId }) {
   const createTask = useCreateTask(batchId);
   const { data: employeesData } = useEmployees({ employee_type: resourceType === 'truck' ? undefined : resourceType, status: 'active' });
   const { data: trucksData } = useTrucks({ status: 'active' });
+  const { data: batchData } = useBatch(batchId);
   const toast = useToast();
   const options = resourceType === 'truck' ? (trucksData?.data || []) : (employeesData?.data || []);
+  const batchLoad = batchData?.data?.capacity?.load ?? batchData?.data?.total_customers ?? 0;
+  // Truck-selection capacity preview (final hardening pass, §C): client-side
+  // preview only, using the SELECTED truck's own capacity against the
+  // batch's current load — the server re-checks authoritatively on submit
+  // regardless of what this shows.
+  const selectedTruck = resourceType === 'truck' && resourceId ? options.find((t) => String(t.id) === resourceId) : null;
+  const wouldExceedCapacity = selectedTruck && selectedTruck.capacity != null && batchLoad > selectedTruck.capacity;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -206,7 +235,7 @@ function AddTaskContent({ onClose, batchId }) {
       title="Add Task"
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={createTask.isPending}>Cancel</Button>
-        <Button type="submit" form="add-task-form" disabled={createTask.isPending}>{createTask.isPending ? 'Saving…' : 'Add Task'}</Button>
+        <Button type="submit" form="add-task-form" disabled={createTask.isPending || wouldExceedCapacity}>{createTask.isPending ? 'Saving…' : 'Add Task'}</Button>
       </>}
     >
       <form id="add-task-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -223,9 +252,17 @@ function AddTaskContent({ onClose, batchId }) {
           <span style={labelStyle}>Resource</span>
           <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={inputStyle}>
             <option value="">None (add later)</option>
-            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}</option>)}
+            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (capacity ${o.capacity})` : ''}</option>)}
           </select>
         </label>
+        {selectedTruck && selectedTruck.capacity != null && (
+          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: wouldExceedCapacity ? 'var(--danger-bg)' : 'var(--bg)', border: '1px solid var(--border)' }}>
+            <span className="tabular-nums" style={{ fontSize: '12px', fontWeight: wouldExceedCapacity ? 700 : 400, color: wouldExceedCapacity ? 'var(--danger)' : 'var(--text-muted)' }}>
+              Batch load {batchLoad} / truck capacity {selectedTruck.capacity}
+              {wouldExceedCapacity ? ` — Over Capacity by ${batchLoad - selectedTruck.capacity}. This truck cannot be assigned.` : ' — Within Capacity.'}
+            </span>
+          </div>
+        )}
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>
@@ -318,15 +355,40 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
         title="Reschedule Customer"
         footer={null}
       >
-        <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>Choose a target Draft batch to move this customer into.</p>
+        <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>Choose a target Draft batch to move this customer into. Adding this customer to an over-capacity target will be blocked by the server.</p>
         {(otherBatchesData?.data || []).filter((b) => b.id !== Number(batchId)).map((b) => (
-          <Button key={b.id} variant="secondary" style={{ width: '100%', marginBottom: '6px', justifyContent: 'flex-start' }} onClick={() => handleReschedule(rescheduleTarget.customer_id, b.id)} disabled={reschedule.isPending}>
-            {b.batch_code}
-          </Button>
+          <RescheduleTargetOption
+            key={b.id}
+            batch={b}
+            onSelect={() => handleReschedule(rescheduleTarget.customer_id, b.id)}
+            disabled={reschedule.isPending}
+          />
         ))}
         {(otherBatchesData?.data || []).length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No other Draft batches available — create one first.</span>}
       </Modal>
     </>
+  );
+}
+
+// Batch list rows already carry their own live `capacity` (backend list
+// endpoint was extended in this same pass) — no extra fetch needed here.
+function RescheduleTargetOption({ batch, onSelect, disabled }) {
+  const wouldExceed = batch.capacity && batch.capacity.capacity != null
+    && (batch.capacity.load + 1) > batch.capacity.capacity;
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <Button
+        variant="secondary"
+        style={{ width: '100%', justifyContent: 'flex-start', opacity: wouldExceed ? 0.6 : 1 }}
+        onClick={onSelect}
+        disabled={disabled || wouldExceed}
+      >
+        {batch.batch_code}
+      </Button>
+      <div style={{ padding: '2px 4px' }}>
+        <CapacityPreview capacityBefore={batch.capacity} additionalLoad={1} />
+      </div>
+    </div>
   );
 }
 
