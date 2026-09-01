@@ -8,6 +8,10 @@ const employeesRouter = require('./routes/employees');
 const trucksRouter = require('./routes/trucks');
 const cyclesRouter = require('./routes/cycles');
 const batchesRouter = require('./routes/batches');
+const invoicesRouter = require('./routes/invoices');
+const paymentsRouter = require('./routes/payments');
+const debtsRouter = require('./routes/debts');
+const exchangeRatesRouter = require('./routes/exchangeRates');
 
 const app = express();
 app.use(express.json());
@@ -30,6 +34,10 @@ app.use('/api/v2/employees', employeesRouter);
 app.use('/api/v2/trucks', trucksRouter);
 app.use('/api/v2/cycles', cyclesRouter);
 app.use('/api/v2/batches', batchesRouter);
+app.use('/api/v2/invoices', invoicesRouter);
+app.use('/api/v2/payments', paymentsRouter);
+app.use('/api/v2/debts', debtsRouter);
+app.use('/api/v2/exchange-rates', exchangeRatesRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
