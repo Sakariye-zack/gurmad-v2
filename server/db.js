@@ -1,4 +1,17 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// pg's default DATE (OID 1082) parser returns a JS Date object at
+// local-timezone midnight, which then serializes to a UTC ISO string that
+// is off by a day whenever the server's local timezone is ahead of UTC
+// (this host runs EAT, UTC+3) — a real date field (e.g. "2026-12-31")
+// silently became "2026-12-30T21:00:00.000Z" in every API response. Found
+// during Phase 3 Module 4 QA (trucks' insurance/registration/road_tax
+// expiry dates), but this is a driver-level fix — it also silently
+// affected Employees' join_date and any future DATE column, not just
+// Trucks. Returning the raw "YYYY-MM-DD" string instead of a Date object
+// is correct for every current use (no time-of-day is ever stored) and
+// matches what the frontend's plain <input type="date"> already expects.
+types.setTypeParser(1082, (val) => val);
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -130,6 +143,38 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_zone_id ON employees(zone_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_employee_type ON employees(employee_type);`);
+
+  // Phase 3 Module 4 — Trucks (Fleet Master Data).
+  // driver_id/collector_id are real FKs to the now-authoritative employees
+  // table (Module 3, closed) — ON DELETE RESTRICT is safe since employees
+  // has no delete path either (archive-only, same pattern). Cross-field
+  // validation that driver_id actually points at an employee_type='driver'
+  // row (and collector_id at 'collector') is enforced at the application
+  // layer in routes/trucks.js — not expressible as a plain CHECK constraint
+  // since it requires a join, same reasoning already applied to Employees'
+  // own collector_type/commercial_shift cross-validation.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS trucks (
+      id SERIAL PRIMARY KEY,
+      plate_number VARCHAR(50) UNIQUE NOT NULL,
+      model VARCHAR(100),
+      capacity INTEGER,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      driver_id INTEGER REFERENCES employees(id) ON DELETE RESTRICT,
+      collector_id INTEGER REFERENCES employees(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'inactive', 'retired')),
+      insurance_expiry DATE,
+      registration_expiry DATE,
+      road_tax_expiry DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_zone_id ON trucks(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_status ON trucks(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_driver_id ON trucks(driver_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_collector_id ON trucks(collector_id);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {

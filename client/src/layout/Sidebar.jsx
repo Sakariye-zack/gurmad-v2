@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, ClipboardList, Receipt, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -18,6 +18,9 @@ const NAV = [
   // cashier/collector must not see the staff directory at all, not even the
   // nav entry (matches the backend's requireRole on every employees route).
   { to: '/employees', label: 'Employees', icon: Users2, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+  // OD-4: broad operational view (not HR-sensitive like Employees) —
+  // ungated, matches the backend's own broader VIEW_ROLES for /v2/trucks.
+  { to: '/trucks', label: 'Trucks', icon: Truck },
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList },
   { to: '/billing', label: 'Billing & Invoices', icon: Receipt, permission: 'billing.view' },
 ];
