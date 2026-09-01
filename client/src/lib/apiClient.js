@@ -44,7 +44,7 @@ export const apiClient = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
-  del: (path) => request(path, { method: 'DELETE' }),
+  del: (path, data) => request(path, { method: 'DELETE', ...(data ? { body: JSON.stringify(data) } : {}) }),
   setToken: (token) => localStorage.setItem('gurmad_v2_token', token),
   clearToken: () => localStorage.removeItem('gurmad_v2_token'),
   getToken,

@@ -21,7 +21,10 @@ const NAV = [
   // OD-4: broad operational view (not HR-sensitive like Employees) —
   // ungated, matches the backend's own broader VIEW_ROLES for /v2/trucks.
   { to: '/trucks', label: 'Trucks', icon: Truck },
-  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList },
+  // Cycles/Batches view is admin/gudoomiye/zone_accountant/collector —
+  // cashier has no role in collection operations at all (matches the
+  // backend's VIEW_ROLES on /v2/cycles and /v2/batches).
+  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
   { to: '/billing', label: 'Billing & Invoices', icon: Receipt, permission: 'billing.view' },
 ];
 

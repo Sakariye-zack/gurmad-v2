@@ -6,6 +6,8 @@ const zonesRouter = require('./routes/zones');
 const customersRouter = require('./routes/customers');
 const employeesRouter = require('./routes/employees');
 const trucksRouter = require('./routes/trucks');
+const cyclesRouter = require('./routes/cycles');
+const batchesRouter = require('./routes/batches');
 
 const app = express();
 app.use(express.json());
@@ -26,6 +28,8 @@ app.use('/api/v2/zones', zonesRouter);
 app.use('/api/v2/customers', customersRouter);
 app.use('/api/v2/employees', employeesRouter);
 app.use('/api/v2/trucks', trucksRouter);
+app.use('/api/v2/cycles', cyclesRouter);
+app.use('/api/v2/batches', batchesRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

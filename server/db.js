@@ -175,6 +175,181 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_status ON trucks(status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_driver_id ON trucks(driver_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_trucks_collector_id ON trucks(collector_id);`);
+
+  // Phase 3 Module 5 — Collection Operations (Cycles / Batches / Batch
+  // Customers / Tasks / Task Resources). Target model is the current
+  // system's newer batches/task_resources shape (OD-approved) — the older
+  // tasks/task_customers table in the CURRENT system is legacy and lives in
+  // a completely separate database/service; V2 never writes to it (see
+  // routes/collectionOps.js header comment for the full legacy-dual-write
+  // audit finding).
+  //
+  // Lifecycle vocabulary is reused verbatim from the current system's own
+  // proven values, not invented: batches.status (Draft/Assigned/In
+  // Progress/Partially Completed/Completed/Cancelled, lowercased+
+  // underscored for V2 convention), batch_customers.status (Pending/
+  // Serviced/Missed/Skipped/Rescheduled), tasks.status (Pending/In
+  // Progress/Completed — the only 3 values the current system's own
+  // PUT /api/tasks/:id/status route actually uses).
+  //
+  // collection_cycles keeps the current system's plain is_active boolean
+  // rather than introducing a new status enum — a cycle has exactly two
+  // real states (open/closed) today and "closing a cycle" is already a
+  // named action; formalizing that into a two-value CHECK would be
+  // renaming, not new vocabulary, but the boolean is kept as-is to stay
+  // maximally faithful to the proven current behavior per instruction.
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS batch_number_seq;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collection_cycles (
+      id SERIAL PRIMARY KEY,
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      cycle_type VARCHAR(20) NOT NULL CHECK (cycle_type IN ('monthly', 'weekly', 'custom')),
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cycles_zone_id ON collection_cycles(zone_id);`);
+
+  // DR-7: a batch is either all-Residential or all-Commercial (with a
+  // shift) — customer_type/commercial_shift live on the batch, the same
+  // "operation-level classification" pattern DR-7's own approved design
+  // describes ("a batch is built as either all-Residential or all-
+  // Commercial"). This is what assignment-time and task-start validation
+  // check a collector's employee record against.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS batches (
+      id SERIAL PRIMARY KEY,
+      batch_code VARCHAR(50) UNIQUE NOT NULL,
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      cycle_id INTEGER NOT NULL REFERENCES collection_cycles(id) ON DELETE RESTRICT,
+      batch_number INTEGER NOT NULL,
+      customer_type VARCHAR(20) NOT NULL DEFAULT 'residential' CHECK (customer_type IN ('residential', 'commercial')),
+      commercial_shift VARCHAR(10) CHECK (commercial_shift IN ('day', 'night')),
+      start_date DATE NOT NULL,
+      end_date DATE,
+      total_customers INTEGER NOT NULL DEFAULT 0,
+      status VARCHAR(30) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'assigned', 'in_progress', 'partially_completed', 'completed', 'cancelled')),
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      assigned_at TIMESTAMP,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      cancelled_at TIMESTAMP,
+      cancelled_reason TEXT,
+      notes TEXT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_zone_id ON batches(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_cycle_id ON batches(cycle_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS batch_customers (
+      id SERIAL PRIMARY KEY,
+      batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE RESTRICT,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'serviced', 'missed', 'skipped', 'rescheduled')),
+      rescheduled_to_batch_id INTEGER REFERENCES batches(id),
+      status_reason VARCHAR(255),
+      status_note TEXT,
+      status_photo VARCHAR(255),
+      status_lat NUMERIC(10,8),
+      status_lng NUMERIC(11,8),
+      status_at TIMESTAMP,
+      added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (customer_id, batch_id),
+      CONSTRAINT rescheduled_needs_target CHECK (status != 'rescheduled' OR rescheduled_to_batch_id IS NOT NULL)
+    );
+  `);
+  // Preserved verbatim from the current system: the partial unique index
+  // that is the real enforcement of "a customer can't be Pending in two
+  // open batches at once" (the plain UNIQUE above only stops the same
+  // customer being added twice to the SAME batch).
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS one_open_batch_per_customer
+      ON batch_customers (customer_id)
+      WHERE status = 'pending';
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batch_customers_batch_id ON batch_customers(batch_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batch_customers_customer_id ON batch_customers(customer_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id SERIAL PRIMARY KEY,
+      batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed')),
+      scheduled_at TIMESTAMP,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_batch_id ON tasks(batch_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`);
+
+  // task_resources.resource_id is a POLYMORPHIC reference (OD-1, approved):
+  // resource_type='collector'|'driver' -> employees.id,
+  // resource_type='truck' -> trucks.id,
+  // resource_type='cashier' -> users.id (reference-only, same cross-
+  // database limitation as employees.user_id — users lives in the
+  // reference backend's own database).
+  // Postgres cannot express a conditional FK, so this column carries NO
+  // database-level FK constraint — existence/type/eligibility are enforced
+  // entirely at the application layer in routes/collectionOps.js. This is
+  // a deliberate, documented limitation (OD-1), not an oversight.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_resources (
+      id SERIAL PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      resource_type VARCHAR(20) NOT NULL CHECK (resource_type IN ('collector', 'driver', 'truck', 'cashier')),
+      resource_id INTEGER NOT NULL,
+      role_note VARCHAR(100),
+      assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (task_id, resource_type, resource_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_task_resources_task_id ON task_resources(task_id);`);
+
+  // Append-only ledger — never UPDATEd or DELETEd, preserved verbatim from
+  // the current system's own design.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_resource_history (
+      id SERIAL PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES tasks(id),
+      resource_type VARCHAR(20) NOT NULL,
+      resource_id INTEGER NOT NULL,
+      action VARCHAR(20) NOT NULL CHECK (action IN ('assigned', 'removed')),
+      reason TEXT,
+      performed_by INTEGER,
+      performed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_id ON task_resource_history(task_id);`);
+
+  // Computed, not stored — avoids a stored percentage silently drifting
+  // from the real counts. Preserved verbatim from the current system.
+  await pool.query(`
+    CREATE OR REPLACE VIEW batch_progress AS
+    SELECT
+      b.id AS batch_id,
+      COUNT(bc.id) AS total,
+      COUNT(bc.id) FILTER (WHERE bc.status = 'serviced')    AS serviced,
+      COUNT(bc.id) FILTER (WHERE bc.status = 'missed')      AS missed,
+      COUNT(bc.id) FILTER (WHERE bc.status = 'skipped')     AS skipped,
+      COUNT(bc.id) FILTER (WHERE bc.status = 'rescheduled') AS rescheduled,
+      COUNT(bc.id) FILTER (WHERE bc.status = 'pending')     AS pending,
+      ROUND(100.0 * COUNT(bc.id) FILTER (WHERE bc.status = 'serviced') / NULLIF(COUNT(bc.id), 0), 1) AS percent_complete
+    FROM batches b
+    LEFT JOIN batch_customers bc ON bc.batch_id = b.id
+    GROUP BY b.id;
+  `);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
