@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -25,7 +25,15 @@ const NAV = [
   // cashier has no role in collection operations at all (matches the
   // backend's VIEW_ROLES on /v2/cycles and /v2/batches).
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
-  { to: '/billing', label: 'Billing & Invoices', icon: Receipt, permission: 'billing.view' },
+  // Financial — Phase 3 Module 6. Billing and Invoices are deliberately
+  // separate pages (approved architecture), matching the RBAC matrix in
+  // Phase3_Module06_FinancialBilling_Implementation_Spec.md §13: Collector
+  // has no financial nav entry at all; Gudoomiye/Zone Accountant see all
+  // three but are view-only within them (enforced by RoleGate inside each
+  // page + backend requireRole, never by hiding the nav item alone).
+  { to: '/billing', label: 'Billing', icon: Wallet, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
+  { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
+  { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
 ];
 
 export default function Sidebar() {

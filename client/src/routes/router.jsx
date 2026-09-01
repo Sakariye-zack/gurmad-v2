@@ -1,10 +1,8 @@
 import React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { Receipt } from 'lucide-react';
 import AppShell from '../layout/AppShell.jsx';
 import Login from '../pages/Login.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
-import PlaceholderPage from '../pages/PlaceholderPage.jsx';
 import ZonesListPage from '../pages/zones/ZonesListPage.jsx';
 import ZoneDetailPage from '../pages/zones/ZoneDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
@@ -16,6 +14,10 @@ import TruckDetailPage from '../pages/trucks/TruckDetailPage.jsx';
 import CyclesListPage from '../pages/collection/CyclesListPage.jsx';
 import BatchesListPage from '../pages/collection/BatchesListPage.jsx';
 import BatchDetailPage from '../pages/collection/BatchDetailPage.jsx';
+import InvoicesListPage from '../pages/financial/InvoicesListPage.jsx';
+import InvoiceDetailPage from '../pages/financial/InvoiceDetailPage.jsx';
+import BillingView from '../pages/financial/BillingView.jsx';
+import DebtsView from '../pages/financial/DebtsView.jsx';
 import RequireAuth from './RequireAuth.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
@@ -41,7 +43,15 @@ export const router = createBrowserRouter([
       { path: 'collection-cycles', element: <CyclesListPage /> },
       { path: 'collection-cycles/batches', element: <BatchesListPage /> },
       { path: 'collection-cycles/batches/:id', element: <BatchDetailPage /> },
-      { path: 'billing', element: <PlaceholderPage icon={Receipt} title="Billing & Invoices" /> },
+      // Financial — Phase 3 Module 6: Billing and Invoices are deliberately
+      // separate pages/routes (approved architecture), not one combined
+      // surface. 'billing' kept as the legacy path collectors/cashiers'
+      // mobile tab already links to (MobileTabBar.jsx) — now a real page,
+      // no longer a placeholder.
+      { path: 'financial/invoices', element: <InvoicesListPage /> },
+      { path: 'financial/invoices/:id', element: <InvoiceDetailPage /> },
+      { path: 'financial/debts', element: <DebtsView /> },
+      { path: 'billing', element: <BillingView /> },
     ],
   },
 ]);
