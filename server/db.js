@@ -90,6 +90,46 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_customer_type ON customers(customer_type);`);
   // Case-insensitive lookup for the duplicate-warning check (§13/OD-2).
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);`);
+
+  // Phase 3 Module 3 — Employees (Staff Master Data).
+  //
+  // employees.user_id: OD-2 approved this as "a proper FK to users.id" — but
+  // `users` lives in the reference T2.8-F backend's OWN database (a separate
+  // service/DB by Foundation-phase design; see Phase_1 Foundation plan), not
+  // in this V2 database. Postgres cannot enforce a real FK across databases.
+  // Discovered and reported, not silently worked around: this column is a
+  // plain nullable INTEGER with a UNIQUE constraint (real one-to-one
+  // enforcement, DB-level, within this database) and app-level format
+  // validation only — existence-checking against the actual users table is
+  // deferred (would require either a new cross-service HTTP call out to the
+  // reference backend, or database consolidation — both are Users/Auth
+  // redesign decisions explicitly out of scope for this checkpoint).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employees (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      job_role VARCHAR(100),
+      employee_type VARCHAR(20) NOT NULL DEFAULT 'other' CHECK (employee_type IN ('collector', 'driver', 'office', 'other')),
+      collector_type VARCHAR(20) CHECK (collector_type IN ('residential', 'commercial')),
+      commercial_shift VARCHAR(10) CHECK (commercial_shift IN ('day', 'night')),
+      phone VARCHAR(20) NOT NULL,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'on_leave', 'suspended', 'archived')),
+      salary NUMERIC,
+      join_date DATE,
+      photo VARCHAR(255),
+      id_document VARCHAR(255),
+      guarantor_name VARCHAR(100),
+      guarantor_phone VARCHAR(20),
+      notes TEXT,
+      user_id INTEGER UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_zone_id ON employees(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_employee_type ON employees(employee_type);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {

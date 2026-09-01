@@ -9,6 +9,8 @@ import ZonesListPage from '../pages/zones/ZonesListPage.jsx';
 import ZoneDetailPage from '../pages/zones/ZoneDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
+import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
+import EmployeeDetailPage from '../pages/employees/EmployeeDetailPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
@@ -27,6 +29,8 @@ export const router = createBrowserRouter([
       { path: 'customers/:id', element: <CustomerDetailPage /> },
       { path: 'zones', element: <ZonesListPage /> },
       { path: 'zones/:id', element: <ZoneDetailPage /> },
+      { path: 'employees', element: <EmployeesListPage /> },
+      { path: 'employees/:id', element: <EmployeeDetailPage /> },
       { path: 'collection-cycles', element: <PlaceholderPage icon={ClipboardList} title="Collection Cycles" /> },
       { path: 'billing', element: <PlaceholderPage icon={Receipt} title="Billing & Invoices" /> },
     ],
