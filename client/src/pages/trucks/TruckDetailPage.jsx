@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Truck, Pencil } from 'lucide-react';
-import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
+import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useTruck, useUpdateTruckStatus } from '../../hooks/useTrucks.js';
 import TruckFormModal from './TruckFormModal.jsx';
@@ -65,18 +65,15 @@ export default function TruckDetailPage() {
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-        <Card style={cardPad}><Label>Status</Label><div style={{ marginTop: '6px' }}><StatusBadge status={truck.status} /></div></Card>
-        <Card style={cardPad}><Label>Zone</Label><Value>{truck.zone_name || '— (company-wide)'}</Value></Card>
-        <Card style={cardPad}><Label>Driver</Label><Value>{truck.driver_name || '— (unassigned)'}</Value></Card>
-        <Card style={cardPad}><Label>Collector</Label><Value>{truck.collector_name || '— (unassigned)'}</Value></Card>
-        <Card style={cardPad}><Label>Capacity</Label><Value className="tabular-nums">{truck.capacity != null ? truck.capacity : '—'}</Value></Card>
-        <Card style={cardPad}>
-          <Label>Compliance</Label>
-          <div style={{ marginTop: '6px' }}>
-            <StatusBadge status={COMPLIANCE_LABELS[cs]} map={{ [COMPLIANCE_LABELS[cs].toLowerCase()]: COMPLIANCE_BADGE_MAP[cs] }} />
-          </div>
-        </Card>
+      <div style={{ marginBottom: '20px' }}>
+        <DetailGrid items={[
+          { label: 'Status', value: <StatusBadge status={truck.status} /> },
+          { label: 'Compliance', value: <StatusBadge status={COMPLIANCE_LABELS[cs]} map={{ [COMPLIANCE_LABELS[cs].toLowerCase()]: COMPLIANCE_BADGE_MAP[cs] }} /> },
+          { label: 'Zone', value: truck.zone_name || '— (company-wide)' },
+          { label: 'Capacity', value: truck.capacity != null ? truck.capacity : '—', className: 'tabular-nums' },
+          { label: 'Driver', value: truck.driver_name || '— (unassigned)' },
+          { label: 'Collector', value: truck.collector_name || '— (unassigned)' },
+        ]} />
       </div>
 
       <RoleGate roles={['admin', 'gudoomiye']}>
@@ -103,11 +100,11 @@ export default function TruckDetailPage() {
       </RoleGate>
 
       <span style={sectionLabelStyle}>Compliance details</span>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-        <Card style={cardPad}><Label>Insurance expiry</Label><Value className="tabular-nums">{truck.insurance_expiry || '—'}</Value></Card>
-        <Card style={cardPad}><Label>Registration expiry</Label><Value className="tabular-nums">{truck.registration_expiry || '—'}</Value></Card>
-        <Card style={cardPad}><Label>Road tax expiry</Label><Value className="tabular-nums">{truck.road_tax_expiry || '—'}</Value></Card>
-      </div>
+      <DetailGrid items={[
+        { label: 'Insurance expiry', value: truck.insurance_expiry || '—', className: 'tabular-nums' },
+        { label: 'Registration expiry', value: truck.registration_expiry || '—', className: 'tabular-nums' },
+        { label: 'Road tax expiry', value: truck.road_tax_expiry || '—', className: 'tabular-nums' },
+      ]} />
 
       {truck.notes && (
         <Card style={{ ...cardPad, marginTop: '16px' }}>
@@ -143,14 +140,11 @@ export default function TruckDetailPage() {
 function Label({ children }) {
   return <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{children}</span>;
 }
-function Value({ children, className }) {
-  return <div className={className} style={{ marginTop: '6px', fontSize: '15px', fontWeight: 700 }}>{children}</div>;
-}
 
 const cardPad = { padding: '16px' };
 const sectionLabelStyle = {
   display: 'block', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em',
-  color: 'var(--text-muted)', margin: '0 0 10px',
+  color: 'var(--text-muted)', margin: '20px 0 10px',
 };
 const backLinkStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',

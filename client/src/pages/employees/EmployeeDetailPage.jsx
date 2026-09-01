@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Users2, Pencil, Archive, RotateCcw } from 'lucide-react';
-import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
+import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useEmployee, useUpdateEmployeeStatus } from '../../hooks/useEmployees.js';
 import EmployeeFormModal from './EmployeeFormModal.jsx';
@@ -63,39 +63,33 @@ export default function EmployeeDetailPage() {
       />
 
       <span style={sectionLabelStyle}>General information</span>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-        <Card style={cardPad}><Label>Type</Label><Value style={{ textTransform: 'capitalize' }}>{employee.employee_type}</Value></Card>
-        <Card style={cardPad}><Label>Status</Label><div style={{ marginTop: '6px' }}><StatusBadge status={employee.status} /></div></Card>
-        <Card style={cardPad}><Label>Zone</Label><Value>{employee.zone_name || '— (company-wide)'}</Value></Card>
-        <Card style={cardPad}><Label>Phone</Label><Value className="tabular-nums">{employee.phone}</Value></Card>
-        {employee.employee_type === 'collector' && (
-          <Card style={cardPad}>
-            <Label>Collector classification</Label>
-            <Value style={{ textTransform: 'capitalize' }}>
-              {employee.collector_type || 'Not set'}{employee.commercial_shift ? ` — ${employee.commercial_shift}` : ''}
-            </Value>
-          </Card>
-        )}
-        <Card style={cardPad}>
-          <Label>Linked account (reference only)</Label>
-          <Value>{employee.user_id != null ? `User #${employee.user_id}` : '— (no login account)'}</Value>
-          {employee.user_id != null && (
-            <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
-              Recorded reference, not a verified account link.
-            </p>
-          )}
-        </Card>
-        <Card style={cardPad}><Label>Join date</Label><Value>{employee.join_date || '—'}</Value></Card>
+      <div style={{ marginBottom: '20px' }}>
+        <DetailGrid items={[
+          { label: 'Type', value: <span style={{ textTransform: 'capitalize' }}>{employee.employee_type}</span> },
+          { label: 'Status', value: <StatusBadge status={employee.status} /> },
+          { label: 'Zone', value: employee.zone_name || '— (company-wide)' },
+          { label: 'Phone', value: employee.phone, className: 'tabular-nums' },
+          employee.employee_type === 'collector' && {
+            label: 'Collector classification',
+            value: <span style={{ textTransform: 'capitalize' }}>{employee.collector_type || 'Not set'}{employee.commercial_shift ? ` — ${employee.commercial_shift}` : ''}</span>,
+          },
+          {
+            label: 'Linked account (reference only)',
+            value: employee.user_id != null ? `User #${employee.user_id}` : '— (no login account)',
+            hint: employee.user_id != null ? 'Recorded reference, not a verified account link.' : null,
+          },
+          { label: 'Join date', value: employee.join_date || '—' },
+        ]} />
       </div>
 
       {hasSensitiveFields && (
         <>
           <span style={sectionLabelStyle}>Sensitive HR information</span>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            <Card style={cardPad}><Label>Salary</Label><Value className="tabular-nums">{employee.salary != null ? employee.salary : '—'}</Value></Card>
-            <Card style={cardPad}><Label>Guarantor</Label><Value>{employee.guarantor_name || '—'}</Value></Card>
-            <Card style={cardPad}><Label>Guarantor phone</Label><Value className="tabular-nums">{employee.guarantor_phone || '—'}</Value></Card>
-          </div>
+          <DetailGrid items={[
+            { label: 'Salary', value: employee.salary != null ? employee.salary : '—', className: 'tabular-nums' },
+            { label: 'Guarantor', value: employee.guarantor_name || '—' },
+            { label: 'Guarantor phone', value: employee.guarantor_phone || '—', className: 'tabular-nums' },
+          ]} />
           {employee.notes && (
             <Card style={{ ...cardPad, marginTop: '16px' }}>
               <Label>Notes</Label>
@@ -138,9 +132,6 @@ export default function EmployeeDetailPage() {
 
 function Label({ children }) {
   return <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{children}</span>;
-}
-function Value({ children, style, className }) {
-  return <div className={className} style={{ marginTop: '6px', fontSize: '15px', fontWeight: 700, ...style }}>{children}</div>;
 }
 
 const cardPad = { padding: '16px' };

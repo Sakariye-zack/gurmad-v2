@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, MapPinned, Pencil } from 'lucide-react';
-import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
+import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useZone } from '../../hooks/useZones.js';
 import ZoneFormModal from './ZoneFormModal.jsx';
@@ -38,26 +38,14 @@ export default function ZoneDetailPage() {
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
-        <Card style={cardPad}>
-          <Label>Status</Label>
-          <div style={{ marginTop: '6px' }}><StatusBadge status={zone.status} /></div>
-        </Card>
-        <Card style={cardPad}>
-          <Label>Sub-zone</Label>
-          <Value>{zone.sub_zone || '—'}</Value>
-        </Card>
-        <Card style={cardPad}>
-          <Label>Area</Label>
-          <Value>{zone.area || '—'}</Value>
-        </Card>
-        <Card style={cardPad}>
-          <Label>Collection days</Label>
-          <Value>{(zone.collection_days || []).join(', ') || '—'}</Value>
-        </Card>
-      </div>
+      <DetailGrid items={[
+        { label: 'Status', value: <StatusBadge status={zone.status} /> },
+        { label: 'Sub-zone', value: zone.sub_zone || '—' },
+        { label: 'Area', value: zone.area || '—' },
+        { label: 'Collection days', value: (zone.collection_days || []).join(', ') || '—' },
+      ]} />
 
-      <Card style={{ ...cardPad, marginTop: '16px' }}>
+      <Card style={{ padding: '16px', marginTop: '16px' }}>
         <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
           Customers, employees, collectors, and trucks assigned to this zone will appear here
           once their respective modules are implemented, per the approved one-module-at-a-time sequence.
@@ -68,15 +56,6 @@ export default function ZoneDetailPage() {
     </div>
   );
 }
-
-function Label({ children }) {
-  return <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{children}</span>;
-}
-function Value({ children }) {
-  return <div style={{ marginTop: '6px', fontSize: '15px', fontWeight: 700 }}>{children}</div>;
-}
-
-const cardPad = { padding: '16px' };
 
 const backLinkStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Users, Pencil, Hash, Archive, RotateCcw } from 'lucide-react';
-import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
+import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useCustomer, useUpdateCustomerStatus } from '../../hooks/useCustomers.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
@@ -61,21 +61,19 @@ export default function CustomerDetailPage() {
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
-        <Card style={cardPad}><Label>Customer Number</Label><Value className="tabular-nums">{customer.customer_number}</Value></Card>
-        <Card style={cardPad}><Label>Type</Label><Value style={{ textTransform: 'capitalize' }}>{customer.customer_type}</Value></Card>
-        <Card style={cardPad}><Label>Status</Label><div style={{ marginTop: '6px' }}><StatusBadge status={customer.status} /></div></Card>
-        <Card style={cardPad}><Label>Zone</Label><Value>{customer.zone_name}{customer.sub_zone ? ` — ${customer.sub_zone}` : ''}</Value></Card>
-        <Card style={cardPad}><Label>Phone</Label><Value className="tabular-nums">{customer.phone}</Value></Card>
-        <Card style={cardPad}><Label>Alternate / WhatsApp</Label><Value>{customer.alternate_phone || customer.whatsapp || '—'}</Value></Card>
-        <Card style={cardPad}><Label>Email</Label><Value>{customer.email || '—'}</Value></Card>
-        <Card style={cardPad}><Label>Address</Label><Value>{customer.address_line || '—'}</Value></Card>
-        {customer.customer_type === 'commercial' && (
-          <Card style={cardPad}><Label>Commercial shift</Label><Value style={{ textTransform: 'capitalize' }}>{customer.commercial_shift || 'Not set'}</Value></Card>
-        )}
-        <Card style={cardPad}><Label>Collection</Label><Value>{customer.collection_frequency || '—'} {customer.collection_mode ? `(${customer.collection_mode})` : ''}</Value></Card>
-        <Card style={cardPad}><Label>Fee</Label><Value className="tabular-nums">{customer.fee != null ? customer.fee : '—'}</Value></Card>
-      </div>
+      <DetailGrid items={[
+        { label: 'Customer Number', value: customer.customer_number, className: 'tabular-nums' },
+        { label: 'Status', value: <StatusBadge status={customer.status} /> },
+        { label: 'Type', value: <span style={{ textTransform: 'capitalize' }}>{customer.customer_type}</span> },
+        { label: 'Zone', value: `${customer.zone_name}${customer.sub_zone ? ` — ${customer.sub_zone}` : ''}` },
+        { label: 'Phone', value: customer.phone, className: 'tabular-nums' },
+        { label: 'Alternate / WhatsApp', value: customer.alternate_phone || customer.whatsapp || '—' },
+        { label: 'Email', value: customer.email || '—' },
+        { label: 'Address', value: customer.address_line || '—' },
+        customer.customer_type === 'commercial' && { label: 'Commercial shift', value: <span style={{ textTransform: 'capitalize' }}>{customer.commercial_shift || 'Not set'}</span> },
+        { label: 'Collection', value: `${customer.collection_frequency || '—'}${customer.collection_mode ? ` (${customer.collection_mode})` : ''}` },
+        { label: 'Fee', value: customer.fee != null ? customer.fee : '—', className: 'tabular-nums' },
+      ]} />
 
       {customer.notes && (
         <Card style={{ ...cardPad, marginTop: '16px' }}>
@@ -111,9 +109,6 @@ export default function CustomerDetailPage() {
 
 function Label({ children }) {
   return <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{children}</span>;
-}
-function Value({ children, style, className }) {
-  return <div className={className} style={{ marginTop: '6px', fontSize: '15px', fontWeight: 700, ...style }}>{children}</div>;
 }
 
 const cardPad = { padding: '16px' };

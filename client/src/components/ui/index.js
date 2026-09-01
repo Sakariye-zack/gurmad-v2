@@ -2,6 +2,7 @@ export { default as Button } from './Button.jsx';
 export { default as Card } from './Card.jsx';
 export { default as PageHeader } from './PageHeader.jsx';
 export { default as StatCard } from './StatCard.jsx';
+export { default as DetailGrid } from './DetailGrid.jsx';
 export { default as StatusBadge } from './StatusBadge.jsx';
 export { default as DataTable } from './DataTable.jsx';
 export { default as FilterBar } from './FilterBar.jsx';
