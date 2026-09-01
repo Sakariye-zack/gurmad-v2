@@ -18,10 +18,19 @@ export default function EmployeesListPage() {
     status: statusFilter === 'active' ? undefined : statusFilter,
     employee_type: typeFilter || undefined,
   });
-  const { data: allActive } = useEmployees({});
+  const { data: allActive, error: allActiveError } = useEmployees({});
   const employees = data?.data || [];
-  const collectorCount = (allActive?.data || []).filter((e) => e.employee_type === 'collector').length;
-  const officeCount = (allActive?.data || []).filter((e) => e.employee_type === 'office').length;
+  // A denied role (403 from the backend) must never render as "0 of
+  // everything" — that reads as real, empty data rather than "you can't
+  // see this." Both queries share the same authorization boundary, so
+  // either one erroring means the stats are unknown, not zero. Found
+  // during Module 3 review — presentation-only, does not touch
+  // authorization logic (the backend already correctly denies the
+  // request either way; this only fixes what the denial renders as).
+  const statsUnavailable = !!error || !!allActiveError;
+  const collectorCount = statsUnavailable ? null : (allActive?.data || []).filter((e) => e.employee_type === 'collector').length;
+  const officeCount = statsUnavailable ? null : (allActive?.data || []).filter((e) => e.employee_type === 'office').length;
+  const totalCount = statsUnavailable ? null : allActive?.meta?.total;
 
   return (
     <div>
@@ -37,9 +46,9 @@ export default function EmployeesListPage() {
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Total Staff" value={allActive?.meta?.total ?? '—'} icon={Users2} />
-        <StatCard label="Collectors" value={collectorCount} icon={Truck} accent="var(--info)" />
-        <StatCard label="Office Staff" value={officeCount} icon={Briefcase} accent="var(--warning)" />
+        <StatCard label="Total Staff" value={totalCount ?? '—'} icon={Users2} />
+        <StatCard label="Collectors" value={collectorCount ?? '—'} icon={Truck} accent="var(--info)" />
+        <StatCard label="Office Staff" value={officeCount ?? '—'} icon={Briefcase} accent="var(--warning)" />
       </div>
 
       <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by name, phone, or job title…">

@@ -175,7 +175,7 @@ function Content({ onClose, employee }) {
           </Field>
         </div>
 
-        <Field label="Linked user account ID" error={fieldErrors.user_id} hint="Optional. The staff login account this employee corresponds to, if any.">
+        <Field label="Linked user account ID" error={fieldErrors.user_id} hint="Optional, recorded as a reference only — not verified against the login system.">
           <input value={form.user_id} onChange={(e) => set('user_id', e.target.value)} style={inputStyle} placeholder="e.g. 3" />
         </Field>
 

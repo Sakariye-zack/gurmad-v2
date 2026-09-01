@@ -153,8 +153,17 @@ function validateEmployeeInput(body, { partial = false } = {}) {
     else out.notes = notes || null;
   }
 
-  // user_id — OD-2: nullable, format-validated only (see db.js comment for
-  // why this cannot be a real cross-database FK in this checkpoint).
+  // user_id — OD-2, hardening pass: this is an APPLICATION-LEVEL identity
+  // reference, not a database-enforced foreign key. `users` lives in the
+  // reference T2.8-F backend's own separate database (a deliberate
+  // Foundation-phase decision — see db.js's migration comment); Postgres
+  // cannot enforce a cross-database FK, so nothing here — and nothing any
+  // API response returns — should be read as a guarantee that this integer
+  // corresponds to a real row in `users`. Only format (positive integer)
+  // and this database's own one-to-one uniqueness are actually verified.
+  // Existence-checking against the real users table is out of scope for
+  // this checkpoint (would require either a new cross-service call or
+  // database consolidation — both explicitly deferred per your review).
   if (body.user_id !== undefined) {
     if (body.user_id === null) {
       out.user_id = null;

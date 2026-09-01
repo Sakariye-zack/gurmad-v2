@@ -76,7 +76,15 @@ export default function EmployeeDetailPage() {
             </Value>
           </Card>
         )}
-        <Card style={cardPad}><Label>Linked account</Label><Value>{employee.user_id != null ? `User #${employee.user_id}` : '— (no login account)'}</Value></Card>
+        <Card style={cardPad}>
+          <Label>Linked account (reference only)</Label>
+          <Value>{employee.user_id != null ? `User #${employee.user_id}` : '— (no login account)'}</Value>
+          {employee.user_id != null && (
+            <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+              Recorded reference, not a verified account link.
+            </p>
+          )}
+        </Card>
         <Card style={cardPad}><Label>Join date</Label><Value>{employee.join_date || '—'}</Value></Card>
       </div>
 
