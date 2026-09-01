@@ -20,6 +20,9 @@ const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers']
 const CREATE_ROLES = ['admin', 'head_of_cashiers'];
 const APPROVE_ROLES = ['admin', 'gudoomiye']; // frozen, unchanged from Discovery §12
 const VOID_ROLES = ['admin'];
+// Resolving a cashier shortage is a management action, same authority
+// tier as creating the cashout itself — not an approval-tier action.
+const RESOLVE_SHORTAGE_ROLES = ['admin', 'head_of_cashiers'];
 
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'cashouts');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -109,13 +112,24 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     if (myZoneId !== null && cashout.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
     }
+    // debt: a genuine CUSTOMER-owed Debt independently linked to this
+    // cashout (legitimate, unrelated use of debts.cashout_id) — kept
+    // entirely separate from the cashier's own shortage below. A cashier
+    // shortage is NEVER represented as a row in this table.
     const debt = await pool.query('SELECT * FROM debts WHERE cashout_id = $1', [id]);
+    // shortage: the cashier accountability/reconciliation-liability record
+    // (new model, this pass) — the correct place a shortage lives.
+    const shortage = await pool.query('SELECT * FROM cashout_shortages WHERE cashout_id = $1', [id]);
     const attachments = await pool.query('SELECT * FROM cashout_attachments WHERE cashout_id = $1 AND voided_at IS NULL ORDER BY uploaded_at ASC', [id]);
     // asOf = cashout.created_at: a historical document must show the exact
     // figures true when it was created, never drift as later payments land
     // inside the same time window (see cashoutCalculations.js's own comment).
     const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
-    res.json({ data: { ...cashout, debt: debt.rows[0] || null, attachments: attachments.rows, reconciliation: recon } });
+    // shortage_record (not `shortage`) — cashouts.shortage is the numeric
+    // amount column already spread in from ...cashout; naming the record
+    // object the same key would silently shadow that number in the
+    // response (a real bug caught during this pass's own verification).
+    res.json({ data: { ...cashout, debt: debt.rows[0] || null, shortage_record: shortage.rows[0] || null, attachments: attachments.rows, reconciliation: recon } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load cashout.', code: 'INTERNAL' } });
   }
@@ -137,7 +151,8 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
       return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
     }
     const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
-    const buffer = await buildCashoutDocx(cashout, recon);
+    const shortageRes = await pool.query('SELECT * FROM cashout_shortages WHERE cashout_id = $1', [id]);
+    const buffer = await buildCashoutDocx(cashout, recon, shortageRes.rows[0] || null);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${cashout.cashout_number}.docx"`);
     res.send(buffer);
@@ -222,30 +237,84 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     );
     const cashout = inserted.rows[0];
 
-    // Atomic shortage -> debt: BLOCKED, genuine architecture conflict found
-    // mid-implementation, not silently worked around — reported in the
-    // Implementation Report, not decided here. debts.customer_id is
-    // NOT NULL (Module 6's own, closed, approved schema) because every
-    // debt Module 6 ever modeled is owed BY a customer. A cashout
-    // shortage is owed by the CASHIER, not any customer.id — there is no
-    // value that correctly satisfies customer_id for this case. Making
-    // it nullable would be a SECOND touch to the closed Module 6 schema,
-    // beyond the one explicitly approved (debts.cashout_id) — "if
-    // anything beyond that is required: STOP and report." The shortage
-    // itself IS still fully recorded, atomically, on the cashout row
-    // (cashout.shortage / shortage_reason, both NOT NULL-safe, no debt
-    // table involved) — only the "also mirror it into `debts`" step is
-    // withheld pending your decision. See the Implementation Report for
-    // the options.
-    const debt = null;
+    // Atomic shortage -> cashout_shortages, in the SAME transaction —
+    // resolving the architecture conflict flagged in the prior checkpoint.
+    // NOT a debts row: a Cashout Shortage is cashier accountability, never
+    // a customer-owed Debt (approved architecture decision, this pass).
+    // If this insert fails, the whole transaction (including the cashout
+    // row itself) rolls back — the cashout is never left half-recorded.
+    let shortageRecord = null;
+    if (shortage > 0) {
+      const shortageInsert = await client.query(
+        `INSERT INTO cashout_shortages (cashout_id, cashier_id, expected_amount, actual_amount, shortage_amount, currency, reason, status, created_by)
+         VALUES ($1,$2,$3,$4,$5,'USD',$6,'unpaid',$7) RETURNING *`,
+        [cashout.id, cashierId, expected, actual, shortage, shortage_reason.trim(), req.user.id]
+      );
+      shortageRecord = shortageInsert.rows[0];
+    }
 
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.create', entityType: 'cashout', entityId: cashout.id, before: null, after: cashout });
-    res.status(201).json({ data: { ...cashout, debt, reconciliation: recon } });
+    if (shortageRecord) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout_shortage.create', entityType: 'cashout_shortage', entityId: shortageRecord.id, before: null, after: shortageRecord });
+    }
+    res.status(201).json({ data: { ...cashout, shortage_record: shortageRecord, reconciliation: recon } });
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === '23505') return res.status(409).json({ error: { message: 'Duplicate cashout number — retry.', code: 'CONFLICT' } });
     res.status(500).json({ error: { message: 'Failed to create cashout.', code: 'INTERNAL' } });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- Cashout Shortage resolution ----------
+// Manual, audited resolution only — NO automatic recovery mechanism
+// (salary/payroll deduction, auto-debt, auto-accounting-entry) is
+// implemented anywhere, per explicit instruction. This route records
+// WHO resolved it, HOW MUCH was actually recovered, and WHY/notes —
+// nothing more.
+router.put('/:id/shortage/resolve', authenticateToken, requireRole(...RESOLVE_SHORTAGE_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
+  const resolvedAmount = parseFloat(req.body?.resolved_amount);
+  const notes = (req.body?.resolution_notes || '').trim();
+  if (isNaN(resolvedAmount) || resolvedAmount <= 0) {
+    return res.status(400).json({ error: { message: 'resolved_amount must be a positive number.', code: 'VALIDATION' } });
+  }
+  if (!notes) return res.status(400).json({ error: { message: 'resolution_notes is required.', code: 'VALIDATION' } });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const shortageRes = await client.query('SELECT * FROM cashout_shortages WHERE cashout_id = $1 FOR UPDATE', [id]);
+    if (shortageRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'No shortage record exists for this cashout.', code: 'NOT_FOUND' } });
+    }
+    const shortage = shortageRes.rows[0];
+    if (shortage.status === 'paid') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'This shortage is already resolved.', code: 'CONFLICT' } });
+    }
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null) {
+      const coRes = await client.query('SELECT zone_id FROM cashouts WHERE id = $1', [id]);
+      if (coRes.rows[0]?.zone_id !== myZoneId) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
+      }
+    }
+    const updated = await client.query(
+      `UPDATE cashout_shortages SET status = 'paid', resolved_amount = $1, resolved_at = NOW(), resolved_by = $2, resolution_notes = $3, updated_at = NOW() WHERE id = $4 RETURNING *`,
+      [resolvedAmount, req.user.id, notes, shortage.id]
+    );
+    await client.query('COMMIT');
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout_shortage.resolve', entityType: 'cashout_shortage', entityId: shortage.id, before: shortage, after: updated.rows[0] });
+    res.json({ data: updated.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: { message: 'Failed to resolve shortage.', code: 'INTERNAL' } });
   } finally {
     client.release();
   }

@@ -82,7 +82,7 @@ function footer(text) {
   });
 }
 
-async function buildCashoutDocx(cashout, recon) {
+async function buildCashoutDocx(cashout, recon, shortage = null) {
   const children = [
     ...header(
       'Cashout & Cash Reconciliation',
@@ -113,7 +113,18 @@ async function buildCashoutDocx(cashout, recon) {
       ['Difference', money(Math.abs(cashout.expected_amount - cashout.actual_amount))],
       ['Difference Type', parseFloat(cashout.shortage) > 0 ? 'Shortage' : parseFloat(cashout.surplus) > 0 ? 'Surplus' : 'Exact Match'],
     ]),
-    ...(cashout.shortage_reason ? [new Paragraph({ children: [new TextRun({ text: 'Shortage reason: ', bold: true }), new TextRun({ text: cashout.shortage_reason })], spacing: { before: 100 } })] : []),
+    // Cashout Shortage — cashier accountability/reconciliation liability,
+    // explicitly NOT rendered as a "Customer Debt" (architecture decision,
+    // this pass). Only shown when a shortage record actually exists.
+    ...(shortage ? [
+      new Paragraph({ children: [new TextRun({ text: 'Cashier Shortage', bold: true, color: BRAND_GREEN })], spacing: { before: 140, after: 60 } }),
+      kvTable([
+        ['Shortage Amount', money(shortage.shortage_amount)], ['Cashier Responsible', `#${shortage.cashier_id}`],
+        ['Status', shortage.status.toUpperCase()], ['Resolved Amount', shortage.resolved_amount != null ? money(shortage.resolved_amount) : '—'],
+      ]),
+      new Paragraph({ children: [new TextRun({ text: 'Shortage reason: ', bold: true }), new TextRun({ text: shortage.reason })], spacing: { before: 80 } }),
+      ...(shortage.resolution_notes ? [new Paragraph({ children: [new TextRun({ text: 'Resolution notes: ', bold: true }), new TextRun({ text: shortage.resolution_notes })] })] : []),
+    ] : []),
     ...(cashout.remarks ? [new Paragraph({ children: [new TextRun({ text: 'Remarks: ', bold: true }), new TextRun({ text: cashout.remarks })] })] : []),
     sectionTitle('Accountability'),
     kvTable([

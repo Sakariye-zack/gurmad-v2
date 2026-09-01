@@ -5,7 +5,7 @@ import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorS
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 import {
-  useCashout, useApproveCashout, useRejectCashout, useVoidCashout, useUploadAttachment,
+  useCashout, useApproveCashout, useRejectCashout, useVoidCashout, useUploadAttachment, useResolveShortage,
 } from '../../hooks/useCashouts.js';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
@@ -195,21 +195,29 @@ export default function CashoutDetailPage() {
       {/* ============ END DOCUMENT ============ */}
 
       <div className="no-print">
-        <span style={sectionLabelStyle}>Linked Debt</span>
+        <span style={sectionLabelStyle}>Cashier Shortage</span>
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
-          {cashout.debt ? (
-            <DetailGrid items={[
-              { label: 'Debt amount', value: `$${parseFloat(cashout.debt.amount).toFixed(2)}` },
-              { label: 'Status', value: <StatusBadge status={cashout.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
-            ]} />
-          ) : parseFloat(cashout.shortage) > 0 ? (
-            <p style={{ margin: 0, fontSize: '13px', color: 'var(--warning)' }}>
-              This cashout has a shortage of ${parseFloat(cashout.shortage).toFixed(2)}, but no Debt record was created — see the Implementation Report&rsquo;s flagged architecture conflict (a cashout shortage has no valid <code>customers.id</code> to attach to under Module 6&rsquo;s current schema).
-            </p>
+          {cashout.shortage_record ? (
+            <ShortagePanel cashoutId={id} shortage={cashout.shortage_record} />
           ) : (
-            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No shortage — no debt applicable.</p>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No shortage — nothing to reconcile.</p>
           )}
         </Card>
+
+        {cashout.debt && (
+          <>
+            <span style={sectionLabelStyle}>Linked Customer Debt</span>
+            <Card style={{ padding: '16px', marginBottom: '20px' }}>
+              <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                A genuine customer-owed debt independently associated with this cashout — separate from any cashier shortage above.
+              </p>
+              <DetailGrid items={[
+                { label: 'Debt amount', value: `$${parseFloat(cashout.debt.amount).toFixed(2)}` },
+                { label: 'Status', value: <StatusBadge status={cashout.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
+              ]} />
+            </Card>
+          </>
+        )}
 
         <span style={sectionLabelStyle}>Generated &amp; Signed Documents</span>
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
@@ -291,6 +299,72 @@ function SignatureBlock({ label }) {
       <div style={{ height: '48px', borderBottom: '1px solid var(--text)' }} />
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{label}</div>
     </div>
+  );
+}
+
+// Cashier Shortage — accountability/reconciliation liability, explicitly
+// NOT a Customer Debt (architecture decision). Resolution is manual and
+// audited only — no automatic recovery mechanism (salary deduction, auto-
+// debt, etc.) is offered here.
+function ShortagePanel({ cashoutId, shortage }) {
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const resolveMut = useResolveShortage(cashoutId);
+  const toast = useToast();
+
+  async function handleResolve(resolvedAmount, notes) {
+    try {
+      await resolveMut.mutateAsync({ resolved_amount: parseFloat(resolvedAmount), resolution_notes: notes });
+      toast.success('Shortage marked resolved.');
+      setResolveOpen(false);
+    } catch (err) {
+      toast.error(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <>
+      <DetailGrid items={[
+        { label: 'Shortage Amount', value: `$${parseFloat(shortage.shortage_amount).toFixed(2)}` },
+        { label: 'Cashier Responsible', value: `#${shortage.cashier_id}` },
+        { label: 'Status', value: <StatusBadge status={shortage.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
+        { label: 'Reason', value: shortage.reason },
+        ...(shortage.status === 'paid' ? [
+          { label: 'Resolved Amount', value: `$${parseFloat(shortage.resolved_amount).toFixed(2)}` },
+          { label: 'Resolved At', value: new Date(shortage.resolved_at).toLocaleString() },
+          { label: 'Resolution Notes', value: shortage.resolution_notes },
+        ] : []),
+      ]} />
+      {shortage.status === 'unpaid' && (
+        <RoleGate roles={['admin', 'head_of_cashiers']}>
+          <div style={{ marginTop: '12px' }}>
+            <Button variant="secondary" onClick={() => setResolveOpen(true)}>Mark Resolved</Button>
+          </div>
+        </RoleGate>
+      )}
+      <Modal
+        open={resolveOpen}
+        onClose={() => setResolveOpen(false)}
+        title="Resolve Cashier Shortage"
+        footer={<>
+          <Button variant="secondary" onClick={() => setResolveOpen(false)}>Cancel</Button>
+          <Button onClick={() => handleResolve(document.getElementById('resolved-amount')?.value, document.getElementById('resolution-notes')?.value)} disabled={resolveMut.isPending}>
+            {resolveMut.isPending ? 'Saving…' : 'Mark Resolved'}
+          </Button>
+        </>}
+      >
+        <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>
+          Record what was actually recovered from the cashier. This does not trigger any automatic payroll deduction or accounting entry — it only records the resolution.
+        </p>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Amount recovered</span>
+          <input id="resolved-amount" type="number" min="0" step="0.01" defaultValue={shortage.shortage_amount} style={inputStyle} />
+        </label>
+        <label style={{ display: 'block' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Resolution notes (required)</span>
+          <input id="resolution-notes" placeholder="e.g. Cashier repaid in cash on..." style={inputStyle} />
+        </label>
+      </Modal>
+    </>
   );
 }
 

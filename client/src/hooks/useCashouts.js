@@ -62,3 +62,13 @@ export function useVoidAttachment(cashoutId) {
     onSuccess: () => invalidateCashout(qc, cashoutId),
   });
 }
+// Cashout Shortage — cashier accountability/reconciliation liability,
+// explicitly NOT a Module 6 Debt (architecture decision). Manual,
+// audited resolution only — no automatic recovery mechanism.
+export function useResolveShortage(cashoutId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ resolved_amount, resolution_notes }) => apiClient.put(`/v2/cashouts/${cashoutId}/shortage/resolve`, { resolved_amount, resolution_notes }),
+    onSuccess: () => invalidateCashout(qc, cashoutId),
+  });
+}

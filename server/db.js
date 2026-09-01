@@ -570,9 +570,58 @@ async function runMigrations() {
 
   // The ONE approved additive touch to CLOSED Module 6's own table —
   // nullable, so a debt created independently of a cashout (an invoice-
-  // originated debt, or a standalone one) is entirely unaffected.
+  // originated debt, or a standalone one) is entirely unaffected. This
+  // remains reserved for a legitimate customer-owed Debt that happens to
+  // be associated with a cashout — NEVER for a cashier's own shortage
+  // (see cashout_shortages below, which is the correct, separate model
+  // for that — architecture decision, Module 7 final hardening pass).
   await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS cashout_id INTEGER REFERENCES cashouts(id) ON DELETE SET NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_cashout_id ON debts(cashout_id);`);
+
+  // Cashout Shortage — a cashier accountability/reconciliation-liability
+  // record, explicitly NOT a Module 6 Debt (a Debt is owed by a customer;
+  // a shortage is owed by the cashier — no shared table, no fake
+  // customer_id, no touch to debts.customer_id or its NOT NULL
+  // constraint). Additive Module 7 table only; CLOSED Module 6 untouched
+  // beyond the single already-approved debts.cashout_id column above.
+  // status reuses debts' own already-frozen 'unpaid'/'paid' vocabulary
+  // (the closest existing precedent for "an amount not yet settled vs.
+  // settled") rather than inventing new lifecycle words — per the
+  // explicit instruction not to invent terminology where an existing
+  // one already covers the concept. No automatic recovery mechanism
+  // (salary/payroll deduction, auto-debt, auto-accounting-entry) is
+  // implemented anywhere here — resolution is a manual, audited action
+  // only, exactly as instructed.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_shortages (
+      id SERIAL PRIMARY KEY,
+      cashout_id INTEGER NOT NULL REFERENCES cashouts(id) ON DELETE RESTRICT,
+      cashier_id INTEGER NOT NULL,
+      expected_amount NUMERIC NOT NULL,
+      actual_amount NUMERIC NOT NULL,
+      shortage_amount NUMERIC NOT NULL CHECK (shortage_amount > 0),
+      currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid', 'paid')),
+      resolved_amount NUMERIC,
+      resolved_at TIMESTAMP,
+      resolved_by INTEGER,
+      resolution_notes TEXT,
+      notes TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT resolution_requires_fields CHECK (
+        status != 'paid' OR (resolved_amount IS NOT NULL AND resolved_at IS NOT NULL AND resolved_by IS NOT NULL)
+      )
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_shortages_cashout_id ON cashout_shortages(cashout_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_shortages_cashier_id ON cashout_shortages(cashier_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_shortages_status ON cashout_shortages(status);`);
+  // A cashout can have at most one shortage record (one reconciliation,
+  // one shortage) — enforced structurally, not just by application logic.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS one_shortage_per_cashout ON cashout_shortages(cashout_id);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
