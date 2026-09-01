@@ -190,8 +190,15 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     const where = [];
     const params = [];
     if (myZoneId !== null) {
+      // Module 3 regression correction, discovered during Module 4 (Trucks
+      // had the identical pattern, found and fixed first): a strict
+      // `zone_id = $1` silently hid every null-zone (company-wide/office)
+      // employee from a zone-scoped viewer's list, inconsistent with the
+      // detail route just below, which already treats a null zone_id as
+      // visible. Real bug, not intentional — a gudoomiye could reach such
+      // an employee by direct id but never discover them via the list.
       params.push(myZoneId);
-      where.push(`employees.zone_id = $${params.length}`);
+      where.push(`(employees.zone_id = $${params.length} OR employees.zone_id IS NULL)`);
     }
     const status = req.query.status;
     if (status === 'archived') where.push(`employees.status = 'archived'`);

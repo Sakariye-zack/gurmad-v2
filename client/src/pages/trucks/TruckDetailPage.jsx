@@ -8,10 +8,10 @@ import TruckFormModal from './TruckFormModal.jsx';
 import { complianceState, COMPLIANCE_LABELS, COMPLIANCE_BADGE_MAP } from './complianceState.js';
 
 // Lifecycle vocabulary is frozen (OD-3): Active / Maintenance / Inactive /
-// Retired. Retired is a one-way terminal transition in this checkpoint
-// (backend-enforced) — the UI mirrors that by not offering "Active" as a
-// destination once a truck is Retired, rather than offering a button the
-// backend would just reject.
+// Retired. Retired is a confirmed, permanent one-way terminal state
+// (backend-enforced, Module 4 final review) — the UI mirrors that by never
+// offering a way out of Retired, rather than offering a button the backend
+// would just reject.
 const TRANSITIONS = {
   active: ['maintenance', 'inactive', 'retired'],
   maintenance: ['active', 'inactive', 'retired'],
@@ -95,8 +95,8 @@ export default function TruckDetailPage() {
         {truck.status === 'retired' && (
           <Card style={{ ...cardPad, marginBottom: '20px' }}>
             <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
-              This truck is Retired — a permanent, terminal state in this checkpoint. Historical records remain preserved.
-              Reactivating a retired truck is not yet an approved business rule.
+              This truck is Retired — a permanent, terminal status. Historical records remain preserved.
+              Returning a retired truck to service requires a separate, future business decision.
             </p>
           </Card>
         )}

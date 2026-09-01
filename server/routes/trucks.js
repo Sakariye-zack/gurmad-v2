@@ -312,15 +312,11 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
 
 // PUT /api/v2/trucks/:id/status — dedicated lifecycle endpoint.
 //
-// "Retired" is enforced as a ONE-WAY terminal transition in this
-// checkpoint: the approved lifecycle definitions ("Retired = permanently
-// removed from active fleet operations") don't state whether a retired
-// truck may ever return to Active, and the approval message explicitly
-// said to STOP and report rather than invent that rule. So: transitioning
-// INTO 'retired' is allowed from any other state; transitioning OUT of
-// 'retired' is rejected with a clear message, not silently permitted or
-// silently blocked without explanation. Flagged in the completion report
-// as a decision needed, not decided here.
+// "Retired" is a FROZEN, permanent terminal state (confirmed business rule,
+// Module 4 final review): Retired -> Active/Maintenance/Inactive are all
+// explicitly disallowed. If a retired truck ever needs to return to
+// service, that is a new, separate business decision to be made in the
+// future — not something this endpoint permits today.
 router.put('/:id/status', authenticateToken, requireRole(...WRITE_ROLES), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid truck id.', code: 'VALIDATION' } });
@@ -337,7 +333,7 @@ router.put('/:id/status', authenticateToken, requireRole(...WRITE_ROLES), async 
       return res.status(403).json({ error: { message: 'You do not have access to this truck.', code: 'FORBIDDEN' } });
     }
     if (current.status === 'retired' && status !== 'retired') {
-      return res.status(409).json({ error: { message: 'This truck is Retired. Reactivating a retired truck is not yet an approved business rule — please confirm the correct policy before this is allowed.', code: 'RETIRED_TERMINAL' } });
+      return res.status(409).json({ error: { message: 'This truck is Retired, a permanent status. Returning a retired truck to service requires a separate, future business decision — it cannot be done from here.', code: 'RETIRED_TERMINAL' } });
     }
 
     const result = await pool.query(
