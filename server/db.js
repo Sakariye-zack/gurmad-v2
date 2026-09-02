@@ -736,6 +736,52 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_notifications_customer_id ON customer_portal_notifications(customer_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_notifications_unread ON customer_portal_notifications(customer_id, is_read) WHERE is_read = FALSE;`);
+
+  // ============================================================
+  // Phase 5 — Complaints. Approved via
+  // Phase5_Complaints_Implementation_Spec.md §3, all 9+2 Decisions
+  // approved. Fully additive — own new tables only, zero touch to any
+  // Module 1-9 table or the Customer Portal's existing schema.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS complaints (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'in_progress', 'resolved', 'closed')),
+      priority VARCHAR(10) NOT NULL DEFAULT 'medium'
+        CHECK (priority IN ('low', 'medium', 'high')),
+      assigned_to INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      admin_reply TEXT,
+      replied_at TIMESTAMP,
+      source VARCHAR(10) NOT NULL DEFAULT 'customer' CHECK (source IN ('customer', 'staff')),
+      created_by INTEGER,
+      resolved_at TIMESTAMP,
+      closed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_complaints_customer_id ON complaints(customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_complaints_assigned_to ON complaints(assigned_to);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS complaint_attachments (
+      id SERIAL PRIMARY KEY,
+      complaint_id INTEGER NOT NULL REFERENCES complaints(id) ON DELETE RESTRICT,
+      original_filename VARCHAR(255) NOT NULL,
+      storage_path VARCHAR(500) NOT NULL,
+      mime_type VARCHAR(100),
+      file_size INTEGER,
+      uploaded_by_customer BOOLEAN NOT NULL DEFAULT FALSE,
+      uploaded_by INTEGER,
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_complaint_attachments_complaint_id ON complaint_attachments(complaint_id);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
