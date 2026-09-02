@@ -21,6 +21,8 @@ import DebtsView from '../pages/financial/DebtsView.jsx';
 import CashoutsListPage from '../pages/financial/CashoutsListPage.jsx';
 import ReportsPage from '../pages/reports/ReportsPage.jsx';
 import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
+import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
+import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
 import RequirePortalAuth from '../portal/RequirePortalAuth.jsx';
 import PortalShell from '../portal/PortalShell.jsx';
@@ -36,6 +38,9 @@ import PortalPayments from '../portal/pages/PortalPayments.jsx';
 import PortalAccountProfile from '../portal/pages/account/PortalAccountProfile.jsx';
 import PortalAccountSecurity from '../portal/pages/account/PortalAccountSecurity.jsx';
 import PortalNotifications from '../portal/pages/notifications/PortalNotifications.jsx';
+import PortalComplaints from '../portal/pages/complaints/PortalComplaints.jsx';
+import PortalComplaintDetail from '../portal/pages/complaints/PortalComplaintDetail.jsx';
+import PortalComplaintSubmit from '../portal/pages/complaints/PortalComplaintSubmit.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
 // current system's activeTab-state pattern (no per-page URLs, no deep
@@ -72,6 +77,8 @@ export const router = createBrowserRouter([
       { path: 'financial/cashouts/:id', element: <CashoutDetailPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'billing', element: <BillingView /> },
+      { path: 'complaints', element: <ComplaintsListPage /> },
+      { path: 'complaints/:id', element: <ComplaintDetailPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
@@ -97,6 +104,9 @@ export const router = createBrowserRouter([
       { path: 'account/profile', element: <PortalAccountProfile /> },
       { path: 'account/security', element: <PortalAccountSecurity /> },
       { path: 'notifications', element: <PortalNotifications /> },
+      { path: 'complaints', element: <PortalComplaints /> },
+      { path: 'complaints/new', element: <PortalComplaintSubmit /> },
+      { path: 'complaints/:id', element: <PortalComplaintDetail /> },
     ],
   },
 ]);

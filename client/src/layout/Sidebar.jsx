@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -43,6 +43,14 @@ const NAV = [
   // Performance tab only, server-enforced) — the nav item itself isn't
   // role-hidden from them, the financial sub-tabs inside the page are.
   { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'] },
+  // Phase 5 — Complaints. Admin/Gudoomiye = full management (create/assign/
+  // status/priority/reply). Zone Accountant/Head of Cashiers = read-only
+  // (enforced server-side by requireRole on every write route, not just
+  // hidden here). Cashier explicitly excluded — the original "own cashier-
+  // scope" wording was superseded by the approved Decision Review: no
+  // V2-native cashier-scope engine exists, none was built, Cashier = no
+  // access. Collector: zero evidence anywhere supports any access.
+  { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
 ];
 
 export default function Sidebar() {
