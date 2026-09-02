@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -39,6 +39,10 @@ const NAV = [
   // Collector has no financial nav entry at all, matching every other
   // financial page's own boundary.
   { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  // Module 8 — Reports. Collector gets it too (their own Collector-
+  // Performance tab only, server-enforced) — the nav item itself isn't
+  // role-hidden from them, the financial sub-tabs inside the page are.
+  { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'] },
 ];
 
 export default function Sidebar() {
