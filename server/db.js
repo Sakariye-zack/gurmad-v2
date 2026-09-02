@@ -622,6 +622,20 @@ async function runMigrations() {
   // A cashout can have at most one shortage record (one reconciliation,
   // one shortage) — enforced structurally, not just by application logic.
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS one_shortage_per_cashout ON cashout_shortages(cashout_id);`);
+
+  // ============================================================
+  // Phase 3 Module 8 — Reports. Approved via
+  // Phase3_Module08_Reports_Implementation_Spec.md §18. Reports is a
+  // read/aggregation layer only — no new transactional table. The ONLY
+  // approved touch to CLOSED Module 6's schema: these 2 additive,
+  // performance-only indexes, justified directly by the period-range
+  // filter (WHERE created_at >= $1 AND created_at < $2) every report
+  // query in the spec actually uses — not speculative. Index-only:
+  // no column, constraint, or business-logic change to payments/
+  // invoices. Nothing else in Module 6/5/7 is touched.
+  // ============================================================
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices(created_at);`);
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
