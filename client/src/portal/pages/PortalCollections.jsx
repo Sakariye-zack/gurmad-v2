@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { DataTable, StatusBadge, EmptyState } from '../../components/ui/index.js';
 import { portalApiClient } from '../apiClient.js';
 
 export default function PortalCollections() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,7 +33,7 @@ export default function PortalCollections() {
         {rows && rows.length === 0 ? (
           <tr><td colSpan={4}><EmptyState title="No collection history yet" /></td></tr>
         ) : rows?.map((r) => (
-          <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+          <tr key={r.id} onClick={() => navigate(`/portal/collections/${r.id}`)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
             <td style={tdStyle}>{r.status_at ? new Date(r.status_at).toLocaleString() : '—'}</td>
             <td style={tdStyle}><StatusBadge status={r.status} /></td>
             <td style={tdStyle}>{r.status_reason || '—'}</td>

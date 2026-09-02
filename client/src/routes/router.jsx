@@ -29,10 +29,13 @@ import PortalForgotPassword from '../portal/pages/PortalForgotPassword.jsx';
 import PortalResetPassword from '../portal/pages/PortalResetPassword.jsx';
 import PortalDashboard from '../portal/pages/PortalDashboard.jsx';
 import PortalCollections from '../portal/pages/PortalCollections.jsx';
+import PortalCollectionDetail from '../portal/pages/collections/PortalCollectionDetail.jsx';
 import PortalInvoices from '../portal/pages/PortalInvoices.jsx';
 import PortalInvoiceDetail from '../portal/pages/PortalInvoiceDetail.jsx';
 import PortalPayments from '../portal/pages/PortalPayments.jsx';
-import PortalProfile from '../portal/pages/PortalProfile.jsx';
+import PortalAccountProfile from '../portal/pages/account/PortalAccountProfile.jsx';
+import PortalAccountSecurity from '../portal/pages/account/PortalAccountSecurity.jsx';
+import PortalNotifications from '../portal/pages/notifications/PortalNotifications.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
 // current system's activeTab-state pattern (no per-page URLs, no deep
@@ -83,10 +86,17 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <PortalDashboard /> },
       { path: 'collections', element: <PortalCollections /> },
+      { path: 'collections/:id', element: <PortalCollectionDetail /> },
       { path: 'invoices', element: <PortalInvoices /> },
       { path: 'invoices/:id', element: <PortalInvoiceDetail /> },
       { path: 'payments', element: <PortalPayments /> },
-      { path: 'profile', element: <PortalProfile /> },
+      // 'profile' kept as a redirect — the original single page split into
+      // account/profile + account/security (Rebuild Spec §3/§21), so any
+      // previously-bookmarked/linked '/portal/profile' still resolves.
+      { path: 'profile', element: <Navigate to="/portal/account/profile" replace /> },
+      { path: 'account/profile', element: <PortalAccountProfile /> },
+      { path: 'account/security', element: <PortalAccountSecurity /> },
+      { path: 'notifications', element: <PortalNotifications /> },
     ],
   },
 ]);
