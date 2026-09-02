@@ -243,6 +243,33 @@ async function getCollectionHistory({ zoneId = null, customerId = null, batchId 
   return res.rows;
 }
 
+// Customer Portal Rebuild — Implementation Spec §10 (OD-5/Collection
+// Detail). A single ownership-checked row read, reusing the exact same
+// tables getCollectionHistory() already reads — no new calculation, no
+// new collection-tracking mechanism. Ownership is enforced INSIDE this
+// query (bc.customer_id = $2), not just by the caller, so a mismatched
+// customerId returns null (the route maps that to 404) rather than ever
+// assembling another customer's row. Per approved OD-A: raw
+// status_lat/status_lng are deliberately NOT selected — see the route's
+// own comment for the reasoning; this function structurally cannot leak
+// them since it never reads them.
+async function getCollectionDetail({ batchCustomerId, customerId }, client = pool) {
+  const res = await client.query(
+    `SELECT bc.id, bc.status, bc.status_at, bc.status_reason, bc.status_note,
+            b.batch_code, b.start_date, b.end_date, z.name AS zone_name,
+            (SELECT e.name FROM task_resources tr
+               JOIN tasks t ON t.id = tr.task_id
+               JOIN employees e ON e.id = tr.resource_id
+             WHERE t.batch_id = bc.batch_id AND tr.resource_type = 'collector' LIMIT 1) AS collector_name
+     FROM batch_customers bc
+     JOIN batches b ON b.id = bc.batch_id
+     LEFT JOIN zones z ON z.id = b.zone_id
+     WHERE bc.id = $1 AND bc.customer_id = $2`,
+    [batchCustomerId, customerId]
+  );
+  return res.rows[0] || null;
+}
+
 // ---------- F/H. Invoices / Payments / Debts summaries ----------
 
 async function getInvoicesSummary({ zoneId = null, status = null, periodStart, periodEnd, limit = 100, offset = 0 }, client = pool) {
@@ -336,6 +363,6 @@ function toCsv(rows, columns) {
 
 module.exports = {
   PERIOD_PRESETS, resolvePeriod, getRevenueForPeriod, getExecutiveSummary, getCollectorPerformance,
-  getZonePerformance, getTruckPerformance, getCollectionHistory, getInvoicesSummary, getPaymentsSummary,
+  getZonePerformance, getTruckPerformance, getCollectionHistory, getCollectionDetail, getInvoicesSummary, getPaymentsSummary,
   getDebtsSummary, getCashoutSummary, getFinancialSummary, toCsv,
 };
