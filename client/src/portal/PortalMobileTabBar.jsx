@@ -1,20 +1,25 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Truck, FileText, Wallet, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Truck, FileText, Wallet, ShieldCheck, MessageSquareWarning } from 'lucide-react';
 
 // Customer Portal Mobile App — Implementation Spec §1/§3. A customer-facing
 // sibling of the staff layout/MobileTabBar.jsx — same fixed-bottom,
 // safe-area-inset pattern, DIFFERENT tab set (customer screens, not
-// collector/cashier ones). 5 tabs cover all 16 approved screens per the
-// Spec's own nav-budget resolution: Notifications lives in the header bell
+// collector/cashier ones). Notifications lives in the header bell
 // (PortalShell.jsx, unchanged), Service Information/Documents/Outstanding
 // Balance are sub-views of an existing primary tab, and Settings resolves
-// to Account (OD-M3) rather than consuming a 6th slot.
+// to Account (OD-M3) rather than consuming a slot. "Complaints" added here
+// per Phase 5 Complaints Implementation Spec §15 — Complaints' own new
+// page choosing how to surface itself now that a real backend exists,
+// not a reopening of the Mobile App's own frozen decisions; each tab's
+// hit area (flex:1, minHeight:44px) stays within the 44x44px touch-target
+// requirement with 6 tabs at every previously-tested width.
 const TABS = [
   { to: '/portal', label: 'Home', icon: LayoutDashboard, end: true },
   { to: '/portal/collections', label: 'Collections', icon: Truck },
   { to: '/portal/invoices', label: 'Invoices', icon: FileText },
   { to: '/portal/payments', label: 'Payments', icon: Wallet },
+  { to: '/portal/complaints', label: 'Complaints', icon: MessageSquareWarning },
   { to: '/portal/account/profile', label: 'Account', icon: ShieldCheck },
 ];
 

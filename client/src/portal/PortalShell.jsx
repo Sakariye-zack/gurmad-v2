@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Truck, FileText, Wallet, ShieldCheck, LogOut, Bell } from 'lucide-react';
+import { LayoutDashboard, Truck, FileText, Wallet, ShieldCheck, LogOut, Bell, MessageSquareWarning } from 'lucide-react';
 import { usePortalAuth } from './PortalAuthContext.jsx';
 import { portalApiClient } from './apiClient.js';
 import PortalMobileTabBar from './PortalMobileTabBar.jsx';
@@ -15,10 +15,11 @@ const NAV_ITEMS = [
   { to: '/portal/collections', label: 'Collections', icon: Truck },
   { to: '/portal/invoices', label: 'Invoices', icon: FileText },
   { to: '/portal/payments', label: 'Payments', icon: Wallet },
-  // No "Complaints" nav item yet — intentionally, per the Implementation
-  // Spec/approval: Complaints-facing Portal pages are sequenced BEHIND
-  // Phase 5's real backend, not built ahead of it (never ship UI with
-  // nothing real behind it, per Phase 4's own original OD-3 precedent).
+  // "Complaints" — added now that Phase 5's real backend/service layer
+  // exists (lib/complaintsService.js, Implementation Spec §15) — the exact
+  // condition the Rebuild's own comment here said would unblock this,
+  // never shipped ahead of it.
+  { to: '/portal/complaints', label: 'Complaints', icon: MessageSquareWarning },
   { to: '/portal/account/profile', label: 'Account', icon: ShieldCheck },
 ];
 

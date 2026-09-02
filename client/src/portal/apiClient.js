@@ -33,6 +33,29 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Multipart submission (Phase 5 — Complaints photo attachment). No
+// Content-Type header set explicitly — the browser sets multipart/form-data
+// with the correct boundary itself, mirroring the staff apiClient.js's own
+// uploadFile() pattern exactly.
+async function postForm(path, formData) {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  let body = null;
+  try { body = await res.json(); } catch { /* no body */ }
+  if (!res.ok) {
+    const errBody = body && body.error;
+    const message = (errBody && typeof errBody === 'object' ? errBody.message : errBody) || `Request failed (${res.status})`;
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
 async function downloadAuthorizedFile(path, filename) {
   const token = getToken();
   const res = await fetch(`${BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -56,6 +79,7 @@ export const portalApiClient = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
+  postForm,
   downloadAuthorizedFile,
   setToken: (token) => localStorage.setItem(TOKEN_KEY, token),
   clearToken: () => localStorage.removeItem(TOKEN_KEY),
