@@ -636,6 +636,74 @@ async function runMigrations() {
   // ============================================================
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices(created_at);`);
+
+  // ============================================================
+  // Phase 4 — Customer Portal. Approved via
+  // Phase4_CustomerPortal_Implementation_Spec.md §4, OD-2. Module 2
+  // (customers) is CLOSED/FROZEN — these 3 tables are fully additive,
+  // zero ALTER on `customers`. customer_portal_accounts.customer_id is
+  // the ONLY link back to the closed customer master record
+  // (ON DELETE RESTRICT: deleting a portal account must never be able to
+  // cascade into deleting the underlying customer — and a customer record
+  // can't be deleted out from under a live portal account either).
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_portal_accounts (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL UNIQUE REFERENCES customers(id) ON DELETE RESTRICT,
+      password_hash VARCHAR(255) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+      failed_login_count INTEGER NOT NULL DEFAULT 0,
+      locked_until TIMESTAMP,
+      last_login_at TIMESTAMP,
+      activated_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_accounts_status ON customer_portal_accounts(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_portal_password_resets (
+      id SERIAL PRIMARY KEY,
+      portal_account_id INTEGER NOT NULL REFERENCES customer_portal_accounts(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      used_at TIMESTAMP,
+      requested_ip VARCHAR(64),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_password_resets_account ON customer_portal_password_resets(portal_account_id);`);
+  // Token lookup happens by hash, never by id — an index makes the lookup
+  // itself O(log n) instead of a full scan without weakening single-use
+  // (used_at) or expiry enforcement, both checked in application code.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_password_resets_token_hash ON customer_portal_password_resets(token_hash);`);
+
+  // A dedicated portal audit log, separate from v2_audit_log (whose
+  // actor_id/actor_username columns assume a staff user from the reference
+  // backend's own users table) — a customer is a structurally different
+  // actor, per Implementation Spec §22.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_portal_audit_log (
+      id SERIAL PRIMARY KEY,
+      portal_account_id INTEGER REFERENCES customer_portal_accounts(id) ON DELETE SET NULL,
+      customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+      action VARCHAR(50) NOT NULL,
+      ip_address VARCHAR(64),
+      details JSONB,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_audit_log_account ON customer_portal_audit_log(portal_account_id);`);
+}
+
+async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
+  await pool.query(
+    `INSERT INTO customer_portal_audit_log (portal_account_id, customer_id, action, ip_address, details)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [portalAccountId, customerId, action, ipAddress, details ? JSON.stringify(details) : null]
+  );
 }
 
 async function logAudit({ actorId, actorUsername, action, entityType, entityId, before, after }) {
@@ -646,4 +714,4 @@ async function logAudit({ actorId, actorUsername, action, entityType, entityId, 
   );
 }
 
-module.exports = { pool, runMigrations, logAudit };
+module.exports = { pool, runMigrations, logAudit, logPortalAudit };
