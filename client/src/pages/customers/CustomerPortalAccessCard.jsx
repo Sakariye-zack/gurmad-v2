@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound } from 'lucide-react';
-import { Card, Button, Modal, StatusBadge, useToast } from '../../components/ui/index.js';
+import { KeyRound, Ban, RotateCcw } from 'lucide-react';
+import { Card, Button, Modal, StatusBadge, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 
@@ -17,6 +17,7 @@ export default function CustomerPortalAccessCard({ customerId }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   function load() {
     apiClient.get(`/v2/customer-portal/accounts/by-customer/${customerId}`)
@@ -42,6 +43,21 @@ export default function CustomerPortalAccessCard({ customerId }) {
     }
   }
 
+  async function handleToggleDisable() {
+    setSaving(true);
+    try {
+      const action = account.status === 'active' ? 'disable' : 'enable';
+      await apiClient.put(`/v2/customer-portal/accounts/${account.id}/${action}`);
+      toast.success(action === 'disable' ? 'Portal access disabled.' : 'Portal access re-enabled.');
+      setConfirmOpen(false);
+      load();
+    } catch (err) {
+      toast.error(err.message || 'Something went wrong.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <RoleGate roles={['admin']}>
       <Card style={{ padding: '16px', marginTop: '16px' }}>
@@ -59,8 +75,30 @@ export default function CustomerPortalAccessCard({ customerId }) {
           {account === null && (
             <Button variant="secondary" icon={KeyRound} onClick={() => setModalOpen(true)}>Activate Portal Access</Button>
           )}
+          {account && (
+            <Button
+              variant={account.status === 'active' ? 'danger' : 'primary'}
+              icon={account.status === 'active' ? Ban : RotateCcw}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {account.status === 'active' ? 'Disable Access' : 'Re-enable Access'}
+            </Button>
+          )}
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={handleToggleDisable}
+        title={account?.status === 'active' ? 'Disable portal access?' : 'Re-enable portal access?'}
+        message={account?.status === 'active'
+          ? 'This customer will no longer be able to log in to the Customer Portal. This does not delete their account, invoices, payments, or history — it can be re-enabled at any time.'
+          : 'This customer will be able to log in to the Customer Portal again.'}
+        confirmLabel={account?.status === 'active' ? 'Disable' : 'Re-enable'}
+        danger={account?.status === 'active'}
+        isLoading={saving}
+      />
 
       <Modal
         open={modalOpen}

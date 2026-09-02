@@ -230,6 +230,45 @@ router.post('/accounts', authenticateToken, requireRole('admin'), async (req, re
   }
 });
 
+// Disable / re-enable — same authorization boundary already approved for
+// activation itself (admin-only, §"accounts" route above): this is the
+// same class of administrative control over a portal account, not a new
+// decision. Reversible, additive-only (touches only
+// customer_portal_accounts.status), does not delete the account, the
+// customer, or any financial/operational history. Hardening pass —
+// approved via the user's "Portal Account Disable Gap" instruction.
+router.put('/accounts/:id/disable', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid account id.', code: 'VALIDATION' } });
+  try {
+    const r = await pool.query(
+      `UPDATE customer_portal_accounts SET status = 'disabled', updated_at = NOW() WHERE id = $1 RETURNING id, customer_id, status`,
+      [id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: { message: 'Portal account not found.', code: 'NOT_FOUND' } });
+    await logPortalAudit({ portalAccountId: id, customerId: r.rows[0].customer_id, action: 'account_disabled', ipAddress: clientIp(req), details: { disabledByStaffId: req.user.id } });
+    return res.json({ data: r.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to disable portal access.', code: 'INTERNAL' } });
+  }
+});
+
+router.put('/accounts/:id/enable', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid account id.', code: 'VALIDATION' } });
+  try {
+    const r = await pool.query(
+      `UPDATE customer_portal_accounts SET status = 'active', failed_login_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, customer_id, status`,
+      [id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: { message: 'Portal account not found.', code: 'NOT_FOUND' } });
+    await logPortalAudit({ portalAccountId: id, customerId: r.rows[0].customer_id, action: 'account_reenabled', ipAddress: clientIp(req), details: { reenabledByStaffId: req.user.id } });
+    return res.json({ data: r.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to re-enable portal access.', code: 'INTERNAL' } });
+  }
+});
+
 router.get('/accounts/by-customer/:customerId', authenticateToken, requireRole('admin', 'gudoomiye', 'zone_accountant'), async (req, res) => {
   const customerId = parseStrictId(req.params.customerId);
   if (customerId === null) return res.status(400).json({ error: { message: 'Invalid customer id.', code: 'VALIDATION' } });
