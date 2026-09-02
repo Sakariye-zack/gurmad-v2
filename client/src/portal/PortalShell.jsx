@@ -65,7 +65,11 @@ export default function PortalShell() {
           <button
             aria-label="Notifications"
             onClick={() => { navigate('/portal/notifications'); refreshUnreadCount(); }}
-            style={bellBtnStyle}
+            // Hardening — Accessibility: the icon alone renders at ~25x25px,
+            // below the 44x44px minimum touch target (Design_System.md §9)
+            // required on mobile. Desktop keeps the original compact
+            // footprint unchanged (a mouse pointer has no such minimum).
+            style={isMobile ? { ...bellBtnStyle, minWidth: '44px', minHeight: '44px' } : bellBtnStyle}
           >
             <Bell size={17} />
             {unreadCount > 0 && <span style={badgeStyle}>{unreadCount > 99 ? '99+' : unreadCount}</span>}
@@ -74,7 +78,11 @@ export default function PortalShell() {
               is tight at 375px with the bell + logout controls already
               present; the name remains visible everywhere on Account/Profile. */}
           {!isMobile && <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{customer?.name}</span>}
-          <button aria-label="Log out" onClick={logout} style={logoutBtnStyle}>
+          <button
+            aria-label="Log out"
+            onClick={logout}
+            style={isMobile ? { ...logoutBtnStyle, minWidth: '44px', minHeight: '44px', justifyContent: 'center' } : logoutBtnStyle}
+          >
             <LogOut size={14} /> {!isMobile && 'Log out'}
           </button>
         </div>
