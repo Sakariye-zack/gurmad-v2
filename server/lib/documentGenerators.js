@@ -192,4 +192,73 @@ async function buildInvoiceDocx(invoice) {
   return Packer.toBuffer(doc);
 }
 
-module.exports = { buildCashoutDocx, buildInvoiceDocx };
+// Customer Portal Rebuild — Implementation Spec §11 (OD-5/Invoice
+// Preview). A server-rendered HTML twin of the same data buildInvoiceDocx()
+// already assembles — deliberately NOT a PDF-conversion pipeline and NOT a
+// client-side .docx renderer (no new runtime dependency, no new failure
+// mode, for a feature that only needs "see before download"). Every
+// interpolated field is escaped explicitly — this function must never
+// string-concatenate untrusted data straight into the HTML (customer
+// name/notes are the two fields that could plausibly carry another
+// customer's chosen text).
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function buildInvoiceHtml(invoice) {
+  const balance = invoice.balance || {};
+  const rows = (invoice.payments || []).map((p) => `
+    <tr>
+      <td>${escapeHtml(p.currency)} ${escapeHtml(parseFloat(p.amount).toFixed(2))}</td>
+      <td>${escapeHtml(String(p.method).toUpperCase())}</td>
+      <td>${escapeHtml(money(p.amount_usd))}</td>
+      <td>${escapeHtml(String(p.status).toUpperCase())}</td>
+      <td>${escapeHtml(new Date(p.created_at).toLocaleDateString())}</td>
+    </tr>`).join('');
+
+  return `
+<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(invoice.invoice_number)}</title>
+<style>
+  /* Explicit color-scheme + background — without this, some browsers
+     auto-dark-invert an iframe's default (white) background while leaving
+     our own hardcoded dark text color untouched, rendering every value
+     invisible (dark-on-dark). Found live via a screenshot during Hardening
+     of this rebuild pass — the raw HTML was correct, only the rendered
+     appearance was broken. */
+  :root { color-scheme: light; }
+  html, body { background: #ffffff; }
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #1B1F16; padding: 24px; }
+  h1 { color: #2F7D3E; font-size: 22px; margin: 0 0 4px; }
+  .meta { color: #6B7280; font-size: 13px; margin-bottom: 16px; }
+  .doc-number { text-align: right; font-weight: 700; margin-bottom: 8px; }
+  hr { border: none; border-top: 3px solid #2F7D3E; margin: 12px 0 20px; }
+  .section-title { color: #2F7D3E; text-transform: uppercase; font-size: 13px; font-weight: 800; margin: 20px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #D0D5DD; }
+  th { background: #F2F4F7; font-size: 11px; text-transform: uppercase; }
+  .kv { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 24px; font-size: 13px; }
+  .kv div span:first-child { color: #6B7280; display: block; font-size: 11px; text-transform: uppercase; }
+</style></head>
+<body>
+  <h1>GURMAD</h1>
+  <div class="meta">${escapeHtml(invoice.customer_name)} (${escapeHtml(invoice.customer_number)}) &middot; Issued ${escapeHtml(new Date(invoice.created_at).toLocaleString())}</div>
+  <div class="doc-number">${escapeHtml(invoice.invoice_number)}</div>
+  <hr>
+  <div class="section-title">Invoice Summary</div>
+  <div class="kv">
+    <div><span>Invoice Total</span>${escapeHtml(money(invoice.invoice_total))}</div>
+    <div><span>Discount</span>${escapeHtml(money(invoice.discount_amount))}</div>
+    <div><span>Currency</span>${escapeHtml(invoice.currency)}</div>
+    <div><span>Status</span>${escapeHtml(String(invoice.status).toUpperCase())}</div>
+    <div><span>Paid</span>${escapeHtml(money(balance.paid))}</div>
+    <div><span>Outstanding</span>${escapeHtml(money(balance.outstanding))}</div>
+  </div>
+  <div class="section-title">Payment History</div>
+  ${rows ? `<table><thead><tr><th>Amount</th><th>Method</th><th>USD Value</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="color:#6B7280;font-style:italic;">No payments recorded yet.</p>'}
+</body></html>`;
+}
+
+module.exports = { buildCashoutDocx, buildInvoiceDocx, buildInvoiceHtml };
