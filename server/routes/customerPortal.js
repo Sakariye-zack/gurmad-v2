@@ -169,14 +169,28 @@ router.post('/auth/reset-password', authLimiter, async (req, res) => {
       [tokenHash]
     );
     if (resetRes.rows.length === 0) {
+      // Hardening — Audit Review: a token hash matching no row at all is a
+      // security-relevant signal (someone guessing/fabricating reset
+      // tokens) with no account to attribute it to yet — logged with
+      // portalAccountId/customerId null, never the raw token itself.
+      await logPortalAudit({ action: 'password_reset_failed', ipAddress: clientIp(req), details: { reason: 'token_not_found' } });
       return res.status(400).json({ error: { message: 'This reset link is invalid or has expired.', code: 'RESET_INVALID' } });
     }
     const reset = resetRes.rows[0];
-    if (reset.used_at || new Date(reset.expires_at) < new Date()) {
-      return res.status(400).json({ error: { message: 'This reset link is invalid or has expired.', code: 'RESET_INVALID' } });
-    }
     const acctRes = await pool.query('SELECT * FROM customer_portal_accounts WHERE id = $1', [reset.portal_account_id]);
     const account = acctRes.rows[0];
+    if (reset.used_at || new Date(reset.expires_at) < new Date()) {
+      // Hardening — Audit Review: an expired/reused token attempt against a
+      // REAL account is exactly the "authentication accountability" case
+      // the review's own criteria named — added during Hardening, not left
+      // omitted. Never logs the token itself, only the reason.
+      await logPortalAudit({
+        portalAccountId: account?.id ?? null, customerId: account?.customer_id ?? null,
+        action: 'password_reset_failed', ipAddress: clientIp(req),
+        details: { reason: reset.used_at ? 'token_reused' : 'token_expired' },
+      });
+      return res.status(400).json({ error: { message: 'This reset link is invalid or has expired.', code: 'RESET_INVALID' } });
+    }
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
 
     const client = await pool.connect();
