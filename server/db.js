@@ -696,6 +696,46 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_audit_log_account ON customer_portal_audit_log(portal_account_id);`);
+
+  // ============================================================
+  // Customer Portal — FULL REBUILD. Approved via
+  // Phase4_CustomerPortal_Rebuild_Implementation_Spec.md §7/§33.
+  // Both additions below are additive-only, entirely inside the Portal's
+  // own already-separate schema — zero touch to `customers` or any
+  // Module 1-9 table.
+  // ============================================================
+
+  // Token revocation (OD-3, Spec §6): a monotonically-increasing counter,
+  // embedded in every issued JWT and compared on every authenticated
+  // request (middleware/customerPortalAuth.js). Bumping it instantly
+  // invalidates every token issued before the bump, with no session
+  // table and no cleanup/retention surface.
+  await pool.query(`ALTER TABLE customer_portal_accounts ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;`);
+
+  // Notification persistence (Decision Record OD-2, built now per explicit
+  // instruction — not a UI shell). Generic across future producers
+  // (invoices/payments/collections/complaints/account-security) — no
+  // producer is wired in yet (Complaints, the only named one, doesn't
+  // exist in V2 as of this pass). customer_id uses RESTRICT, matching
+  // V2's own established convention (e.g. invoices.customer_id) —
+  // a deliberate departure from the reference system's own
+  // customer_notifications table, which uses CASCADE.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_portal_notifications (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+      type VARCHAR(50) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      body TEXT,
+      action_type VARCHAR(50),
+      action_id INTEGER,
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      read_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_notifications_customer_id ON customer_portal_notifications(customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_portal_notifications_unread ON customer_portal_notifications(customer_id, is_read) WHERE is_read = FALSE;`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
