@@ -6,6 +6,7 @@ import RoleGate from '../../components/RoleGate.jsx';
 import { useCustomer, useUpdateCustomerStatus } from '../../hooks/useCustomers.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
 import CustomerNumberEditModal from './CustomerNumberEditModal.jsx';
+import CustomerPortalAccessCard from './CustomerPortalAccessCard.jsx';
 
 export default function CustomerDetailPage() {
   const { id } = useParams();
@@ -88,6 +89,8 @@ export default function CustomerDetailPage() {
           once their respective modules are implemented, per the approved one-module-at-a-time sequence.
         </p>
       </Card>
+
+      <CustomerPortalAccessCard customerId={customer.id} />
 
       <CustomerFormModal open={editOpen} onClose={() => setEditOpen(false)} customer={customer} />
       {numberEditOpen && <CustomerNumberEditModal open={numberEditOpen} onClose={() => setNumberEditOpen(false)} customer={customer} />}

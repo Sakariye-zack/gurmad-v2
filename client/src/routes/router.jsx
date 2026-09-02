@@ -22,6 +22,17 @@ import CashoutsListPage from '../pages/financial/CashoutsListPage.jsx';
 import ReportsPage from '../pages/reports/ReportsPage.jsx';
 import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
+import RequirePortalAuth from '../portal/RequirePortalAuth.jsx';
+import PortalShell from '../portal/PortalShell.jsx';
+import PortalLogin from '../portal/pages/PortalLogin.jsx';
+import PortalForgotPassword from '../portal/pages/PortalForgotPassword.jsx';
+import PortalResetPassword from '../portal/pages/PortalResetPassword.jsx';
+import PortalDashboard from '../portal/pages/PortalDashboard.jsx';
+import PortalCollections from '../portal/pages/PortalCollections.jsx';
+import PortalInvoices from '../portal/pages/PortalInvoices.jsx';
+import PortalInvoiceDetail from '../portal/pages/PortalInvoiceDetail.jsx';
+import PortalPayments from '../portal/pages/PortalPayments.jsx';
+import PortalProfile from '../portal/pages/PortalProfile.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
 // current system's activeTab-state pattern (no per-page URLs, no deep
@@ -58,6 +69,24 @@ export const router = createBrowserRouter([
       { path: 'financial/cashouts/:id', element: <CashoutDetailPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'billing', element: <BillingView /> },
+    ],
+  },
+  // Phase 4 — Customer Portal: a fully separate route tree, outside the
+  // staff AppShell — its own shell, its own auth guard (RequirePortalAuth,
+  // backed by PortalAuthContext, never the staff RequireAuth/AuthContext).
+  { path: '/portal/login', element: <PortalLogin /> },
+  { path: '/portal/forgot-password', element: <PortalForgotPassword /> },
+  { path: '/portal/reset-password', element: <PortalResetPassword /> },
+  {
+    path: '/portal',
+    element: <RequirePortalAuth><PortalShell /></RequirePortalAuth>,
+    children: [
+      { index: true, element: <PortalDashboard /> },
+      { path: 'collections', element: <PortalCollections /> },
+      { path: 'invoices', element: <PortalInvoices /> },
+      { path: 'invoices/:id', element: <PortalInvoiceDetail /> },
+      { path: 'payments', element: <PortalPayments /> },
+      { path: 'profile', element: <PortalProfile /> },
     ],
   },
 ]);
