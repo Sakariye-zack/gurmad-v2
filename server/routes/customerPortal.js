@@ -1,6 +1,9 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const { pool, logPortalAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
@@ -9,11 +12,23 @@ const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { getCollectionHistory, getCollectionDetail } = require('../lib/reportsCalculations');
 const { buildInvoiceDocx, buildInvoiceHtml } = require('../lib/documentGenerators');
 const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
-// createPortalNotification is intentionally NOT imported here — per the
-// Rebuild Implementation Spec §8, no live producer is wired in during this
-// pass (the only named producer, Complaints, does not exist in V2 yet).
-// The write function lives in lib/portalNotifications.js, ready for a
-// future producer to import.
+// Phase 5 — Complaints now exists: createComplaint/getComplaintsForCustomer/
+// getComplaintDetail are imported directly from the ONE shared service
+// module also used by routes/complaints.js (staff) — no duplicated
+// business logic between the two API surfaces, per the approved contract.
+const { createComplaint, getComplaintsForCustomer, getComplaintDetail } = require('../lib/complaintsService');
+
+const COMPLAINT_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'complaints');
+fs.mkdirSync(COMPLAINT_UPLOAD_DIR, { recursive: true });
+const COMPLAINT_ALLOWED_MIME = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+const uploadComplaintPhoto = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, COMPLAINT_UPLOAD_DIR),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname)}`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, COMPLAINT_ALLOWED_MIME.includes(file.mimetype)),
+});
 
 const router = express.Router();
 
@@ -652,6 +667,66 @@ router.put('/notifications/read-all', authenticateCustomerPortal, async (req, re
     return res.json({ data: { message: 'All notifications marked read.' } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to update notifications.', code: 'INTERNAL' } });
+  }
+});
+
+// ==================================================================
+// COMPLAINTS (Phase 5 — 3 additive routes, existing 23 routes above
+// unchanged verbatim). customer_id always derived from req.customerId
+// (the verified token) — a customer structurally cannot submit or view
+// a complaint for another customer, matching every other route in this
+// file. Uses the SAME lib/complaintsService.js as the staff-facing
+// routes/complaints.js — zero duplicated business logic.
+// ==================================================================
+
+router.get('/complaints', authenticateCustomerPortal, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const rows = await getComplaintsForCustomer({ customerId: req.customerId, limit, offset });
+    return res.json({ data: rows });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load complaints.', code: 'INTERNAL' } });
+  }
+});
+
+router.post('/complaints', authenticateCustomerPortal, uploadComplaintPhoto.single('photo'), async (req, res) => {
+  const { title, description, priority } = req.body || {};
+  if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim()) {
+    return res.status(400).json({ error: { message: 'title and description are required.', code: 'VALIDATION' } });
+  }
+  const validPriority = ['low', 'medium', 'high'].includes(priority) ? priority : 'medium';
+  try {
+    const complaint = await createComplaint({
+      customerId: req.customerId, title: title.trim(), description: description.trim(),
+      priority: validPriority, source: 'customer',
+    });
+    if (req.file) {
+      await pool.query(
+        `INSERT INTO complaint_attachments (complaint_id, original_filename, storage_path, mime_type, file_size, uploaded_by_customer)
+         VALUES ($1, $2, $3, $4, $5, TRUE)`,
+        [complaint.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size]
+      );
+      await logPortalAudit({ portalAccountId: req.portalAccountId, customerId: req.customerId, action: 'complaint_attachment_uploaded', details: { complaintId: complaint.id } });
+    }
+    return res.status(201).json({ data: complaint });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to submit complaint.', code: 'INTERNAL' } });
+  }
+});
+
+// A cross-customer id returns 404 — ownership enforced INSIDE
+// getComplaintDetail() (customer_id = $2 in the query itself), matching
+// the exact 404-not-403 pattern every other detail route in this file uses.
+router.get('/complaints/:id', authenticateCustomerPortal, async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
+  try {
+    const complaint = await getComplaintDetail({ complaintId: id, customerId: req.customerId });
+    if (!complaint) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
+    return res.json({ data: complaint });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load complaint.', code: 'INTERNAL' } });
   }
 });
 
