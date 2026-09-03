@@ -691,15 +691,20 @@ router.get('/complaints', authenticateCustomerPortal, async (req, res) => {
 });
 
 router.post('/complaints', authenticateCustomerPortal, uploadComplaintPhoto.single('photo'), async (req, res) => {
-  const { title, description, priority } = req.body || {};
+  const { title, description } = req.body || {};
   if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim()) {
     return res.status(400).json({ error: { message: 'title and description are required.', code: 'VALIDATION' } });
   }
-  const validPriority = ['low', 'medium', 'high'].includes(priority) ? priority : 'medium';
+  // QA fix (Phase 5 QA, defect found live-testing): priority is staff-set
+  // only, per the approved Decision Record — a customer-supplied priority
+  // was previously accepted and honored here. Any client-sent `priority`
+  // is now ignored entirely; every customer-submitted complaint is created
+  // at the fixed 'medium' default, exactly like every other unspecified
+  // field, until staff triage it.
   try {
     const complaint = await createComplaint({
       customerId: req.customerId, title: title.trim(), description: description.trim(),
-      priority: validPriority, source: 'customer',
+      priority: 'medium', source: 'customer',
     });
     if (req.file) {
       await pool.query(

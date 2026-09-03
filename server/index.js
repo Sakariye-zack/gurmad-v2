@@ -60,6 +60,14 @@ app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && 'body' in err) {
     return res.status(400).json({ error: { message: 'Malformed JSON in request body.', code: 'VALIDATION' } });
   }
+  // Multer's file-size limit throws a MulterError that otherwise falls
+  // through to the generic 500 below — a client mistake (file too large),
+  // not a server failure, same reasoning as the SyntaxError case above.
+  // Found during Phase 5 Complaints QA (oversized attachment upload was
+  // surfacing as a 500).
+  if (err && err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: { message: 'File exceeds the maximum allowed size (10MB).', code: 'VALIDATION' } });
+  }
   res.status(500).json({ error: { message: 'Unexpected server error.', code: 'INTERNAL' } });
 });
 

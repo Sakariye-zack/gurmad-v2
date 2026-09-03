@@ -11,7 +11,6 @@ export default function PortalComplaintSubmit() {
   const toast = useToast();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState('medium');
   const [photo, setPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -22,7 +21,9 @@ export default function PortalComplaintSubmit() {
       const formData = new FormData();
       formData.append('title', title);
       formData.append('description', description);
-      formData.append('priority', priority);
+      // Priority is staff-set only, per the approved Decision Record — no
+      // priority field is sent from the customer submit form (QA fix,
+      // Phase 5 QA: the backend now also ignores it even if sent).
       if (photo) formData.append('photo', photo);
       const res = await portalApiClient.postForm('/complaints', formData);
       toast.success('Complaint submitted.');
@@ -48,13 +49,6 @@ export default function PortalComplaintSubmit() {
 
           <label style={labelStyle}>Description</label>
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={5} style={{ ...inputStyle, resize: 'vertical' }} required />
-
-          <label style={labelStyle}>Priority</label>
-          <select value={priority} onChange={(e) => setPriority(e.target.value)} style={inputStyle}>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
 
           <label style={labelStyle}>Photo (optional — PDF, JPEG, or PNG, max 10MB)</label>
           <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setPhoto(e.target.files?.[0] || null)} style={inputStyle} />
