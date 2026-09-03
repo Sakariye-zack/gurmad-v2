@@ -17,6 +17,8 @@ const reportsRouter = require('./routes/reports');
 const dashboardRouter = require('./routes/dashboard');
 const customerPortalRouter = require('./routes/customerPortal');
 const complaintsRouter = require('./routes/complaints');
+const authRouter = require('./routes/auth');
+const usersRouter = require('./routes/users');
 
 const app = express();
 app.use(express.json());
@@ -48,6 +50,8 @@ app.use('/api/v2/reports', reportsRouter);
 app.use('/api/v2/dashboard', dashboardRouter);
 app.use('/api/v2/customer-portal', customerPortalRouter);
 app.use('/api/v2/complaints', complaintsRouter);
+app.use('/api/v2/auth', authRouter);
+app.use('/api/v2/users', usersRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
