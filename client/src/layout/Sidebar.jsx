@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -51,6 +51,14 @@ const NAV = [
   // V2-native cashier-scope engine exists, none was built, Cashier = no
   // access. Collector: zero evidence anywhere supports any access.
   { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  // User & Access Administration — OD-2: admin-only, matches the
+  // backend's own requireRole('admin') on every /v2/users route.
+  { to: '/users', label: 'Users & Access', icon: ShieldCheck, roles: ['admin'] },
+  // Account Security is self-service — every authenticated staff member
+  // manages their own password/sessions, so this item is intentionally
+  // ungated (no `roles`), matching the backend's own /v2/auth/* routes,
+  // which only require authenticateToken, never requireRole.
+  { to: '/account/security', label: 'Account Security', icon: ShieldAlert },
 ];
 
 export default function Sidebar() {

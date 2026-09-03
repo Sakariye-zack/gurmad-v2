@@ -23,6 +23,8 @@ import ReportsPage from '../pages/reports/ReportsPage.jsx';
 import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
 import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
 import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
+import UsersListPage from '../pages/users/UsersListPage.jsx';
+import AccountSecurity from '../pages/account/AccountSecurity.jsx';
 import RequireAuth from './RequireAuth.jsx';
 import RequirePortalAuth from '../portal/RequirePortalAuth.jsx';
 import PortalShell from '../portal/PortalShell.jsx';
@@ -79,6 +81,8 @@ export const router = createBrowserRouter([
       { path: 'billing', element: <BillingView /> },
       { path: 'complaints', element: <ComplaintsListPage /> },
       { path: 'complaints/:id', element: <ComplaintDetailPage /> },
+      { path: 'users', element: <UsersListPage /> },
+      { path: 'account/security', element: <AccountSecurity /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
