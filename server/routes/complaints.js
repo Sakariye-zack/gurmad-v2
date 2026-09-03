@@ -98,7 +98,8 @@ router.put('/:id/status', authenticateToken, requireRole(...MANAGEMENT_ROLES), a
     return res.status(400).json({ error: { message: 'Invalid status value.', code: 'VALIDATION' } });
   }
   try {
-    const result = await updateComplaintStatus({ complaintId: id, newStatus: status, actorId: req.user.id });
+    const zoneId = await resolveUserZoneId(req.user);
+    const result = await updateComplaintStatus({ complaintId: id, newStatus: status, actorId: req.user.id, zoneId });
     if (result.error === 'NOT_FOUND') return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
     if (result.error === 'ILLEGAL_TRANSITION') {
       return res.status(400).json({ error: { message: `Cannot transition from '${result.before}' to '${status}'.`, code: 'VALIDATION' } });
@@ -115,7 +116,8 @@ router.put('/:id/assign', authenticateToken, requireRole(...MANAGEMENT_ROLES), a
   if (id === null) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
   if (employeeId === null) return res.status(400).json({ error: { message: 'A valid employee_id is required.', code: 'VALIDATION' } });
   try {
-    const result = await assignComplaint({ complaintId: id, employeeId, actorId: req.user.id });
+    const zoneId = await resolveUserZoneId(req.user);
+    const result = await assignComplaint({ complaintId: id, employeeId, actorId: req.user.id, zoneId });
     if (result.error === 'NOT_FOUND') return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
     if (result.error === 'EMPLOYEE_NOT_FOUND') return res.status(400).json({ error: { message: 'Employee not found.', code: 'VALIDATION' } });
     if (result.error === 'EMPLOYEE_INACTIVE') return res.status(400).json({ error: { message: 'Employee is not active.', code: 'VALIDATION' } });
@@ -135,7 +137,8 @@ router.put('/:id/priority', authenticateToken, requireRole(...MANAGEMENT_ROLES),
     return res.status(400).json({ error: { message: 'Invalid priority value.', code: 'VALIDATION' } });
   }
   try {
-    const result = await setComplaintPriority({ complaintId: id, priority, actorId: req.user.id });
+    const zoneId = await resolveUserZoneId(req.user);
+    const result = await setComplaintPriority({ complaintId: id, priority, actorId: req.user.id, zoneId });
     if (result.error === 'NOT_FOUND') return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
     return res.json({ data: result.data });
   } catch (err) {
@@ -151,7 +154,8 @@ router.put('/:id/reply', authenticateToken, requireRole(...MANAGEMENT_ROLES), as
     return res.status(400).json({ error: { message: 'Reply cannot be empty.', code: 'VALIDATION' } });
   }
   try {
-    const result = await replyToComplaint({ complaintId: id, reply: reply.trim(), actorId: req.user.id });
+    const zoneId = await resolveUserZoneId(req.user);
+    const result = await replyToComplaint({ complaintId: id, reply: reply.trim(), actorId: req.user.id, zoneId });
     if (result.error === 'NOT_FOUND') return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
     return res.json({ data: result.data });
   } catch (err) {

@@ -105,8 +105,22 @@ async function getComplaintDetailForStaff({ complaintId, zoneId = null }, client
 // (enforced by the route's own requireRole, not re-checked here); this
 // function enforces the LEGAL sequence itself — no skip, no backward move,
 // per the approved linear lifecycle.
-async function updateComplaintStatus({ complaintId, newStatus, actorId }, client = pool) {
-  const current = await client.query('SELECT status, customer_id FROM complaints WHERE id = $1', [complaintId]);
+//
+// Hardening fix (real defect found live-testing this pass): zoneId was
+// NOT enforced here — a zone-scoped Gudoomiye/Zone Accountant who cannot
+// even SEE an out-of-zone complaint via GET (404) could still successfully
+// mutate it via this and every other write function, since none of them
+// checked the complaint's own zone. Every write function below now takes
+// the same optional zoneId the read-side (getComplaintDetailForStaff)
+// already used, and returns NOT_FOUND (mapped to 404 by the route,
+// identical to the read-side behavior — never leaks existence via a 403)
+// when the complaint doesn't belong to the caller's zone.
+async function updateComplaintStatus({ complaintId, newStatus, actorId, zoneId = null }, client = pool) {
+  const current = await client.query(
+    `SELECT c.status, c.customer_id FROM complaints c JOIN customers cust ON cust.id = c.customer_id
+     WHERE c.id = $1 ${zoneId !== null ? 'AND cust.zone_id = $2' : ''}`,
+    zoneId !== null ? [complaintId, zoneId] : [complaintId]
+  );
   if (current.rows.length === 0) return { error: 'NOT_FOUND' };
   const before = current.rows[0].status;
   const legal = LEGAL_TRANSITIONS[before] || [];
@@ -136,13 +150,22 @@ async function updateComplaintStatus({ complaintId, newStatus, actorId }, client
 // complaint's customer — all 3 enforced server-side here, not just via a
 // filtered dropdown in the UI. Collector-type is structurally excluded by
 // the employee_type='office' check alone.
-async function assignComplaint({ complaintId, employeeId, actorId }, client = pool) {
+async function assignComplaint({ complaintId, employeeId, actorId, zoneId = null }, client = pool) {
   const complaintRes = await client.query(
     `SELECT c.id, cust.zone_id AS customer_zone_id FROM complaints c JOIN customers cust ON cust.id = c.customer_id WHERE c.id = $1`,
     [complaintId]
   );
   if (complaintRes.rows.length === 0) return { error: 'NOT_FOUND' };
   const customerZoneId = complaintRes.rows[0].customer_zone_id;
+
+  // Hardening fix: the employee-zone check below (EMPLOYEE_WRONG_ZONE) only
+  // constrains which employee can be assigned — it does not check whether
+  // the ACTOR (the zone-scoped Gudoomiye/Zone Accountant calling this) has
+  // any authority over this complaint at all. Same actor-authority check as
+  // the other 3 write functions, checked first so an out-of-zone actor gets
+  // NOT_FOUND (matching the read-side 404) rather than a validation error
+  // that would confirm the complaint exists.
+  if (zoneId !== null && customerZoneId !== zoneId) return { error: 'NOT_FOUND' };
 
   const empRes = await client.query('SELECT id, status, employee_type, zone_id FROM employees WHERE id = $1', [employeeId]);
   if (empRes.rows.length === 0) return { error: 'EMPLOYEE_NOT_FOUND' };
@@ -159,7 +182,14 @@ async function assignComplaint({ complaintId, employeeId, actorId }, client = po
   return { data: r.rows[0] };
 }
 
-async function replyToComplaint({ complaintId, reply, actorId }, client = pool) {
+async function replyToComplaint({ complaintId, reply, actorId, zoneId = null }, client = pool) {
+  if (zoneId !== null) {
+    const owned = await client.query(
+      `SELECT c.id FROM complaints c JOIN customers cust ON cust.id = c.customer_id WHERE c.id = $1 AND cust.zone_id = $2`,
+      [complaintId, zoneId]
+    );
+    if (owned.rows.length === 0) return { error: 'NOT_FOUND' };
+  }
   const r = await client.query(
     'UPDATE complaints SET admin_reply = $1, replied_at = NOW(), updated_at = NOW() WHERE id = $2 RETURNING *',
     [reply, complaintId]
@@ -176,7 +206,14 @@ async function replyToComplaint({ complaintId, reply, actorId }, client = pool) 
   return { data: complaint };
 }
 
-async function setComplaintPriority({ complaintId, priority, actorId }, client = pool) {
+async function setComplaintPriority({ complaintId, priority, actorId, zoneId = null }, client = pool) {
+  if (zoneId !== null) {
+    const owned = await client.query(
+      `SELECT c.id FROM complaints c JOIN customers cust ON cust.id = c.customer_id WHERE c.id = $1 AND cust.zone_id = $2`,
+      [complaintId, zoneId]
+    );
+    if (owned.rows.length === 0) return { error: 'NOT_FOUND' };
+  }
   const r = await client.query(
     'UPDATE complaints SET priority = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
     [priority, complaintId]
