@@ -73,8 +73,29 @@ async function migrateUsers() {
     await client.query('BEGIN');
 
     for (const row of legacyRows) {
-      const already = await client.query('SELECT id FROM v2_users WHERE id = $1', [row.id]);
+      const already = await client.query('SELECT id, username FROM v2_users WHERE id = $1', [row.id]);
       if (already.rows.length > 0) {
+        // Hardening fix (found live during Hardening, reproduced with a
+        // real test row): an id already present in v2_users is NOT
+        // automatically "already migrated" — a legacy-side id and a
+        // V2-native user id (assigned from v2_users_id_seq, started
+        // above the migrated max at the time it was set) can still
+        // collide if legacy independently creates a new user during the
+        // transition window (Preconditions §3's own named edge case,
+        // now proven reproducible, not just theoretical). Comparing
+        // usernames distinguishes "this row really was already
+        // migrated" (safe, silent skip) from "two unrelated accounts
+        // now share an id" (a real conflict — fail loudly, do not
+        // silently skip and mask it).
+        if (already.rows[0].username !== row.username) {
+          throw new Error(
+            `ID COLLISION: legacy users.id=${row.id} (username="${row.username}") collides with an existing ` +
+            `v2_users.id=${row.id} belonging to a DIFFERENT account (username="${already.rows[0].username}"). ` +
+            `This is not a re-migration of the same account — it is two unrelated accounts sharing an id. ` +
+            `Aborting — no partial migration. Resolve manually (re-run v2_users_id_seq advancement, or assign ` +
+            `the V2-native account a different id) before re-running this script.`
+          );
+        }
         report.skipped_already_present.push(row.id);
         continue;
       }
@@ -127,7 +148,14 @@ if (require.main === module) {
       process.exit(0);
     })
     .catch((err) => {
-      console.error('Migration FAILED, rolled back, no partial state left:', err.message);
+      // Hardening fix: this generic wrapper previously always said "rolled
+      // back" even when the failure happened before any transaction was
+      // ever opened (the production-name guard, or a missing env var) —
+      // technically accurate ("no partial state" is still true either
+      // way) but misleading about what actually happened. The specific
+      // per-row errors thrown inside the transaction (role/collision)
+      // already say "Aborting — no partial migration" themselves.
+      console.error('Migration FAILED:', err.message);
       process.exit(1);
     });
 }
