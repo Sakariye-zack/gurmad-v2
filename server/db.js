@@ -25,7 +25,22 @@ types.setTypeParser(1082, (val) => val);
 // (default false) so local dev/QA (`gurmad_v2_db`/`gurmad_v2_qa_ref`,
 // local Postgres, no TLS) are completely unaffected — zero behavior
 // change there, confirmed by this flag defaulting off.
-const useSsl = process.env.DB_SSL === 'true';
+//
+// Hardening fix: DB_SSL was previously parsed as a strict `=== 'true'`
+// check — any operator typo (DB_SSL=TRUE, DB_SSL=1, DB_SSL=yes) silently
+// evaluated to false, disabling SSL with zero warning. That is exactly
+// the "no silent downgrade" principle this whole feature exists to
+// enforce, now applied to the env var itself, not just the connection
+// behavior: an unrecognized non-empty DB_SSL value now refuses to start
+// (fail loudly) rather than silently proceeding unencrypted. Only the
+// canonical values "true"/"false" (case-insensitive) or an unset/empty
+// var are accepted silently.
+const rawDbSsl = (process.env.DB_SSL || '').trim().toLowerCase();
+if (rawDbSsl && rawDbSsl !== 'true' && rawDbSsl !== 'false') {
+  console.error(`FATAL: DB_SSL is set to an unrecognized value ("${process.env.DB_SSL}"). Use "true" or "false" explicitly — refusing to guess and silently disable SSL.`);
+  process.exit(1);
+}
+const useSsl = rawDbSsl === 'true';
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 5432),
