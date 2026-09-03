@@ -1,7 +1,10 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { runMigrations } = require('./db');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { pool, runMigrations } = require('./db');
+const logger = require('./lib/logger');
 const zonesRouter = require('./routes/zones');
 const customersRouter = require('./routes/customers');
 const employeesRouter = require('./routes/employees');
@@ -21,6 +24,16 @@ const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
 
 const app = express();
+
+// Production Readiness (T) — O-7/Security Hardening, Implementation Spec
+// §5/§9. Standard security-header set (CSP left at helmet's own safe
+// default; this is an API-only backend serving JSON, not HTML, so the
+// header set matters far more than a page-specific CSP policy would).
+// ADDITIVE / CONTRACT-PRESERVING: applies to every route including every
+// closed module's own — none of their response bodies, status codes, or
+// route logic changes, only response headers gain a small, standard set.
+app.use(helmet());
+
 app.use(express.json());
 
 // Same CORS-whitelist pattern as the reference backend (server/index.js) —
@@ -34,7 +47,37 @@ app.use(cors({
   credentials: true,
 }));
 
-app.get('/api/v2/health', (req, res) => res.json({ ok: true, service: 'gurmad-v2-server' }));
+// Production Readiness (T) — Security Hardening. General API-wide rate
+// limiting, distinct from and IN ADDITION TO the existing per-account
+// auth-route limiters (routes/auth.js, routes/customerPortal.js) —
+// this one guards every OTHER route (previously entirely unprotected
+// against a request flood from one IP). Deliberately generous (300/15min)
+// so it never interferes with normal staff/customer use; its purpose is
+// abuse/flood protection, not the tight per-account lockout auth already
+// has. ADDITIVE — no existing route's own logic changes.
+const generalApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Too many requests. Please try again later.', code: 'RATE_LIMITED' } },
+});
+app.use('/api/v2', generalApiLimiter);
+
+// Production Readiness (T) — Monitoring, Implementation Spec §5. Extends
+// the previous liveness-only health check with an actual database-
+// connectivity probe — the single most important gap named in every
+// prior Gap Review pass on this exact endpoint. Still fast (a trivial
+// SELECT 1), still safe to hit frequently from a monitoring tool.
+app.get('/api/v2/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    return res.json({ ok: true, service: 'gurmad-v2-server', database: 'connected' });
+  } catch (err) {
+    logger.error('health_check_db_failure', { message: err.message });
+    return res.status(503).json({ ok: false, service: 'gurmad-v2-server', database: 'unreachable' });
+  }
+});
 app.use('/api/v2/zones', zonesRouter);
 app.use('/api/v2/customers', customersRouter);
 app.use('/api/v2/employees', employeesRouter);
@@ -72,7 +115,29 @@ app.use((err, req, res, next) => {
   if (err && err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({ error: { message: 'File exceeds the maximum allowed size (10MB).', code: 'VALIDATION' } });
   }
+  // Production Readiness (T) — API-error visibility, Implementation Spec
+  // §5. Logs the EVENT (route, status, error message) — never request
+  // bodies, headers, or query params, which could carry a password/token/
+  // financial payload. This is the ONE place every otherwise-unhandled
+  // route error already passes through, so this is the correct, single
+  // choke point to add visibility at, not a change to any route's own logic.
+  logger.error('unhandled_api_error', { path: req.path, method: req.method, message: err && err.message });
   res.status(500).json({ error: { message: 'Unexpected server error.', code: 'INTERNAL' } });
+});
+
+// Production Readiness (T) — Monitoring, Implementation Spec §5 ("critical
+// application failures" — previously entirely unhandled, confirmed
+// absent anywhere in this codebase). Logs and keeps the process alive for
+// a normal request-level rejection; an uncaught synchronous exception is
+// a genuinely unknown process state, so this still exits (matching the
+// existing JWT_SECRET-missing fail-loud convention) rather than
+// continuing to serve requests from a process that may be corrupted.
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled_rejection', { message: reason && reason.message ? reason.message : String(reason) });
+});
+process.on('uncaughtException', (err) => {
+  logger.error('uncaught_exception', { message: err.message });
+  process.exit(1);
 });
 
 const PORT = process.env.PORT || 5001;
