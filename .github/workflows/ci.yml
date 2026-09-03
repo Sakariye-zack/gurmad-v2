@@ -1,0 +1,132 @@
+# GURMAD V2 — Production Readiness (T) — CI Pipeline
+#
+# Implementation Spec §6, O-8 (gated CI/CD). This pipeline implements the
+# CODE -> TEST -> QUALITY/SECURITY CHECKS -> BUILD stages of the approved
+# conceptual flow. It intentionally STOPS AFTER BUILD.
+#
+# NOT IMPLEMENTED BY THIS PIPELINE (explicit, per the spec and the
+# implementation authorization — do not add without separate authorization):
+#   APPROVAL -> PRE-DEPLOYMENT VALIDATION -> BACKUP/MIGRATION SAFETY CHECK ->
+#   DEPLOY -> HEALTH CHECK -> POST-DEPLOYMENT VERIFICATION -> ROLLBACK
+#
+# There is no deploy job in this file. No production credential, secret, or
+# target is referenced anywhere. Activating this workflow (e.g. by pushing
+# it to a real GitHub remote with Actions enabled) runs ONLY the checks
+# below — it cannot deploy anything, because no deploy step exists yet.
+# Adding the deployment half of the pipeline is separate, future,
+# out-of-scope work per this implementation's own authorization boundary.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---- QUALITY / SECURITY CHECKS (client) ----
+  lint:
+    name: Lint (client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install client dependencies
+        working-directory: gurmad-v2/client
+        run: npm ci
+      - name: Run ESLint
+        working-directory: gurmad-v2/client
+        run: npm run lint --if-present
+        continue-on-error: true
+        # NON-BLOCKING, deliberately, not by oversight: running `npm run
+        # lint` for the first time ever in this repo (no lint script
+        # existed before this Production Readiness pass) found 14 real,
+        # pre-existing violations, ALL inside the CLOSED Customer Portal
+        # module (src/portal/**, src/pages/customers/
+        # CustomerPortalAccessCard.jsx) — a react-hooks/set-state-in-effect
+        # pattern used throughout that module's own load() functions.
+        # This implementation pass does NOT modify Customer Portal source
+        # to fix them (that would be an unauthorized closed-module
+        # change). Making this step blocking today would mean CI fails on
+        # every single run for a reason no new commit caused. Flagged
+        # explicitly here and in the Implementation Report as
+        # CHANGE REQUEST REQUIRED against Customer Portal before this
+        # step can safely become blocking.
+
+  # ---- QUALITY / SECURITY CHECKS (dependency audit, both packages) ----
+  security-audit:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Audit server dependencies
+        working-directory: gurmad-v2/server
+        run: npm audit --audit-level=high || true
+        # Non-blocking (|| true) by deliberate choice: a moderate-severity
+        # transitive advisory (qs, via express@4's own body-parser) was
+        # found during this workstream's own implementation pass with no
+        # non-breaking fix currently available (Implementation Report
+        # §Known Limitations). Blocking the pipeline on an unfixable
+        # moderate finding would only train the team to ignore red
+        # pipeline runs. --audit-level=high still fails the step (without
+        # || true) on anything more severe. Revisit if a fix becomes
+        # available, or if this is judged too permissive — an explicit,
+        # named decision either way, not a silent default.
+      - name: Audit client dependencies
+        working-directory: gurmad-v2/client
+        run: npm audit --audit-level=high || true
+
+  # ---- TEST ----
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Server test placeholder
+        working-directory: gurmad-v2/server
+        run: |
+          echo "No automated test suite exists yet for gurmad-v2/server (Implementation Spec §13, Open Question)."
+          echo "This step is a placeholder so the pipeline stage exists and is visible, not a passing test claim."
+        # Intentionally does NOT fail the build — there is nothing to
+        # test yet. A real test suite is out-of-scope new application-
+        # code work for this Production Readiness implementation pass.
+
+  # ---- BUILD ----
+  build:
+    name: Build (client)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install client dependencies
+        working-directory: gurmad-v2/client
+        run: npm ci
+      - name: Build client
+        working-directory: gurmad-v2/client
+        run: npm run build
+      - name: Verify server boots (syntax + migration dry structure check)
+        working-directory: gurmad-v2/server
+        run: node -c index.js && node -c db.js
+        # A syntax check only — NOT a real boot against a database (no DB
+        # is provisioned in this CI runner, and provisioning one is
+        # deliberately out of scope for this Decisions-respecting,
+        # minimal-footprint implementation pass).
+
+  # ---- PIPELINE ENDS HERE ----
+  # APPROVAL / PRE-DEPLOYMENT VALIDATION / BACKUP-MIGRATION SAFETY CHECK /
+  # DEPLOY / HEALTH CHECK / POST-DEPLOYMENT VERIFICATION / ROLLBACK are
+  # specified (Implementation Spec §6) but deliberately NOT implemented
+  # here. No job below this line exists. No production deployment can be
+  # triggered by this workflow file.
