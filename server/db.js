@@ -13,12 +13,43 @@ const { Pool, types } = require('pg');
 // matches what the frontend's plain <input type="date"> already expects.
 types.setTypeParser(1082, (val) => val);
 
+// Production Readiness (T) — O-6, Implementation Spec §4. V2 previously had
+// NO SSL/TLS support at all, unlike the reference backend (whose own
+// db.js has a conditional SSL block keyed on the host string containing
+// "supabase" — real evidence production/staging is managed-PostgreSQL-
+// hosted). Deliberately NOT copying the reference backend's own default:
+// its `rejectUnauthorized: false` is a silent, always-on verification
+// weakening; DB_SSL_REJECT_UNAUTHORIZED here defaults to true (verified
+// certificates) — an explicit, visible, per-environment opt-out is
+// required to weaken it, never a blanket default. DB_SSL is opt-in
+// (default false) so local dev/QA (`gurmad_v2_db`/`gurmad_v2_qa_ref`,
+// local Postgres, no TLS) are completely unaffected — zero behavior
+// change there, confirmed by this flag defaulting off.
+const useSsl = process.env.DB_SSL === 'true';
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 5432),
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+  ssl: useSsl
+    ? {
+        rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+        ca: process.env.DB_SSL_CA || undefined,
+      }
+    : false,
+});
+
+// Fail loudly on a real connection error (bad certificate, unreachable
+// host, handshake failure) rather than letting it surface only as a
+// mysterious query-time failure later — matches the existing
+// JWT_SECRET-missing pattern (middleware/auth.js): refuse to run in a
+// broken state rather than silently degrading. This does NOT retry or
+// fall back to an unencrypted connection under any circumstance — `pg`
+// itself does not silently downgrade a configured SSL connection, and
+// this handler does not introduce one.
+pool.on('error', (err) => {
+  console.error('FATAL: unexpected database pool error.', err.message);
 });
 
 // V2 database rule: do not blindly copy the current schema. This is the
