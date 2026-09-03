@@ -782,6 +782,81 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_complaint_attachments_complaint_id ON complaint_attachments(complaint_id);`);
+
+  // ============================================================
+  // User & Access Administration — Implementation Spec §4/§18,
+  // Preconditions §1/§2/§3. V2 begins owning staff identity (OD-1 Hybrid),
+  // while `employees.user_id` (Module 3, closed) keeps its existing
+  // meaning unchanged — this table's `id` column is deliberately NOT
+  // SERIAL: it is seeded to match legacy `users.id` values verbatim
+  // (including gaps) by scripts/migrate_users.js, so every existing
+  // employees.user_id value keeps resolving correctly with zero change
+  // to Module 3 or to any of the 12 resolveUserZoneId() consumer files.
+  // A separate sequence (below) is advanced past the migrated range so
+  // NEW V2-native users never collide with a migrated legacy id.
+  // ============================================================
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS v2_users_id_seq;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS v2_users (
+      id INTEGER PRIMARY KEY DEFAULT nextval('v2_users_id_seq'),
+      username VARCHAR(50) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      full_name VARCHAR(100),
+      role VARCHAR(30) NOT NULL,
+      zone VARCHAR(100),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      -- OD-2/Preconditions §2: migration/cohort ROUTING metadata only —
+      -- never consulted for authorization decisions (role/zone/scope are
+      -- always resolved live from this row + the linked employee, per
+      -- lib/accessResolution.js). 'legacy' = this account still logs in
+      -- via the reference backend; 'v2' = this account has been cut over.
+      auth_source VARCHAR(10) NOT NULL DEFAULT 'legacy' CHECK (auth_source IN ('legacy', 'v2')),
+      -- OD-3: reused from the Customer Portal's own proven token_version
+      -- precedent, with ONE deliberate difference: default 0, not 1. The
+      -- Portal never has a "versionless" token (it always mints its own),
+      -- but a legacy-issued staff JWT predates this column entirely and
+      -- carries no tokenVersion claim at all — middleware/auth.js reads a
+      -- missing claim as 0 (decoded.tokenVersion ?? 0), so the stored
+      -- baseline must also start at 0 for every pre-existing legacy token
+      -- to keep verifying correctly right up until an explicit
+      -- revocation event bumps it. Found and fixed live this pass (a
+      -- default of 1 broke every already-issued legacy token instantly).
+      token_version INTEGER NOT NULL DEFAULT 0,
+      -- Preconditions §9 (Login Security): direct reuse of the Customer
+      -- Portal's own lockout shape — closes the Discovery-found gap
+      -- (legacy login has no per-account lockout, IP rate-limiting only).
+      failed_login_count INTEGER NOT NULL DEFAULT 0,
+      locked_until TIMESTAMP,
+      last_login_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_users_role ON v2_users(role);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_users_auth_source ON v2_users(auth_source);`);
+  // Idempotent fix for the token_version default (found live this same
+  // implementation pass, before any real migration ran against it) —
+  // CREATE TABLE IF NOT EXISTS above won't retroactively change a
+  // default on an already-existing table, so this ALTER is required on
+  // every boot to guarantee new rows inserted without an explicit value
+  // (e.g. a future manual INSERT) get the correct 0 baseline.
+  await pool.query(`ALTER TABLE v2_users ALTER COLUMN token_version SET DEFAULT 0;`);
+
+  // Password reset — same shape as customer_portal_password_resets
+  // (token-hash lookup, single-use via used_at, TTL via expires_at), per
+  // Implementation Spec §16 (POST /api/v2/auth/password/reset/*).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS v2_password_resets (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      used_at TIMESTAMP,
+      requested_ip VARCHAR(64),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_password_resets_token_hash ON v2_password_resets(token_hash);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
