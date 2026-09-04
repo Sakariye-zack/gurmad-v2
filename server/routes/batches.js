@@ -111,8 +111,13 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
   }
 });
 
+// Group & Group-Based Collection — Change Request, Implementation Spec §9
+// (Group-Based Collection Workflow) / §26-5 (Customer Type filter). Values
+// mirror the Group eligible-customers preview endpoint (routes/groups.js).
+const VALID_CUSTOMER_TYPE_FILTERS = ['all', 'residential', 'commercial'];
+
 router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res) => {
-  const { zone_id, cycle_id, customer_type, commercial_shift, start_date, end_date, customer_ids, notes } = req.body;
+  const { zone_id, cycle_id, customer_type, commercial_shift, start_date, end_date, customer_ids, notes, group_id, customer_type_filter } = req.body;
   const zid = parseStrictId(String(zone_id ?? ''));
   const cid = parseStrictId(String(cycle_id ?? ''));
   if (zid === null || cid === null) return res.status(400).json({ error: { message: 'zone_id and cycle_id are required.', code: 'VALIDATION' } });
@@ -121,10 +126,44 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
   if (cType === 'commercial' && !['day', 'night'].includes(commercial_shift)) {
     return res.status(400).json({ error: { message: 'commercial_shift is required (day or night) for a commercial batch.', code: 'VALIDATION' } });
   }
-  const ids = Array.isArray(customer_ids) ? [...new Set(customer_ids)] : [];
+  let ids = Array.isArray(customer_ids) ? [...new Set(customer_ids)] : [];
 
   if (!(await assertBatchZoneAccess(req.user, zid))) {
     return res.status(403).json({ error: { message: 'You cannot create a batch outside your assigned zone.', code: 'FORBIDDEN' } });
+  }
+
+  // Group & Group-Based Collection — Change Request, Implementation Spec
+  // §9/§16. group_id is an OPTIONAL, ADDITIVE selection filter — this whole
+  // block resolves nothing that isn't fed straight back into the EXACT
+  // same DR-7/cross-zone checks below, unmodified, regardless of whether
+  // customer_ids was hand-picked or Group-resolved (Spec §9 step 3 /
+  // §11: "DR-7 remains authoritative" — the Customer Type filter here is
+  // a selection convenience only, never a bypass).
+  let gid = null;
+  if (group_id !== undefined && group_id !== null) {
+    gid = parseStrictId(String(group_id));
+    if (gid === null) return res.status(400).json({ error: { message: 'Invalid group_id.', code: 'VALIDATION' } });
+    const groupRes = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [gid]);
+    if (groupRes.rows.length === 0) return res.status(400).json({ error: { message: 'group_id does not reference an existing group.', code: 'VALIDATION' } });
+    if (groupRes.rows[0].zone_id !== zid) {
+      return res.status(400).json({ error: { message: 'The selected group does not belong to this batch\'s zone.', code: 'VALIDATION' } });
+    }
+    if (ids.length === 0) {
+      // No explicit customer_ids supplied — auto-populate from the Group,
+      // narrowed by the optional Customer Type filter (All / Residential /
+      // Commercial). This is the ONLY new query this workflow introduces
+      // (Spec §9 step 2); everything after this point is the pre-existing,
+      // unmodified batch-creation logic.
+      const filter = customer_type_filter || 'all';
+      if (!VALID_CUSTOMER_TYPE_FILTERS.includes(filter)) {
+        return res.status(400).json({ error: { message: `customer_type_filter must be one of: ${VALID_CUSTOMER_TYPE_FILTERS.join(', ')}.`, code: 'VALIDATION' } });
+      }
+      const params = [gid];
+      let typeSql = '';
+      if (filter !== 'all') { params.push(filter); typeSql = ` AND customer_type = $${params.length}`; }
+      const eligible = await pool.query(`SELECT id FROM customers WHERE group_id = $1 AND status = 'active'${typeSql}`, params);
+      ids = eligible.rows.map((r) => r.id);
+    }
   }
 
   try {
@@ -155,10 +194,16 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     try {
       await client.query('BEGIN');
       const { batchNumber, batchCode } = await generateBatchCode(client, zid, cid);
+      // batches.group_id — the historical-integrity snapshot (Spec §5,
+      // Locked Decision #5/§26-2), captured ONCE here and NEVER updated by
+      // any other route in this file. A later customer.group_id move
+      // (routes/customers.js) can never rewrite this value, since nothing
+      // anywhere reads batches.group_id via a live join to customers —
+      // this INSERT is the only writer.
       const inserted = await client.query(
-        `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, commercial_shift, start_date, end_date, total_customers, status, created_by, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft',$10,$11) RETURNING *`,
-        [batchCode, zid, cid, batchNumber, cType, cType === 'commercial' ? commercial_shift : null, start_date, end_date || null, ids.length, req.user.id, notes || null]
+        `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, commercial_shift, start_date, end_date, total_customers, status, created_by, notes, group_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft',$10,$11,$12) RETURNING *`,
+        [batchCode, zid, cid, batchNumber, cType, cType === 'commercial' ? commercial_shift : null, start_date, end_date || null, ids.length, req.user.id, notes || null, gid]
       );
       const batch = inserted.rows[0];
       for (const custId of ids) {
