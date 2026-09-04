@@ -29,6 +29,8 @@ const routesEntityRouter = require('./routes/routesEntity');
 // Audit & Security Center — additive router, read-only over the existing
 // v2_audit_log. Admin-only (enforced inside the router itself).
 const auditRouter = require('./routes/audit');
+// System Settings — additive router, Admin-only Company Settings.
+const settingsRouter = require('./routes/settings');
 
 const app = express();
 
@@ -105,6 +107,7 @@ app.use('/api/v2/users', usersRouter);
 app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);
+app.use('/api/v2/settings', settingsRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
