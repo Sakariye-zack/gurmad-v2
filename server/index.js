@@ -22,6 +22,10 @@ const customerPortalRouter = require('./routes/customerPortal');
 const complaintsRouter = require('./routes/complaints');
 const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
+// Group & Group-Based Collection — Change Request. Additive routers only —
+// zero change to any existing router's mount line below.
+const groupsRouter = require('./routes/groups');
+const routesEntityRouter = require('./routes/routesEntity');
 
 const app = express();
 
@@ -95,6 +99,8 @@ app.use('/api/v2/customer-portal', customerPortalRouter);
 app.use('/api/v2/complaints', complaintsRouter);
 app.use('/api/v2/auth', authRouter);
 app.use('/api/v2/users', usersRouter);
+app.use('/api/v2/groups', groupsRouter);
+app.use('/api/v2/routes', routesEntityRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
