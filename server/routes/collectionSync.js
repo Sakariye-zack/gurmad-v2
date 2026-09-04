@@ -159,9 +159,22 @@ async function processOneAction(action, user, employeeId) {
   // *second* racing request could receive `rejected_stale` instead of
   // `already_applied` in that narrow window. No duplicate mutation is
   // possible either way. See Implementation Report §6/§20.
+  //
+  // HARDENING FIX (H-1, P1): the dedup lookup MUST be scoped to the
+  // requesting actor (actor_id). Without this scope, a different
+  // authenticated identity submitting the identical action_uuid (a
+  // guessed/replayed/coincidentally-colliding UUID) would receive
+  // `already_applied` carrying the ORIGINAL actor's full result payload —
+  // a cross-identity data leak that also bypasses the DR-1 ownership
+  // check entirely, since this lookup runs before it. Scoping by
+  // actor_id closes this: a different identity replaying someone else's
+  // action_uuid now falls through to the normal ownership/state-machine
+  // path below and is rejected on its own merits, never short-circuited
+  // into seeing another actor's data. Verified via a live cross-identity
+  // replay test — see Hardening Report §3.
   const priorRes = await pool.query(
-    `SELECT after_data FROM v2_audit_log WHERE action = 'collection_sync.accepted' AND after_data->>'action_uuid' = $1 LIMIT 1`,
-    [action_uuid]
+    `SELECT after_data FROM v2_audit_log WHERE action = 'collection_sync.accepted' AND actor_id = $1 AND after_data->>'action_uuid' = $2 LIMIT 1`,
+    [user.id, action_uuid]
   );
   if (priorRes.rows.length > 0) {
     return { action_uuid, outcome: 'already_applied', retryable: false, data: priorRes.rows[0].after_data };
