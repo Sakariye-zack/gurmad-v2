@@ -903,6 +903,76 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_password_resets_token_hash ON v2_password_resets(token_hash);`);
+
+  // ============================================================
+  // Group & Group-Based Collection — Change Request. Approved via
+  // GURMAD_V2_Group_and_Group_Based_Collection_Change_Request_Implementation_Specification.md
+  // §14 (Database Design) + Decision Lock update (§26-1/§26-2/§26-5).
+  // Hierarchy: Zone -> Group -> Route -> Customer (master data).
+  // Fully additive: 2 new tables (groups, routes) + 4 nullable columns on
+  // the closed customers/batches tables. Zero change to any existing
+  // column, constraint, or row. No Group.collector_id (Locked Decision #3
+  // — no permanent Group->Collector relationship; collector assignment
+  // stays entirely on the existing task_resources chain, unmodified).
+  // ============================================================
+
+  // groups.code is unique WITHIN its zone (not globally) — the
+  // specification's own recommended, non-locked scoping (§26, item 4
+  // remains a non-blocking, unresolved implementation-level item; this is
+  // the only reasonable default and does not foreclose a future change).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS groups (
+      id SERIAL PRIMARY KEY,
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      code VARCHAR(30) NOT NULL,
+      name VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (zone_id, code)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_groups_zone_id ON groups(zone_id);`);
+
+  // routes.code is unique WITHIN its group. Structural entity only — no
+  // geometry/coordinate/geofence columns (advanced GIS/route optimization
+  // is explicitly OUT OF SCOPE, Locked Decision #10).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS routes (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+      code VARCHAR(30) NOT NULL,
+      name VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (group_id, code)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_group_id ON routes(group_id);`);
+
+  // customers.group_id/route_id — LOCKED §26-1: initially and indefinitely
+  // NULLABLE. No default/fake Group or Route is ever assigned here or
+  // anywhere else — every existing customer keeps group_id/route_id = NULL
+  // after this migration runs, with zero effect on any existing row's
+  // readability or behavior.
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_group_id ON customers(group_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_route_id ON customers(route_id);`);
+
+  // batches.group_id/route_id — the historical-integrity snapshot (Spec
+  // §5, non-negotiable). Captured ONCE at batch-creation time by
+  // routes/batches.js; NO route ever updates these columns after insert —
+  // this mirrors batches.zone_id's own existing, proven write-once
+  // behavior exactly. A later customer Group/Route move (§7/§26-2) can
+  // never rewrite a batches row, by construction: nothing reads or writes
+  // batches.group_id via a live join to customers.group_id.
+  await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_group_id ON batches(group_id);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
