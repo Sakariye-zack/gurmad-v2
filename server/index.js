@@ -26,6 +26,9 @@ const usersRouter = require('./routes/users');
 // zero change to any existing router's mount line below.
 const groupsRouter = require('./routes/groups');
 const routesEntityRouter = require('./routes/routesEntity');
+// Audit & Security Center — additive router, read-only over the existing
+// v2_audit_log. Admin-only (enforced inside the router itself).
+const auditRouter = require('./routes/audit');
 
 const app = express();
 
@@ -101,6 +104,7 @@ app.use('/api/v2/auth', authRouter);
 app.use('/api/v2/users', usersRouter);
 app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/routes', routesEntityRouter);
+app.use('/api/v2/audit', auditRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
