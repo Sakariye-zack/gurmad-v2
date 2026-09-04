@@ -1,0 +1,10 @@
+{
+  "name": "GURMAD Collector",
+  "short_name": "GURMAD Collector",
+  "start_url": "/collector",
+  "scope": "/collector",
+  "display": "standalone",
+  "background_color": "#F7F8F6",
+  "theme_color": "#2F7D3E",
+  "icons": []
+}

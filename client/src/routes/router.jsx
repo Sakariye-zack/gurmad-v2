@@ -50,6 +50,19 @@ import PortalNotifications from '../portal/pages/notifications/PortalNotificatio
 import PortalComplaints from '../portal/pages/complaints/PortalComplaints.jsx';
 import PortalComplaintDetail from '../portal/pages/complaints/PortalComplaintDetail.jsx';
 import PortalComplaintSubmit from '../portal/pages/complaints/PortalComplaintSubmit.jsx';
+// Field Collector Mobile — a fully separate route tree, outside the staff
+// desktop AppShell (its own mobile-first shell), reusing the existing
+// staff AuthContext/JWT exactly as-is (NOT a new auth system, unlike the
+// Customer Portal's own separate identity system above).
+import CollectorApp from '../collector/CollectorApp.jsx';
+import CollectorRequireAuth from '../collector/CollectorRequireAuth.jsx';
+import CollectorShell from '../collector/CollectorShell.jsx';
+import CollectorLoginScreen from '../collector/screens/LoginScreen.jsx';
+import CollectorAssignmentsScreen from '../collector/screens/AssignmentsScreen.jsx';
+import CollectorCustomerDetailScreen from '../collector/screens/CustomerDetailScreen.jsx';
+import CollectorCollectionActionScreen from '../collector/screens/CollectionActionScreen.jsx';
+import CollectorSyncCenterScreen from '../collector/screens/SyncCenterScreen.jsx';
+import CollectorAccountScreen from '../collector/screens/AccountScreen.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
 // current system's activeTab-state pattern (no per-page URLs, no deep
@@ -122,6 +135,27 @@ export const router = createBrowserRouter([
       { path: 'complaints', element: <PortalComplaints /> },
       { path: 'complaints/new', element: <PortalComplaintSubmit /> },
       { path: 'complaints/:id', element: <PortalComplaintDetail /> },
+    ],
+  },
+  // Field Collector Mobile (Offline/Sync's own client consumer) — its own
+  // route tree, its own guard (CollectorRequireAuth), its own mobile-first
+  // shell (CollectorShell). CollectorApp owns the encryption-key lifecycle
+  // and must wrap every authenticated Collector route.
+  { path: '/collector/login', element: <CollectorLoginScreen /> },
+  {
+    path: '/collector',
+    element: <CollectorRequireAuth><CollectorApp /></CollectorRequireAuth>,
+    children: [
+      {
+        element: <CollectorShell />,
+        children: [
+          { index: true, element: <CollectorAssignmentsScreen /> },
+          { path: 'customer/:batchId/:customerId', element: <CollectorCustomerDetailScreen /> },
+          { path: 'action/:batchId/:customerId', element: <CollectorCollectionActionScreen /> },
+          { path: 'sync', element: <CollectorSyncCenterScreen /> },
+          { path: 'account', element: <CollectorAccountScreen /> },
+        ],
+      },
     ],
   },
 ]);
