@@ -987,6 +987,34 @@ async function runMigrations() {
   // carries no data of its own).
   // ============================================================
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_audit_log_created_at ON v2_audit_log(created_at DESC);`);
+
+  // ============================================================
+  // System Settings — Phase 1 (Company Settings). Approved via
+  // GURMAD_V2_System_Settings_Implementation_Specification.md.
+  // Typed, domain-specific table (NOT a generic key/value store) —
+  // mirrors the exchange_rates precedent. Single-row convention (id=1,
+  // enforced at the application layer in routes/settings.js, never here).
+  // No seed INSERT — no fake company information is ever created; the row
+  // is created only by an Admin's own first successful PUT (Spec §14).
+  // No FK to any other table, by design — this table structurally cannot
+  // alter any invoice/payment/debt/cashout/collection/audit record.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS company_settings (
+      id SERIAL PRIMARY KEY,
+      company_name VARCHAR(150),
+      logo_storage_path VARCHAR(500),
+      logo_original_filename VARCHAR(255),
+      logo_mime_type VARCHAR(100),
+      address TEXT,
+      phone VARCHAR(20),
+      email VARCHAR(150),
+      timezone VARCHAR(50),
+      updated_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
