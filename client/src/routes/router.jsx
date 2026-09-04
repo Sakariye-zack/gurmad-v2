@@ -5,6 +5,9 @@ import Login from '../pages/Login.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
 import ZonesListPage from '../pages/zones/ZonesListPage.jsx';
 import ZoneDetailPage from '../pages/zones/ZoneDetailPage.jsx';
+// Group & Group-Based Collection — Change Request.
+import GroupsListPage from '../pages/groups/GroupsListPage.jsx';
+import GroupDetailPage from '../pages/groups/GroupDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -60,6 +63,8 @@ export const router = createBrowserRouter([
       { path: 'customers/:id', element: <CustomerDetailPage /> },
       { path: 'zones', element: <ZonesListPage /> },
       { path: 'zones/:id', element: <ZoneDetailPage /> },
+      { path: 'groups', element: <GroupsListPage /> },
+      { path: 'groups/:id', element: <GroupDetailPage /> },
       { path: 'employees', element: <EmployeesListPage /> },
       { path: 'employees/:id', element: <EmployeeDetailPage /> },
       { path: 'trucks', element: <TrucksListPage /> },

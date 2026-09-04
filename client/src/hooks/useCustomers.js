@@ -8,6 +8,9 @@ export function useCustomers(params = {}) {
   if (params.status) qs.set('status', params.status);
   if (params.customer_type) qs.set('customer_type', params.customer_type);
   if (params.zone_id) qs.set('zone_id', params.zone_id);
+  // Group & Group-Based Collection — Change Request, Spec §9/§16. Reused by
+  // the Group-based batch-creation UI.
+  if (params.group_id) qs.set('group_id', params.group_id);
   if (params.q) qs.set('q', params.q);
   const query = qs.toString();
   return useQuery({

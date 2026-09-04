@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -14,6 +14,10 @@ const NAV = [
   // context (Phase 3 Module 1 discovery: "no legitimate role is excluded
   // from viewing") — ungated. Create/Edit stays admin-only at the page level.
   { to: '/zones', label: 'Zones', icon: MapPinned },
+  // Group & Group-Based Collection — Change Request. Same visibility rule
+  // as Zones (no legitimate role is excluded from viewing); write access
+  // is gated at the page/backend level (admin/gudoomiye, own zone).
+  { to: '/groups', label: 'Groups', icon: Boxes },
   // OD-3: unlike Zones/Customers, Employees is genuinely role-restricted —
   // cashier/collector must not see the staff directory at all, not even the
   // nav entry (matches the backend's requireRole on every employees route).
