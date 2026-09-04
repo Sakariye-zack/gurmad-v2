@@ -973,6 +973,20 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_group_id ON batches(group_id);`);
+
+  // ============================================================
+  // Audit & Security Center. Approved via
+  // GURMAD_V2_Audit_and_Security_Center_Implementation_Specification.md
+  // §18 (index decision, explicitly approved by the owner). This is the
+  // ONLY schema change in this entire CR — no new table, no new column,
+  // no new writer. v2_audit_log itself (Module: User & Access
+  // Administration migration block, above) is untouched. Justified
+  // because ORDER BY created_at DESC is the default sort for every query
+  // the new /api/v2/audit endpoints run — not a speculative index.
+  // Rollback: DROP INDEX IF EXISTS idx_v2_audit_log_created_at (safe,
+  // carries no data of its own).
+  // ============================================================
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_v2_audit_log_created_at ON v2_audit_log(created_at DESC);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
