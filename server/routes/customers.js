@@ -139,7 +139,54 @@ function validateCustomerInput(body, { partial = false } = {}) {
     }
   }
 
+  // Group & Group-Based Collection — Change Request, Implementation Spec
+  // §6. group_id/route_id are OPTIONAL on every create/update (Locked
+  // Decision §26-1: initially and indefinitely nullable, no forced/fake
+  // default). null explicitly clears the field (a customer can be moved
+  // back to ungrouped). Cross-entity validation (Group belongs to the
+  // customer's Zone, Route belongs to the selected Group) happens in the
+  // route handlers below, where the customer's own zone_id is known.
+  if (body.group_id !== undefined) {
+    if (body.group_id === null) {
+      out.group_id = null;
+    } else {
+      const gid = parseStrictId(String(body.group_id));
+      if (gid === null) errors.push('group_id must be a valid group id or null.');
+      else out.group_id = gid;
+    }
+  }
+  if (body.route_id !== undefined) {
+    if (body.route_id === null) {
+      out.route_id = null;
+    } else {
+      const rid = parseStrictId(String(body.route_id));
+      if (rid === null) errors.push('route_id must be a valid route id or null.');
+      else out.route_id = rid;
+    }
+  }
+
   return { errors, data: out };
+}
+
+// Group & Group-Based Collection — Change Request, Implementation Spec §6.
+// Group must belong to the customer's own Zone; Route (if given) must
+// belong to the EFFECTIVE group — `effectiveGroupId` is resolved by the
+// caller as: the new group_id if this request is changing it, otherwise
+// the customer's existing group_id (PUT) or undefined (POST, where
+// group_id is always part of `data` when present). Returns an error
+// message string, or null if valid.
+async function validateGroupRoute(data, zoneId, effectiveGroupId) {
+  if (data.group_id) {
+    const g = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [data.group_id]);
+    if (g.rows.length === 0) return 'group_id does not reference an existing group.';
+    if (g.rows[0].zone_id !== zoneId) return 'The selected group does not belong to this customer\'s zone.';
+  }
+  if (data.route_id) {
+    const r = await pool.query('SELECT group_id FROM routes WHERE id = $1', [data.route_id]);
+    if (r.rows.length === 0) return 'route_id does not reference an existing route.';
+    if (!effectiveGroupId || r.rows[0].group_id !== effectiveGroupId) return 'The selected route does not belong to the selected group.';
+  }
+  return null;
 }
 
 async function assertZoneWritable(user, zoneId) {
@@ -193,6 +240,16 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(`%${req.query.q.trim()}%`);
       const i = params.length;
       where.push(`(c.customer_number ILIKE $${i} OR c.name ILIKE $${i} OR c.business_name ILIKE $${i} OR c.phone ILIKE $${i})`);
+    }
+    // Group & Group-Based Collection — Change Request, Implementation Spec
+    // §9/§16: reused by the Group-based batch-creation UI (client-side
+    // customer selection filtered by group_id, mirroring the existing
+    // zone_id/customer_type filters already on this endpoint).
+    if (req.query.group_id) {
+      const gid = parseStrictId(req.query.group_id);
+      if (gid === null) return res.status(400).json({ error: { message: 'Invalid group_id filter.', code: 'VALIDATION' } });
+      params.push(gid);
+      where.push(`c.group_id = $${params.length}`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -277,6 +334,12 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
     return res.status(403).json({ error: { message: 'You cannot create a customer outside your assigned zone.', code: 'FORBIDDEN' } });
   }
 
+  // Group & Group-Based Collection — Change Request, Implementation Spec
+  // §6: Group must belong to the selected Zone; Route (if given) must
+  // belong to the selected Group. Both are optional (§26-1).
+  const groupRouteError = await validateGroupRoute(data, data.zone_id, data.group_id);
+  if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -285,14 +348,14 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
          address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode,
-         fee, notes, registered_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         fee, notes, registered_by, group_id, route_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        RETURNING *`,
       [customerNumber, data.customer_type, data.name, data.business_name ?? null, data.phone,
        data.alternate_phone ?? null, data.whatsapp ?? null, data.email ?? null, data.address_line ?? null,
        data.zone_id, data.sub_zone ?? null, data.lat ?? null, data.lng ?? null, data.commercial_shift ?? null,
        data.collection_frequency ?? null, data.collection_mode ?? null, data.fee ?? null, data.notes ?? null,
-       req.user.id]
+       req.user.id, data.group_id ?? null, data.route_id ?? null]
     );
     await client.query('COMMIT');
     const customer = result.rows[0];
@@ -338,6 +401,16 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
       return res.status(403).json({ error: { message: 'You cannot transfer a customer into a zone you do not manage.', code: 'FORBIDDEN' } });
     }
 
+    // Group & Group-Based Collection — Change Request, Implementation Spec
+    // §6/§7. effectiveZoneId/effectiveGroupId resolve what this update
+    // leaves in effect (the new value if this request changes it,
+    // otherwise the customer's current one) so a partial update (e.g.
+    // route_id only) is still validated against the correct zone/group.
+    const effectiveZoneId = data.zone_id !== undefined ? data.zone_id : current.zone_id;
+    const effectiveGroupId = data.group_id !== undefined ? data.group_id : current.group_id;
+    const groupRouteError = await validateGroupRoute(data, effectiveZoneId, effectiveGroupId);
+    if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+
     const fields = Object.keys(data);
     const setSql = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
     const values = fields.map((f) => data[f]);
@@ -351,6 +424,19 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.update', entityType: 'customer', entityId: customer.id, before: current, after: customer });
     if (data.zone_id !== undefined && data.zone_id !== current.zone_id) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.zone_change', entityType: 'customer', entityId: customer.id, before: { zone_id: current.zone_id }, after: { zone_id: customer.zone_id } });
+    }
+    // Group & Group-Based Collection — Change Request, Implementation Spec
+    // §7/§20/§26-2. A movement is JUST this audited field update — no
+    // reconciliation of any existing batch/task is performed anywhere in
+    // this route (Locked Decision: automatic active-batch/task
+    // reconciliation is explicitly OUT OF SCOPE). Historical batches.group_id
+    // is never touched here, since nothing in this codebase writes it from
+    // a live join to customers.group_id (see routes/batches.js).
+    if (data.group_id !== undefined && data.group_id !== current.group_id) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.group_change', entityType: 'customer', entityId: customer.id, before: { group_id: current.group_id }, after: { group_id: customer.group_id } });
+    }
+    if (data.route_id !== undefined && data.route_id !== current.route_id) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.route_change', entityType: 'customer', entityId: customer.id, before: { route_id: current.route_id }, after: { route_id: customer.route_id } });
     }
     res.json({ data: customer });
   } catch (err) {
