@@ -143,10 +143,21 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
   if (group_id !== undefined && group_id !== null) {
     gid = parseStrictId(String(group_id));
     if (gid === null) return res.status(400).json({ error: { message: 'Invalid group_id.', code: 'VALIDATION' } });
-    const groupRes = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [gid]);
+    const groupRes = await pool.query('SELECT zone_id, status FROM groups WHERE id = $1', [gid]);
     if (groupRes.rows.length === 0) return res.status(400).json({ error: { message: 'group_id does not reference an existing group.', code: 'VALIDATION' } });
     if (groupRes.rows[0].zone_id !== zid) {
       return res.status(400).json({ error: { message: 'The selected group does not belong to this batch\'s zone.', code: 'VALIDATION' } });
+    }
+    // Hardening H-1: an inactive Group must not be usable to start new
+    // operational work — mirrors the existing "inactive batch/employee/
+    // truck can't be assigned" lifecycle principle already enforced
+    // elsewhere in Collection Operations. Found live during Hardening
+    // (a deactivated Group could still resolve eligible customers and
+    // create a batch); not a security/DR-7/zone-isolation bypass, but a
+    // real lifecycle-enforcement gap, fixed within this file's own
+    // already-authorized scope.
+    if (groupRes.rows[0].status !== 'active') {
+      return res.status(400).json({ error: { message: 'This group is inactive and cannot be used to create a batch.', code: 'VALIDATION' } });
     }
     if (ids.length === 0) {
       // No explicit customer_ids supplied — auto-populate from the Group,
