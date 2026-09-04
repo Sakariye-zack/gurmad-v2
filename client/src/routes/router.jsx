@@ -8,6 +8,8 @@ import ZoneDetailPage from '../pages/zones/ZoneDetailPage.jsx';
 // Group & Group-Based Collection — Change Request.
 import GroupsListPage from '../pages/groups/GroupsListPage.jsx';
 import GroupDetailPage from '../pages/groups/GroupDetailPage.jsx';
+// Audit & Security Center.
+import AuditCenterListPage from '../pages/audit/AuditCenterListPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -87,6 +89,7 @@ export const router = createBrowserRouter([
       { path: 'complaints', element: <ComplaintsListPage /> },
       { path: 'complaints/:id', element: <ComplaintDetailPage /> },
       { path: 'users', element: <UsersListPage /> },
+      { path: 'audit', element: <AuditCenterListPage /> },
       { path: 'account/security', element: <AccountSecurity /> },
     ],
   },
