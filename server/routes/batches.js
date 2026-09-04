@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment } = require('../lib/collectionValidation');
+const { validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
 
 const router = express.Router();
 
@@ -660,24 +660,21 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const bcRes = await client.query('SELECT * FROM batch_customers WHERE batch_id = $1 AND customer_id = $2 FOR UPDATE', [id, customerId]);
-      if (bcRes.rows.length === 0) {
+      // Canonical status-transition logic — extracted (Offline/Sync CR) into
+      // lib/collectionValidation.js so it is reusable by the future sync
+      // route without a second copy of this business rule. This route
+      // retains transaction ownership (BEGIN/COMMIT/ROLLBACK/release) and
+      // calls logAudit() itself, after COMMIT, exactly as before extraction.
+      const result = await applyBatchCustomerStatusChange(client, { batchId: id, customerId, status, reason, note, lat, lng });
+      if (!result.ok) {
         await client.query('ROLLBACK');
-        return res.status(404).json({ error: { message: 'This customer is not in this batch.', code: 'NOT_FOUND' } });
+        if (result.code === 'NOT_FOUND') return res.status(404).json({ error: { message: result.error, code: 'NOT_FOUND' } });
+        if (result.code === 'CONFLICT') return res.status(409).json({ error: { message: result.error, code: 'CONFLICT' } });
+        return res.status(400).json({ error: { message: result.error, code: result.code } });
       }
-      const bc = bcRes.rows[0];
-      if (bc.status !== 'pending') {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ error: { message: `This customer is already ${bc.status} in this batch.`, code: 'CONFLICT' } });
-      }
-      const updated = await client.query(
-        `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
-         WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-        [status, reason || null, note || null, lat || null, lng || null, id, customerId]
-      );
       await client.query('COMMIT');
-      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch_customer.status_change', entityType: 'batch_customer', entityId: bc.id, before: bc, after: updated.rows[0] });
-      res.json({ data: updated.rows[0] });
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch_customer.status_change', entityType: 'batch_customer', entityId: result.before.id, before: result.before, after: result.after });
+      res.json({ data: result.after });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

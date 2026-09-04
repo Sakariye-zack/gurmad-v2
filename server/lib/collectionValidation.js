@@ -199,7 +199,55 @@ async function assertCapacityForTruckAssignment(batchId, truckId, client = pool)
   return { ok: true };
 }
 
+// ---------- Batch customer status transition (Offline/Sync CR — extraction) ----------
+//
+// Extracted, behavior-preserving, from the existing PUT
+// /:id/customers/:customerId/status route in routes/batches.js. This is
+// the canonical row-lock/state-transition logic for a batch_customer
+// status change (serviced/missed/skipped) — the ONLY implementation of
+// this rule anywhere in the codebase after this extraction.
+//
+// Transaction ownership: the CALLER owns pool.connect()/BEGIN/COMMIT/
+// ROLLBACK/release() — this function issues its two queries (the row
+// lock and the update) against the client it is given and never opens,
+// commits, or rolls back a transaction itself, and never releases the
+// client. This mirrors the existing assertCapacityForAddition(id, qty,
+// client) convention already established in this same file.
+//
+// Audit: this function does NOT call logAudit() — the caller does, AFTER
+// its own COMMIT, exactly matching the pre-extraction behavior (today,
+// logAudit() runs after COMMIT, not before). This function returns
+// {before, after} so the caller has what it needs for that call.
+//
+// DR-1 collector-ownership validation is NOT performed here — it stays
+// in the calling route, BEFORE the transaction opens, exactly as today.
+// This function assumes the caller has already authorized the request.
+async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng }) {
+  if (!['serviced', 'missed', 'skipped'].includes(status)) {
+    return { ok: false, code: 'VALIDATION', error: 'status must be one of: serviced, missed, skipped.' };
+  }
+  if (status === 'missed' && !reason) {
+    return { ok: false, code: 'VALIDATION', error: 'A reason is required to mark a customer Missed.' };
+  }
+
+  const bcRes = await client.query('SELECT * FROM batch_customers WHERE batch_id = $1 AND customer_id = $2 FOR UPDATE', [batchId, customerId]);
+  if (bcRes.rows.length === 0) {
+    return { ok: false, code: 'NOT_FOUND', error: 'This customer is not in this batch.' };
+  }
+  const bc = bcRes.rows[0];
+  if (bc.status !== 'pending') {
+    return { ok: false, code: 'CONFLICT', error: `This customer is already ${bc.status} in this batch.`, currentStatus: bc.status };
+  }
+  const updated = await client.query(
+    `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+     WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
+    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+  );
+  return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
+}
+
 module.exports = {
   validateResourceAssignment, validateDr7ForCollector, validateResourceEligibility,
   computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment,
+  applyBatchCustomerStatusChange,
 };
