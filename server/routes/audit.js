@@ -7,6 +7,23 @@ const { toCsv } = require('../lib/reportsCalculations');
 
 const router = express.Router();
 
+// Hardening H-A1: CSV formula injection (CWE-1236). toCsv() (reused,
+// unmodified, lives in the CLOSED Reports module) double-quotes every
+// cell, but a leading =/+/-/@ inside a quoted cell is STILL interpreted
+// as a formula by Excel/Sheets/LibreOffice — quoting alone does not
+// neutralize it. Found live this Hardening pass: an actor_username of
+// "=cmd|calc!A1" (an attacker-controlled value — actor_username is
+// user-supplied at account-creation time, User & Access Administration,
+// closed and untouched here) round-tripped into the CSV unescaped. Fixed
+// entirely within this file — toCsv() itself is not modified, so no
+// closed-module (Reports) change was needed: values are pre-sanitized
+// before being handed to the existing, unmodified toCsv() helper.
+const FORMULA_LEAD_RE = /^[=+\-@]/;
+function csvFormulaSafe(value) {
+  if (typeof value !== 'string') return value;
+  return FORMULA_LEAD_RE.test(value) ? `'${value}` : value;
+}
+
 // Audit & Security Center — Implementation Spec (Phase 1). Admin-only,
 // company-wide, read-only over the EXISTING v2_audit_log (no second audit
 // table, no second writer — logAudit() in db.js is untouched by this
@@ -155,7 +172,10 @@ router.get('/export', async (req, res) => {
     const result = await pool.query(`SELECT * FROM v2_audit_log ${whereSql} ORDER BY created_at DESC`, params);
     const hasClassificationFilter = req.query.category !== undefined || req.query.severity !== undefined || req.query.success !== undefined;
     const rows = (hasClassificationFilter ? applyClassificationFilters(result.rows, req.query) : result.rows).map(shapeRow);
-    const csv = toCsv(rows, [
+    // Sanitize every string cell against CSV formula injection (H-A1)
+    // before handing off to the existing, unmodified toCsv() helper.
+    const safeRows = rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, csvFormulaSafe(v)])));
+    const csv = toCsv(safeRows, [
       { key: 'id', label: 'ID' },
       { key: 'created_at', label: 'Timestamp' },
       { key: 'actor_username', label: 'Actor' },
