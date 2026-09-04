@@ -31,6 +31,9 @@ const routesEntityRouter = require('./routes/routesEntity');
 const auditRouter = require('./routes/audit');
 // System Settings — additive router, Admin-only Company Settings.
 const settingsRouter = require('./routes/settings');
+// Offline/Sync — Wave 1. Additive router: assignments read + sync-submission
+// write, reusing the canonical applyBatchCustomerStatusChange (commit 8e9ac5a).
+const collectionSyncRouter = require('./routes/collectionSync');
 
 const app = express();
 
@@ -108,6 +111,7 @@ app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);
 app.use('/api/v2/settings', settingsRouter);
+app.use('/api/v2/collection-sync', collectionSyncRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
