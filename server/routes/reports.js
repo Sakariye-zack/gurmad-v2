@@ -287,4 +287,71 @@ router.get('/:category/export.csv', authenticateToken, async (req, res) => {
   }
 });
 
+// ---------- Group & Group-Based Collection — Change Request. Implementation
+// Spec §13 (Reporting, approved scope). Additive endpoints only — nothing
+// above this line is modified. Both queries join through batches.group_id
+// (the historical-integrity snapshot, Spec §5) — NEVER through a live join
+// to customers.group_id — so a later customer Group move never changes an
+// already-reported number for a past batch. Financial attribution is
+// deliberately untouched: neither endpoint reads invoices/payments. ----------
+router.get('/groups/:id/summary', authenticateToken, requireRole(...OPERATIONAL_ROLES), async (req, res) => {
+  const groupId = parseStrictId(req.params.id);
+  if (groupId === null) return res.status(400).json({ error: { message: 'Invalid group id.', code: 'VALIDATION' } });
+  try {
+    const groupRes = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [groupId]);
+    if (groupRes.rows.length === 0) return res.status(404).json({ error: { message: 'Group not found.', code: 'NOT_FOUND' } });
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && groupRes.rows[0].zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this group.', code: 'FORBIDDEN' } });
+    }
+    const result = await pool.query(
+      `SELECT
+         COUNT(bc.id)::int AS assigned,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'serviced')::int    AS serviced,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'missed')::int      AS missed,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'skipped')::int     AS skipped,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'rescheduled')::int AS rescheduled,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'pending')::int     AS remaining,
+         ROUND(100.0 * COUNT(bc.id) FILTER (WHERE bc.status = 'serviced') / NULLIF(COUNT(bc.id), 0), 1) AS completion_pct
+       FROM batches b
+       JOIN batch_customers bc ON bc.batch_id = b.id
+       WHERE b.group_id = $1`,
+      [groupId]
+    );
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load group summary.', code: 'INTERNAL' } });
+  }
+});
+
+router.get('/groups/:id/collector-performance', authenticateToken, requireRole(...OPERATIONAL_ROLES), async (req, res) => {
+  const groupId = parseStrictId(req.params.id);
+  if (groupId === null) return res.status(400).json({ error: { message: 'Invalid group id.', code: 'VALIDATION' } });
+  try {
+    const groupRes = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [groupId]);
+    if (groupRes.rows.length === 0) return res.status(404).json({ error: { message: 'Group not found.', code: 'NOT_FOUND' } });
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && groupRes.rows[0].zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this group.', code: 'FORBIDDEN' } });
+    }
+    const result = await pool.query(
+      `SELECT e.id AS collector_id, e.name AS collector_name,
+         COUNT(bc.id)::int AS assigned,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'serviced')::int AS serviced,
+         COUNT(bc.id) FILTER (WHERE bc.status = 'missed')::int   AS missed
+       FROM batches b
+       JOIN tasks t ON t.batch_id = b.id
+       JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'collector'
+       JOIN employees e ON e.id = tr.resource_id
+       LEFT JOIN batch_customers bc ON bc.batch_id = b.id
+       WHERE b.group_id = $1
+       GROUP BY e.id, e.name ORDER BY e.name`,
+      [groupId]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load group collector performance.', code: 'INTERNAL' } });
+  }
+});
+
 module.exports = router;
