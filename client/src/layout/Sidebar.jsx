@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 
@@ -60,6 +60,8 @@ const NAV = [
   { to: '/users', label: 'Users & Access', icon: ShieldCheck, roles: ['admin'] },
   // Audit & Security Center — Phase 1, D1: Admin-only, company-wide.
   { to: '/audit', label: 'Audit & Security', icon: History, roles: ['admin'] },
+  // System Settings — Phase 1, D1: Admin-only, company-wide.
+  { to: '/settings', label: 'System Settings', icon: SettingsIcon, roles: ['admin'] },
   // Account Security is self-service — every authenticated staff member
   // manages their own password/sessions, so this item is intentionally
   // ungated (no `roles`), matching the backend's own /v2/auth/* routes,
