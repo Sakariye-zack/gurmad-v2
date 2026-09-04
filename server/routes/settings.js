@@ -144,26 +144,25 @@ router.put('/company', async (req, res) => {
     const existing = await pool.query('SELECT * FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
     const before = existing.rows[0] || null;
 
-    let result;
-    if (before) {
-      const fields = Object.keys(data);
-      const setSql = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
-      const values = fields.map((f) => data[f]);
-      values.push(SETTINGS_ROW_ID);
-      result = await pool.query(
-        `UPDATE company_settings SET ${setSql}, updated_by = $${values.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
-        [...values, req.user.id]
-      );
-    } else {
-      const fields = Object.keys(data);
-      const cols = ['id', ...fields, 'updated_by'];
-      const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-      const values = [SETTINGS_ROW_ID, ...fields.map((f) => data[f]), req.user.id];
-      result = await pool.query(
-        `INSERT INTO company_settings (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`,
-        values
-      );
-    }
+    // Hardening H-S1: the original SELECT-then-branch-to-INSERT-or-UPDATE
+    // had a real race window on first-ever save — two truly concurrent
+    // PUT requests could both see "no row exists" and both attempt
+    // INSERT id=1, the second throwing an unhandled 23505 (duplicate key)
+    // -> a bare 500. Fixed with a single atomic INSERT ... ON CONFLICT
+    // (id) DO UPDATE — Postgres itself resolves the race, so no
+    // application-level lock/transaction is needed and no duplicate row
+    // can ever be created (re-confirmed live under an 8-way concurrent
+    // first-save race, see Hardening Report).
+    const fields = Object.keys(data);
+    const insertCols = ['id', ...fields, 'updated_by'];
+    const insertPlaceholders = insertCols.map((_, i) => `$${i + 1}`).join(', ');
+    const insertValues = [SETTINGS_ROW_ID, ...fields.map((f) => data[f]), req.user.id];
+    const updateSql = [...fields.map((f) => `${f} = EXCLUDED.${f}`), 'updated_by = EXCLUDED.updated_by', 'updated_at = CURRENT_TIMESTAMP'].join(', ');
+    const result = await pool.query(
+      `INSERT INTO company_settings (${insertCols.join(', ')}) VALUES (${insertPlaceholders})
+       ON CONFLICT (id) DO UPDATE SET ${updateSql} RETURNING *`,
+      insertValues
+    );
 
     const after = result.rows[0];
     await logAudit({
@@ -200,18 +199,17 @@ router.post('/company/logo', (req, res, next) => {
     const before = existing.rows[0] || null;
     const oldPath = before?.logo_storage_path ? path.join(UPLOAD_DIR, before.logo_storage_path) : null;
 
-    let result;
-    if (before) {
-      result = await pool.query(
-        `UPDATE company_settings SET logo_storage_path = $1, logo_original_filename = $2, logo_mime_type = $3, updated_by = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING *`,
-        [req.file.filename, req.file.originalname, req.file.mimetype, req.user.id, SETTINGS_ROW_ID]
-      );
-    } else {
-      result = await pool.query(
-        `INSERT INTO company_settings (id, logo_storage_path, logo_original_filename, logo_mime_type, updated_by) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-        [SETTINGS_ROW_ID, req.file.filename, req.file.originalname, req.file.mimetype, req.user.id]
-      );
-    }
+    // Hardening H-S1 (same fix as PUT /company): atomic upsert, no
+    // SELECT-then-branch race window on first-ever logo upload.
+    const result = await pool.query(
+      `INSERT INTO company_settings (id, logo_storage_path, logo_original_filename, logo_mime_type, updated_by)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET
+         logo_storage_path = EXCLUDED.logo_storage_path, logo_original_filename = EXCLUDED.logo_original_filename,
+         logo_mime_type = EXCLUDED.logo_mime_type, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [SETTINGS_ROW_ID, req.file.filename, req.file.originalname, req.file.mimetype, req.user.id]
+    );
 
     // Delete the old file only AFTER the new file is on disk and the DB
     // row is successfully updated — never before, so a failed update
