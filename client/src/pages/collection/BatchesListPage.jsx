@@ -6,6 +6,7 @@ import RoleGate from '../../components/RoleGate.jsx';
 import CapacityPanel from '../../components/collection/CapacityPanel.jsx';
 import { useBatches, useCreateBatch, useCycles } from '../../hooks/useCollectionOps.js';
 import { useZonesList, useCustomers } from '../../hooks/useCustomers.js';
+import { useGroups, useGroupEligibleCustomers } from '../../hooks/useGroups.js';
 
 const STATUS_LABELS = { draft: 'Draft', assigned: 'Assigned', in_progress: 'In Progress', partially_completed: 'Partially Completed', completed: 'Completed', cancelled: 'Cancelled' };
 
@@ -85,20 +86,31 @@ function BatchFormContent({ onClose }) {
   const [shift, setShift] = useState('day');
   const [startDate, setStartDate] = useState('');
   const [selectedCustomers, setSelectedCustomers] = useState([]);
+  // Group & Group-Based Collection — Change Request, Spec §9/§22. A Group
+  // picker + Customer Type filter, as an alternative selection path to the
+  // existing hand-picked customer list below — reuses the exact same
+  // POST /batches call and the exact same DR-7/cross-zone validation
+  // (Spec §11: "DR-7 remains authoritative" regardless of selection path).
+  const [groupId, setGroupId] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [error, setError] = useState('');
   const { data: zonesData } = useZonesList();
   const { data: cyclesData } = useCycles({ is_active: true });
+  const { data: groupsData } = useGroups({ zone_id: zoneId || undefined, status: 'active' });
+  const { data: eligibleData } = useGroupEligibleCustomers(groupId || undefined, typeFilter);
   // Only allow selecting customers once a zone is chosen — a batch's
   // customers must belong to its own zone (found and fixed during Module 5
   // browser QA, alongside the matching backend check). useCustomers has no
   // `enabled` gate of its own, so the empty-zone case is handled by simply
   // not rendering any options below, not by skipping the fetch.
-  const { data: customersData } = useCustomers({ zone_id: zoneId || undefined, customer_type: customerType });
+  const { data: customersData } = useCustomers({ zone_id: zoneId || undefined, customer_type: customerType, group_id: groupId || undefined });
   const createBatch = useCreateBatch();
   const toast = useToast();
   const zones = zonesData?.data || [];
   const cycles = (cyclesData?.data || []).filter((c) => !zoneId || String(c.zone_id) === zoneId);
+  const groups = zoneId ? (groupsData?.data || []) : [];
   const eligibleCustomers = zoneId ? (customersData?.data || []) : [];
+  const eligiblePreview = groupId ? eligibleData?.data : null;
 
   function toggleCustomer(id) {
     setSelectedCustomers((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -112,7 +124,12 @@ function BatchFormContent({ onClose }) {
       const result = await createBatch.mutateAsync({
         zone_id: parseInt(zoneId, 10), cycle_id: parseInt(cycleId, 10), customer_type: customerType,
         commercial_shift: customerType === 'commercial' ? shift : undefined, start_date: startDate,
-        customer_ids: selectedCustomers,
+        // Group-based path: pass group_id + customer_type_filter and let
+        // the backend resolve eligible customers (Spec §9 step 2) — no
+        // explicit customer_ids, so DR-7/cross-zone validation runs on the
+        // server-resolved set exactly as it would for a hand-picked one.
+        // Manual path (no group selected): customer_ids as before.
+        ...(groupId ? { group_id: parseInt(groupId, 10), customer_type_filter: typeFilter } : { customer_ids: selectedCustomers }),
       });
       toast.success(`${result.data.batch_code} created.`);
       onClose();
@@ -149,6 +166,29 @@ function BatchFormContent({ onClose }) {
           </select>
         </label>
         <label style={fieldStyle}>
+          <span style={labelStyle}>Group (optional) — resolve customers by Group instead of picking them below</span>
+          <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setSelectedCustomers([]); }} style={inputStyle} disabled={!zoneId}>
+            <option value="">{zoneId ? 'No group — pick customers manually' : 'Select a zone first'}</option>
+            {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
+          </select>
+        </label>
+        {groupId && (
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Customer type filter</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {['all', 'residential', 'commercial'].map((t) => (
+                <button type="button" key={t} onClick={() => setTypeFilter(t)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '13px', cursor: 'pointer', textTransform: 'capitalize', border: `1px solid ${typeFilter === t ? 'var(--brand)' : 'var(--border)'}`, background: typeFilter === t ? 'var(--success-bg)' : 'var(--surface)', color: typeFilter === t ? 'var(--brand)' : 'var(--text-muted)' }}>{t}</button>
+              ))}
+            </div>
+            {eligiblePreview && (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {eligiblePreview.count} eligible customer(s) — {eligiblePreview.customer_type_breakdown.residential} residential, {eligiblePreview.customer_type_breakdown.commercial} commercial.
+                This filter narrows the candidate list only — DR-7 (all-Residential or all-Commercial per batch) is still enforced when the batch is created.
+              </span>
+            )}
+          </label>
+        )}
+        <label style={fieldStyle}>
           <span style={labelStyle}>Customer type</span>
           <div style={{ display: 'flex', gap: '8px' }}>
             {['residential', 'commercial'].map((t) => (
@@ -169,19 +209,21 @@ function BatchFormContent({ onClose }) {
           <span style={labelStyle}>Start date</span>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} />
         </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Customers ({selectedCustomers.length} selected)</span>
-          <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px' }}>
-            {!zoneId && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select a zone to see eligible customers.</span>}
-            {zoneId && eligibleCustomers.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No {customerType} customers in this zone.</span>}
-            {eligibleCustomers.map((c) => (
-              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '13px' }}>
-                <input type="checkbox" checked={selectedCustomers.includes(c.id)} onChange={() => toggleCustomer(c.id)} />
-                {c.customer_number} — {c.business_name || c.name}
-              </label>
-            ))}
-          </div>
-        </label>
+        {!groupId && (
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Customers ({selectedCustomers.length} selected)</span>
+            <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px' }}>
+              {!zoneId && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select a zone to see eligible customers.</span>}
+              {zoneId && eligibleCustomers.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No {customerType} customers in this zone.</span>}
+              {eligibleCustomers.map((c) => (
+                <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '13px' }}>
+                  <input type="checkbox" checked={selectedCustomers.includes(c.id)} onChange={() => toggleCustomer(c.id)} />
+                  {c.customer_number} — {c.business_name || c.name}
+                </label>
+              ))}
+            </div>
+          </label>
+        )}
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>

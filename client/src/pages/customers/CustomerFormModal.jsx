@@ -2,11 +2,16 @@ import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
+import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 
 const EMPTY = {
   customer_type: 'residential', name: '', business_name: '', phone: '', alternate_phone: '',
   whatsapp: '', email: '', address_line: '', zone_id: '', sub_zone: '', commercial_shift: '',
   collection_frequency: '', collection_mode: '', fee: '', notes: '',
+  // Group & Group-Based Collection — Change Request, Spec §6. Both
+  // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
+  // §26-1: no forced/fake default, no required-field validation added).
+  group_id: '', route_id: '',
 };
 
 function toFormState(customer) {
@@ -18,6 +23,7 @@ function toFormState(customer) {
     address_line: customer.address_line || '', zone_id: String(customer.zone_id || ''), sub_zone: customer.sub_zone || '',
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
+    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '',
   };
 }
 
@@ -43,11 +49,26 @@ function CustomerFormModalContent({ onClose, customer }) {
   const checkDuplicate = useCheckDuplicate();
   const { data: zonesData } = useZonesList();
   const zones = zonesData?.data || [];
+  // Group & Group-Based Collection — Change Request, Spec §6: Group scoped
+  // to the selected Zone, Route scoped to the selected Group — cascading
+  // selectors, same pattern as Zone->Sub-zone already used above.
+  const { data: groupsData } = useGroups({ zone_id: form.zone_id || undefined, status: 'active' });
+  const groups = form.zone_id ? (groupsData?.data || []) : [];
+  const { data: routesData } = useRoutesForGroup(form.group_id || undefined);
+  const routes = form.group_id ? (routesData?.data || []).filter((r) => r.status === 'active') : [];
   const busy = createCustomer.isPending || updateCustomer.isPending;
   const isCommercial = form.customer_type === 'commercial';
 
   function set(field, value) {
-    setForm((f) => ({ ...f, [field]: value }));
+    setForm((f) => {
+      const next = { ...f, [field]: value };
+      // Changing Zone invalidates any previously-selected Group/Route;
+      // changing Group invalidates any previously-selected Route — a
+      // stale, no-longer-valid selection must never be silently submitted.
+      if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; }
+      if (field === 'group_id') { next.route_id = ''; }
+      return next;
+    });
     if (duplicateMatches) { setDuplicateMatches(null); setDuplicateAcknowledged(false); }
   }
 
@@ -93,6 +114,8 @@ function CustomerFormModalContent({ onClose, customer }) {
       sub_zone: form.sub_zone.trim() || null, commercial_shift: isCommercial ? (form.commercial_shift || null) : null,
       collection_frequency: form.collection_frequency.trim() || null, collection_mode: form.collection_mode.trim() || null,
       fee: form.fee === '' ? null : parseFloat(form.fee), notes: form.notes.trim() || null,
+      group_id: form.group_id ? parseInt(form.group_id, 10) : null,
+      route_id: form.route_id ? parseInt(form.route_id, 10) : null,
     };
     try {
       if (isEdit) {
@@ -185,6 +208,21 @@ function CustomerFormModalContent({ onClose, customer }) {
           </Field>
           <Field label="Sub-zone / area">
             <input value={form.sub_zone} onChange={(e) => set('sub_zone', e.target.value)} style={inputStyle} />
+          </Field>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <Field label="Group (optional)" hint="Not required — a customer can be Zone-only.">
+            <select value={form.group_id} onChange={(e) => set('group_id', e.target.value)} style={inputStyle} disabled={!form.zone_id}>
+              <option value="">{form.zone_id ? 'No group' : 'Select a zone first'}</option>
+              {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
+            </select>
+          </Field>
+          <Field label="Route (optional)">
+            <select value={form.route_id} onChange={(e) => set('route_id', e.target.value)} style={inputStyle} disabled={!form.group_id}>
+              <option value="">{form.group_id ? 'No route' : 'Select a group first'}</option>
+              {routes.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
+            </select>
           </Field>
         </div>
 
