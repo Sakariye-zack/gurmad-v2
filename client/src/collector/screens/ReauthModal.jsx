@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Modal, Button } from '../../components/ui/index.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
-import { deriveKeyFromToken } from '../lib/collectorCrypto.js';
+import { deriveKeyForReauth } from '../lib/collectorCrypto.js';
+import { reencryptAllRows } from '../lib/collectorStore.js';
 import { apiClient } from '../../lib/apiClient.js';
 
 // Field Collector Mobile — Implementation Spec §6.6/§17. Preserves the
@@ -23,11 +24,13 @@ export default function ReauthModal({ open, onSuccess }) {
         setError('2FA is required — please use the main login screen.');
         return;
       }
-      // Re-derive the encryption key from the fresh token so newly-queued
-      // actions captured after this point encrypt correctly; previously-
-      // orphaned entries (if any) remain orphaned per §9 — a reauth event
-      // is not guaranteed to recover a key lost to an intervening reload.
-      await deriveKeyFromToken(apiClient.getToken());
+      // H-FC-1 fix: rotate the encryption key rather than blindly re-deriving
+      // it — carries the existing queue/cache forward, re-encrypted under the
+      // new key, but ONLY when the reauthenticating identity matches the
+      // session the current key belongs to (never across a different
+      // collector's login on the same device — that case is intentionally
+      // left orphaned, preserving cross-collector isolation).
+      await deriveKeyForReauth(apiClient.getToken(), reencryptAllRows);
       setUsername(''); setPassword('');
       onSuccess();
     } catch (err) {

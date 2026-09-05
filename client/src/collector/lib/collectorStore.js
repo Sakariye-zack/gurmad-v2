@@ -146,6 +146,45 @@ export async function getCachedAssignments() {
   return decryptValue(row.encrypted);
 }
 
+// ---------- Key rotation (Hardening H-FC-1) ----------
+
+// Re-encrypts every row in both stores using the supplied decrypt/encrypt
+// functions (bound to the OLD and NEW keys respectively by
+// collectorCrypto.deriveKeyForReauth). A row that the OLD key itself can't
+// decrypt (already-orphaned before this reauth) is left untouched — this
+// routine only carries forward what was genuinely readable a moment ago,
+// never invents recovery of already-lost data.
+export async function reencryptAllRows(decryptWithOld, encryptWithNew) {
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(QUEUE_STORE, 'readwrite');
+    const store = tx.objectStore(QUEUE_STORE);
+    const req = store.getAll();
+    req.onsuccess = async () => {
+      for (const row of req.result) {
+        const plain = await decryptWithOld(row.encrypted);
+        if (plain) store.put({ action_uuid: row.action_uuid, encrypted: await encryptWithNew(plain) });
+      }
+      resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(CACHE_STORE, 'readwrite');
+    const store = tx.objectStore(CACHE_STORE);
+    const req = store.get('assignments');
+    req.onsuccess = async () => {
+      const row = req.result;
+      if (row) {
+        const plain = await decryptWithOld(row.encrypted);
+        if (plain) store.put({ key: 'assignments', encrypted: await encryptWithNew(plain) });
+      }
+      resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 // ---------- Purge (logout, §6.8) ----------
 
 export async function purgeAllLocalData() {

@@ -48,6 +48,19 @@ export default function CollectorApp() {
     navigate('/collector');
   };
 
+  // Hardening finding (paired with H-FC-1): the orphan check previously ran
+  // only on this component's own mount — a reauthentication event (same-
+  // collector rotation via deriveKeyForReauth, or a genuinely different
+  // collector logging in on the same device) can change what's decryptable
+  // AFTER mount, and that change was never re-surfaced to the collector.
+  // Re-checking here closes that gap without adding any new UI surface.
+  const handleReauthSuccess = async () => {
+    setShowReauth(false);
+    const { orphanedCount: o } = await getAllQueueEntries();
+    setOrphanedCount(o);
+    if (o > 0) setShowOrphanNotice(true);
+  };
+
   if (!keyReady) return null; // brief, near-instant — key derivation is fast
 
   return (
@@ -55,7 +68,7 @@ export default function CollectorApp() {
       {showOrphanNotice && (
         <OrphanBanner count={orphanedCount} onDismiss={() => setShowOrphanNotice(false)} />
       )}
-      <ReauthModal open={showReauth} onSuccess={() => setShowReauth(false)} />
+      <ReauthModal open={showReauth} onSuccess={handleReauthSuccess} />
       <Outlet />
     </SyncQueueProvider>
   );

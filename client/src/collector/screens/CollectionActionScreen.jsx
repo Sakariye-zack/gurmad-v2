@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Camera, ChevronLeft } from 'lucide-react';
-import { Button, LoadingState, useToast } from '../../components/ui/index.js';
+import { Button, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { getCachedAssignments } from '../lib/collectorStore.js';
 import { useSyncQueueContext } from '../SyncQueueContext.jsx';
 
@@ -40,7 +40,13 @@ export default function CollectionActionScreen() {
   }, [batchId, customerId]);
 
   if (customer === undefined) return <LoadingState />;
-  if (customer === null) return null;
+  // Hardening finding (P3): a stale/tampered/directly-typed URL for a
+  // batch/customer not in this collector's own cached assignments
+  // previously rendered a blank, dead-end page (no error, no way back).
+  // No data is at risk either way (the lookup is scoped to this
+  // collector's own cache — see CustomerDetailScreen's identical guard),
+  // this is a UX/recovery fix only.
+  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector')} />;
 
   const capturePhoto = async () => {
     try {
