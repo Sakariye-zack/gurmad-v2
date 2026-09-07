@@ -14,6 +14,8 @@ import AuditCenterListPage from '../pages/audit/AuditCenterListPage.jsx';
 import SettingsPage from '../pages/settings/SettingsPage.jsx';
 // Staff Notifications — additive route, in-app only.
 import NotificationsListPage from '../pages/notifications/NotificationsListPage.jsx';
+// Operational Calendar — additive route, read-only projection of batches.
+import CalendarPage from '../pages/calendar/CalendarPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -110,6 +112,7 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <SettingsPage /> },
       { path: 'account/security', element: <AccountSecurity /> },
       { path: 'notifications', element: <NotificationsListPage /> },
+      { path: 'calendar', element: <CalendarPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the

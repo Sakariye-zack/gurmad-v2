@@ -38,6 +38,8 @@ const collectionSyncRouter = require('./routes/collectionSync');
 // (task_resource.assign/remove, batch.cancel in routes/batches.js),
 // recipient-scoped read/mark-read API.
 const staffNotificationsRouter = require('./routes/staffNotifications');
+// Operational Calendar — read-only projection of batches.start_date/end_date.
+const calendarRouter = require('./routes/calendar');
 
 const app = express();
 
@@ -117,6 +119,7 @@ app.use('/api/v2/audit', auditRouter);
 app.use('/api/v2/settings', settingsRouter);
 app.use('/api/v2/collection-sync', collectionSyncRouter);
 app.use('/api/v2/staff-notifications', staffNotificationsRouter);
+app.use('/api/v2/calendar', calendarRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut, CalendarDays } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 // Staff Notifications — additive-only import, does not touch NAV or any
@@ -32,6 +32,11 @@ const NAV = [
   // cashier has no role in collection operations at all (matches the
   // backend's VIEW_ROLES on /v2/cycles and /v2/batches).
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
+  // Operational Calendar — Decisions §"RBAC": Admin (company-wide),
+  // Gudoomiye/Zone Accountant/Head of Cashiers (own-zone-scoped). Cashier
+  // and Collector get no v1 access — matches the backend's own requireRole
+  // on GET /v2/calendar/batches exactly, nav-hidden here for the same set.
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
   // Financial — Phase 3 Module 6. Billing and Invoices are deliberately
   // separate pages (approved architecture), matching the RBAC matrix in
   // Phase3_Module06_FinancialBilling_Implementation_Spec.md §13: Collector

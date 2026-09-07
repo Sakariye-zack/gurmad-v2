@@ -306,6 +306,11 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_zone_id ON batches(zone_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_cycle_id ON batches(cycle_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);`);
+  // Operational Calendar — Implementation Spec §14. The one approved index:
+  // supports the calendar's own zone-scoped date-range overlap query
+  // (zone_id equality + start_date/end_date range scan in one traversal).
+  // Additive, idempotent, zero existing index touched.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_zone_date_range ON batches(zone_id, start_date, end_date);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS batch_customers (
