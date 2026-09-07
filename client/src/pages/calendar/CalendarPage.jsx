@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { PageHeader, Button, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { PageHeader, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { useCalendarBatches } from '../../hooks/useCalendar.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
@@ -60,21 +60,23 @@ export default function CalendarPage() {
 
   return (
     <div>
-      <PageHeader
-        icon={CalendarDays}
-        title="Operational Calendar"
-        subtitle="A read-only view of collection batches by date. Click a batch to open it."
-      />
+      <div style={{ marginBottom: '14px' }}>
+        <PageHeader
+          icon={CalendarDays}
+          title="Operational Calendar"
+          subtitle="Read-only view of collection batches by date. Click a batch to open it."
+        />
+      </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Button variant="secondary" onClick={goPrev} aria-label="Previous"><ChevronLeft size={16} /></Button>
-          <Button variant="secondary" onClick={goToday}>Today</Button>
-          <Button variant="secondary" onClick={goNext} aria-label="Next"><ChevronRight size={16} /></Button>
-          <span style={{ fontSize: '14px', fontWeight: 700, marginLeft: '6px' }}>{rangeLabel}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button onClick={goPrev} aria-label="Previous" style={navBtnStyle}><ChevronLeft size={15} /></button>
+          <button onClick={goToday} style={{ ...navBtnStyle, width: 'auto', padding: '0 12px', fontSize: '12px', fontWeight: 700 }}>Today</button>
+          <button onClick={goNext} aria-label="Next" style={navBtnStyle}><ChevronRight size={15} /></button>
+          <span style={{ fontSize: '13px', fontWeight: 700, marginLeft: '4px' }}>{rangeLabel}</span>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '4px', padding: '2px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
           <button
             onClick={() => setView('week')}
             style={toggleBtnStyle(view === 'week')}
@@ -90,7 +92,7 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
         {!isZoneScoped && (
           <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={selectStyle}>
             <option value="">All zones</option>
@@ -170,14 +172,20 @@ function ListRow({ batch }) {
 }
 
 const selectStyle = {
-  padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-  background: 'var(--surface)', color: 'var(--text)', fontSize: '13px', fontFamily: 'inherit',
+  padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+  background: 'var(--surface)', color: 'var(--text)', fontSize: '12px', fontFamily: 'inherit',
+};
+
+const navBtnStyle = {
+  height: '28px', minWidth: '28px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface)',
+  color: 'var(--text)', cursor: 'pointer', fontFamily: 'inherit',
 };
 
 function toggleBtnStyle(active) {
   return {
-    padding: '7px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-    background: active ? 'var(--brand)' : 'var(--surface)', color: active ? '#fff' : 'var(--text)',
-    fontWeight: 700, fontSize: '13px', cursor: 'pointer', fontFamily: 'inherit',
+    padding: '5px 12px', borderRadius: 'var(--radius-sm)', border: 'none',
+    background: active ? 'var(--brand)' : 'transparent', color: active ? '#fff' : 'var(--text-muted)',
+    fontWeight: 700, fontSize: '12px', cursor: 'pointer', fontFamily: 'inherit',
   };
 }

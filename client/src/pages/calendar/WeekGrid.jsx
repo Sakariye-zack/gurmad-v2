@@ -22,7 +22,7 @@ export default function WeekGrid({ from, to, batches }) {
   const days = eachDay(from, to);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '10px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '8px' }}>
       {days.map((day) => {
         const dayEvents = eventsForDay(batches, day);
         const today = isToday(day);
@@ -31,20 +31,20 @@ export default function WeekGrid({ from, to, batches }) {
             key={toISODate(day)}
             style={{
               border: `1px solid ${today ? 'var(--brand)' : 'var(--border)'}`,
-              borderRadius: 'var(--radius-md)', minHeight: '160px', display: 'flex', flexDirection: 'column',
+              borderRadius: 'var(--radius-sm)', minHeight: '120px', display: 'flex', flexDirection: 'column',
               background: 'var(--surface)', overflow: 'hidden',
             }}
           >
             <div style={{
-              padding: '8px 10px', fontSize: '12px', fontWeight: 700,
+              padding: '5px 8px', fontSize: '11px', fontWeight: 700,
               color: today ? 'var(--brand)' : 'var(--text-muted)', borderBottom: '1px solid var(--border)',
               background: today ? 'var(--success-bg)' : 'transparent',
             }}>
               {formatDayLabel(day)}
             </div>
-            <div style={{ padding: '6px', display: 'flex', flexDirection: 'column', gap: '6px', overflowY: 'auto', flex: 1 }}>
+            <div style={{ padding: '4px', display: 'flex', flexDirection: 'column', gap: '4px', overflowY: 'auto', flex: 1 }}>
               {dayEvents.length === 0 && (
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '4px 4px' }}>—</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '3px 3px', opacity: 0.5 }}>—</div>
               )}
               {dayEvents.map((b) => (
                 <button
@@ -52,13 +52,13 @@ export default function WeekGrid({ from, to, batches }) {
                   onClick={() => navigate(`/collection-cycles/batches/${b.id}`)}
                   style={{
                     textAlign: 'left', border: 'none', borderLeft: `3px solid ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
-                    borderRadius: '4px', background: 'var(--bg)', padding: '6px 8px', cursor: 'pointer',
-                    display: 'flex', flexDirection: 'column', gap: '3px', fontFamily: 'inherit',
+                    borderRadius: '3px', background: 'var(--bg)', padding: '4px 6px', cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: 'inherit',
                   }}
                   title={`${b.batch_code} — ${b.zone_name}`}
                 >
-                  <span style={{ fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.batch_code}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.zone_name}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.batch_code}</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.zone_name}</span>
                   <StatusBadge status={b.status} />
                 </button>
               ))}

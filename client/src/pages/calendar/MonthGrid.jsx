@@ -14,14 +14,14 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px', marginBottom: '6px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '5px', marginBottom: '5px' }}>
         {DOW_LABELS.map((l) => (
-          <div key={l} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '2px 0' }}>{l}</div>
+          <div key={l} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '1px 0' }}>{l}</div>
         ))}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
         {weeks.map((week, wi) => (
-          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px' }}>
+          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '5px' }}>
             {week.map((day) => {
               const inMonth = day.getMonth() === focusMonth.getMonth();
               const dayEvents = eventsForDay(batches, day);
@@ -33,12 +33,12 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                   key={toISODate(day)}
                   style={{
                     border: `1px solid ${today ? 'var(--brand)' : 'var(--border)'}`,
-                    borderRadius: 'var(--radius-md)', minHeight: '92px', padding: '5px',
+                    borderRadius: 'var(--radius-sm)', minHeight: '74px', padding: '4px',
                     background: inMonth ? 'var(--surface)' : 'var(--bg)', opacity: inMonth ? 1 : 0.55,
-                    display: 'flex', flexDirection: 'column', gap: '3px',
+                    display: 'flex', flexDirection: 'column', gap: '2px',
                   }}
                 >
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: today ? 'var(--brand)' : 'var(--text-muted)' }}>{day.getDate()}</span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: today ? 'var(--brand)' : 'var(--text-muted)' }}>{day.getDate()}</span>
                   {visible.map((b) => (
                     <button
                       key={b.id}
@@ -46,8 +46,8 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                       title={`${b.batch_code} — ${b.zone_name}`}
                       style={{
                         textAlign: 'left', border: 'none', borderLeft: `3px solid ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
-                        borderRadius: '3px', background: 'var(--bg)', padding: '2px 5px', cursor: 'pointer',
-                        fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        borderRadius: '3px', background: 'var(--bg)', padding: '1px 4px', cursor: 'pointer',
+                        fontSize: '9.5px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         fontFamily: 'inherit',
                       }}
                     >
@@ -55,7 +55,7 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                     </button>
                   ))}
                   {overflow > 0 && (
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>+{overflow} more</span>
+                    <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 700 }}>+{overflow} more</span>
                   )}
                 </div>
               );
