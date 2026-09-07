@@ -2,6 +2,12 @@ const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
+// Staff Notifications — Implementation Spec §21. Exactly 3 additive call
+// sites in this file (task_resource.assign, task_resource.remove,
+// batch.cancel), each a one-line, non-blocking side effect immediately
+// after the existing, unmodified logAudit() call. No existing line in
+// this file is modified, reordered, or removed by this integration.
+const { resolveRecipientForEmployee, resolveDistinctCollectorRecipientsForBatch, createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
 
 const router = express.Router();
 
@@ -420,6 +426,29 @@ router.put('/:id/cancel', authenticateToken, requireRole(...WRITE_ROLES), async 
       const updated = await client.query(`UPDATE batches SET status = 'cancelled', cancelled_at = NOW(), cancelled_reason = $1 WHERE id = $2 RETURNING *`, [reason, id]);
       await client.query('COMMIT');
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch.cancel', entityType: 'batch', entityId: id, before: batch, after: updated.rows[0] });
+      // Staff Notifications — Spec §7.3/§8/§14. MUST run only after the
+      // COMMIT above has already succeeded — a cancellation whose COMMIT
+      // fails throws before reaching this line and therefore produces no
+      // notification. SELECT DISTINCT (inside
+      // resolveDistinctCollectorRecipientsForBatch) guarantees exactly one
+      // notification per distinct collector even if they're assigned to
+      // multiple of this batch's tasks — the mandatory acceptance
+      // requirement from this CR's own authorization. A failure anywhere
+      // in this block is caught and logged, never rolling back or
+      // affecting the already-committed, already-audited cancellation or
+      // this response.
+      try {
+        const recipientIds = await resolveDistinctCollectorRecipientsForBatch(id);
+        for (const recipientId of recipientIds) {
+          await createStaffNotification({
+            recipientId, eventType: 'batch.cancel', title: 'A batch you were assigned to was cancelled',
+            body: `Batch ${updated.rows[0].batch_code} was cancelled: ${reason}`,
+            entityType: 'batch', entityId: id,
+          });
+        }
+      } catch (err) {
+        logNotificationFailure('batch.cancel', err);
+      }
       res.json({ data: updated.rows[0] });
     } catch (err) {
       await client.query('ROLLBACK');
@@ -538,6 +567,26 @@ router.post('/:id/tasks/:taskId/resources', authenticateToken, requireRole(...WR
       client.release();
     }
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'task_resource.assign', entityType: 'task_resource', entityId: inserted.rows[0].id, before: null, after: inserted.rows[0] });
+    // Staff Notifications — Spec §7.1/§14. Synchronous, non-blocking side
+    // effect after the existing audit call — a failure here is caught and
+    // logged, never propagated, never affecting this response. Collector-
+    // only (Spec §6) — no recipient exists for driver/truck/cashier
+    // resource types in v1.
+    if (resource_type === 'collector') {
+      try {
+        const recipientId = await resolveRecipientForEmployee(resource_id);
+        if (recipientId !== null) {
+          const batchRow = await pool.query('SELECT batch_code FROM batches WHERE id = $1', [id]);
+          await createStaffNotification({
+            recipientId, eventType: 'task_resource.assign', title: 'New task assignment',
+            body: `You've been assigned to a task in batch ${batchRow.rows[0]?.batch_code || `#${id}`}.`,
+            entityType: 'task_resource', entityId: inserted.rows[0].id,
+          });
+        }
+      } catch (err) {
+        logNotificationFailure('task_resource.assign', err);
+      }
+    }
     res.status(201).json({ data: inserted.rows[0] });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: { message: 'This resource is already assigned to this task.', code: 'CONFLICT' } });
@@ -563,6 +612,26 @@ router.delete('/:id/tasks/:taskId/resources/:resourceType/:resourceId', authenti
     if (deleted.rows.length === 0) return res.status(404).json({ error: { message: 'Resource assignment not found.', code: 'NOT_FOUND' } });
     await pool.query(`INSERT INTO task_resource_history (task_id, resource_type, resource_id, action, reason, performed_by) VALUES ($1,$2,$3,'removed',$4,$5)`, [taskId, resourceType, resourceId, reason, req.user.id]);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'task_resource.remove', entityType: 'task_resource', entityId: deleted.rows[0].id, before: deleted.rows[0], after: null });
+    // Staff Notifications — Spec §7.2/§14. Same synchronous, non-blocking
+    // pattern as task_resource.assign. Recipient resolved from the
+    // already-deleted row's own data (deleted.rows[0], already returned
+    // by the existing DELETE ... RETURNING * — no extra query for that
+    // part). Collector-only (Spec §6).
+    if (resourceType === 'collector') {
+      try {
+        const recipientId = await resolveRecipientForEmployee(resourceId);
+        if (recipientId !== null) {
+          const batchRow = await pool.query('SELECT batch_code FROM batches WHERE id = $1', [id]);
+          await createStaffNotification({
+            recipientId, eventType: 'task_resource.remove', title: 'Removed from a task',
+            body: `You are no longer assigned to a task in batch ${batchRow.rows[0]?.batch_code || `#${id}`}.`,
+            entityType: 'task_resource', entityId: deleted.rows[0].id,
+          });
+        }
+      } catch (err) {
+        logNotificationFailure('task_resource.remove', err);
+      }
+    }
     res.json({ data: { success: true } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to remove resource.', code: 'INTERNAL' } });

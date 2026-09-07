@@ -34,6 +34,10 @@ const settingsRouter = require('./routes/settings');
 // Offline/Sync — Wave 1. Additive router: assignments read + sync-submission
 // write, reusing the canonical applyBatchCustomerStatusChange (commit 8e9ac5a).
 const collectionSyncRouter = require('./routes/collectionSync');
+// Staff Notifications — additive router. In-app only, trigger-created
+// (task_resource.assign/remove, batch.cancel in routes/batches.js),
+// recipient-scoped read/mark-read API.
+const staffNotificationsRouter = require('./routes/staffNotifications');
 
 const app = express();
 
@@ -112,6 +116,7 @@ app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);
 app.use('/api/v2/settings', settingsRouter);
 app.use('/api/v2/collection-sync', collectionSyncRouter);
+app.use('/api/v2/staff-notifications', staffNotificationsRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

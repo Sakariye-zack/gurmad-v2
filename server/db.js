@@ -1015,6 +1015,45 @@ async function runMigrations() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // ============================================================
+  // Staff Notifications — Implementation Spec §9. Additive, own new
+  // table only, zero touch to any existing table. Deliberately NOT a
+  // copy of customer_portal_notifications (Decisions §12): recipient is
+  // v2_users, not customers — a structurally different identity. No FK
+  // to v2_audit_log (Decisions §17) — event_type reuses the same string
+  // vocabulary as the source audit action, but this table carries no
+  // link into the audit table itself. ON DELETE CASCADE on recipient_id
+  // (a deliberate, small deviation from the Portal precedent's own
+  // ON DELETE RESTRICT): notifications are explicitly operational, not
+  // audit, records (Decisions §7) — if a v2_users row is ever hard-
+  // deleted, its own notifications have no remaining purpose.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS v2_staff_notifications (
+      id SERIAL PRIMARY KEY,
+      recipient_id INTEGER NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
+      event_type VARCHAR(50) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      body TEXT,
+      entity_type VARCHAR(50),
+      entity_id INTEGER,
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      read_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // Exactly the 2 approved indexes (Implementation Spec §9/§19) — mirrors
+  // the Customer Portal's own already-proven partial-index pattern for
+  // the unread-count query.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_v2_staff_notifications_recipient_unread
+      ON v2_staff_notifications(recipient_id, is_read) WHERE is_read = FALSE;
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_v2_staff_notifications_recipient_created
+      ON v2_staff_notifications(recipient_id, created_at DESC);
+  `);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

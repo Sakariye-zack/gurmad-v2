@@ -3,6 +3,9 @@ import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
+// Staff Notifications — additive-only import, does not touch NAV or any
+// existing nav-item logic below.
+import NotificationBell from '../components/notifications/NotificationBell.jsx';
 
 // Information_Architecture.md §2: office-role navigation. Groups mirror the
 // approved V2 IA; only foundation-relevant routes are wired to real pages —
@@ -73,7 +76,10 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
   return (
     <aside style={{ width: '240px', flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0 }}>
-      <div style={{ padding: '20px', fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</div>
+      <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
+        <NotificationBell />
+      </div>
       <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {NAV.map((item) => {
           const link = (
