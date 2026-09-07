@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut, CalendarDays } from 'lucide-react';
+import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut, CalendarDays, Map } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 // Staff Notifications — additive-only import, does not touch NAV or any
@@ -37,6 +37,9 @@ const NAV = [
   // and Collector get no v1 access — matches the backend's own requireRole
   // on GET /v2/calendar/batches exactly, nav-hidden here for the same set.
   { to: '/calendar', label: 'Calendar', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  // Route & GIS / Map — Decisions §RBAC: identical role set to Calendar.
+  // Cashier and Collector get no v1 access.
+  { to: '/map', label: 'Map', icon: Map, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
   // Financial — Phase 3 Module 6. Billing and Invoices are deliberately
   // separate pages (approved architecture), matching the RBAC matrix in
   // Phase3_Module06_FinancialBilling_Implementation_Spec.md §13: Collector

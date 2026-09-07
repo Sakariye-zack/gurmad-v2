@@ -40,6 +40,10 @@ const collectionSyncRouter = require('./routes/collectionSync');
 const staffNotificationsRouter = require('./routes/staffNotifications');
 // Operational Calendar — read-only projection of batches.start_date/end_date.
 const calendarRouter = require('./routes/calendar');
+// Route & GIS / Map — read-only projection of customers.lat/lng plus
+// Group/Route membership. Never joins batch_customers (collection-event
+// GPS remains a hard, out-of-band privacy boundary).
+const mapRouter = require('./routes/map');
 
 const app = express();
 
@@ -120,6 +124,7 @@ app.use('/api/v2/settings', settingsRouter);
 app.use('/api/v2/collection-sync', collectionSyncRouter);
 app.use('/api/v2/staff-notifications', staffNotificationsRouter);
 app.use('/api/v2/calendar', calendarRouter);
+app.use('/api/v2/map', mapRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

@@ -16,6 +16,9 @@ import SettingsPage from '../pages/settings/SettingsPage.jsx';
 import NotificationsListPage from '../pages/notifications/NotificationsListPage.jsx';
 // Operational Calendar — additive route, read-only projection of batches.
 import CalendarPage from '../pages/calendar/CalendarPage.jsx';
+// Route & GIS / Map — additive route, read-only projection of customer
+// coordinates + Group/Route membership, rendered via Mapbox GL JS.
+import MapPage from '../pages/map/MapPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -113,6 +116,7 @@ export const router = createBrowserRouter([
       { path: 'account/security', element: <AccountSecurity /> },
       { path: 'notifications', element: <NotificationsListPage /> },
       { path: 'calendar', element: <CalendarPage /> },
+      { path: 'map', element: <MapPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
