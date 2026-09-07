@@ -48,7 +48,10 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                         textAlign: 'left', border: 'none', borderLeft: `3px solid ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
                         borderRadius: '3px', background: 'var(--bg)', padding: '1px 4px', cursor: 'pointer',
                         fontSize: '9.5px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        fontFamily: 'inherit',
+                        fontFamily: 'inherit', color: 'var(--text)',
+                        /* Explicit color required: a <button>'s UA default text
+                           color (black) does not inherit var(--text) from <body>
+                           — same dark-theme readability defect as WeekGrid. */
                       }}
                     >
                       {b.batch_code}

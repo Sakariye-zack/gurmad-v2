@@ -159,11 +159,14 @@ function ListRow({ batch }) {
       style={{
         textAlign: 'left', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
         background: 'var(--surface)', padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', color: 'var(--text)',
+        /* Explicit color required: a <button>'s UA default text color (black)
+           does not inherit var(--text) from <body> — same dark-theme
+           readability defect as the WeekGrid/MonthGrid event buttons. */
       }}
     >
       <div>
-        <div style={{ fontSize: '13px', fontWeight: 700 }}>{batch.batch_code}</div>
+        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>{batch.batch_code}</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{batch.zone_name} · {batch.start_date}{batch.end_date ? ` – ${batch.end_date}` : ' (ongoing)'}</div>
       </div>
       <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-muted)' }}>{batch.status.replace(/_/g, ' ')}</span>

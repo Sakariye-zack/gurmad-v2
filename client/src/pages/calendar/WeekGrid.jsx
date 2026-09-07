@@ -53,11 +53,14 @@ export default function WeekGrid({ from, to, batches }) {
                   style={{
                     textAlign: 'left', border: 'none', borderLeft: `3px solid ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
                     borderRadius: '3px', background: 'var(--bg)', padding: '4px 6px', cursor: 'pointer',
-                    display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: 'inherit',
+                    display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: 'inherit', color: 'var(--text)',
                   }}
                   title={`${b.batch_code} — ${b.zone_name}`}
                 >
-                  <span style={{ fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.batch_code}</span>
+                  {/* Explicit color required: a <button>'s UA default text color
+                      (black) does not inherit var(--text) from <body> the way a
+                      <div>/<span> would — found as a dark-theme readability defect. */}
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.batch_code}</span>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.zone_name}</span>
                   <StatusBadge status={b.status} />
                 </button>
