@@ -1,12 +1,24 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Users, Pencil, Hash, Archive, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Users, Pencil, Hash, Archive, RotateCcw, Receipt, HandCoins, History } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useCustomer, useUpdateCustomerStatus } from '../../hooks/useCustomers.js';
+import { useCustomer, useUpdateCustomerStatus, useCustomerCollectionHistory } from '../../hooks/useCustomers.js';
+import { useInvoices, useDebts } from '../../hooks/useFinancial.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
 import CustomerNumberEditModal from './CustomerNumberEditModal.jsx';
 import CustomerPortalAccessCard from './CustomerPortalAccessCard.jsx';
+
+// P1 Functional Gaps — Customer Detail: Invoices, Debts, Collection
+// History only (no Cashout, no Payments aggregate, no Outstanding
+// Balance total — none is defined by an approved financial source at
+// the customer level; out of scope per the Master Authorization).
+// Each section is gated by its own domain's existing VIEW_ROLES via
+// RoleGate — this is presentation only, the server-side requireRole on
+// each endpoint remains the actual authorization boundary.
+const INVOICE_VIEW_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant'];
+const DEBT_VIEW_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'];
+const COLLECTION_HISTORY_VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant'];
 
 export default function CustomerDetailPage() {
   const { id } = useParams();
@@ -83,10 +95,20 @@ export default function CustomerDetailPage() {
         </Card>
       )}
 
+      <RoleGate roles={INVOICE_VIEW_ROLES}>
+        <CustomerInvoicesSection customerId={customer.id} navigate={navigate} />
+      </RoleGate>
+      <RoleGate roles={DEBT_VIEW_ROLES}>
+        <CustomerDebtsSection customerId={customer.id} />
+      </RoleGate>
+      <RoleGate roles={COLLECTION_HISTORY_VIEW_ROLES}>
+        <CustomerCollectionHistorySection customerId={customer.id} />
+      </RoleGate>
+
       <Card style={{ ...cardPad, marginTop: '16px' }}>
         <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
-          Billing, debts, collection history, and task activity for this customer will appear here
-          once their respective modules are implemented, per the approved one-module-at-a-time sequence.
+          Task activity for this customer will appear here once that module is implemented, per the
+          approved one-module-at-a-time sequence.
         </p>
       </Card>
 
@@ -106,6 +128,108 @@ export default function CustomerDetailPage() {
         danger={!isArchived}
         isLoading={updateStatus.isPending}
       />
+    </div>
+  );
+}
+
+function CustomerInvoicesSection({ customerId, navigate }) {
+  const { data, isLoading, error } = useInvoices({ customer_id: customerId });
+  const invoices = data?.data || [];
+  return (
+    <Card style={{ ...cardPad, marginTop: '16px' }}>
+      <SectionHeader icon={Receipt} title="Invoices" />
+      {isLoading && <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>Loading…</p>}
+      {error && <p style={{ margin: 0, fontSize: '13px', color: 'var(--danger)' }}>{error.message}</p>}
+      {!isLoading && !error && invoices.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No invoices for this customer.</p>
+      )}
+      {!isLoading && !error && invoices.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {invoices.map((inv) => (
+            <RowLink key={inv.id} onClick={() => navigate(`/financial/invoices/${inv.id}`)}>
+              <strong>{inv.invoice_number}</strong>
+              <span className="tabular-nums">{inv.currency} {parseFloat(inv.invoice_total).toFixed(2)}</span>
+              <StatusBadge status={inv.status} map={{ unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' }} />
+            </RowLink>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CustomerDebtsSection({ customerId }) {
+  const { data, isLoading, error } = useDebts({ customer_id: customerId });
+  const debts = data?.data || [];
+  return (
+    <Card style={{ ...cardPad, marginTop: '16px' }}>
+      <SectionHeader icon={HandCoins} title="Debts" />
+      {isLoading && <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>Loading…</p>}
+      {error && <p style={{ margin: 0, fontSize: '13px', color: 'var(--danger)' }}>{error.message}</p>}
+      {!isLoading && !error && debts.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No debts for this customer.</p>
+      )}
+      {!isLoading && !error && debts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {debts.map((d) => (
+            <RowLink key={d.id}>
+              <span className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</span>
+              <span>{d.invoice_id ? `Linked to #${d.invoice_id}` : 'Standalone'}</span>
+              <StatusBadge status={d.status} map={{ unpaid: 'danger', paid: 'success' }} />
+            </RowLink>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CustomerCollectionHistorySection({ customerId }) {
+  const { data, isLoading, error } = useCustomerCollectionHistory(customerId);
+  const rows = data?.data || [];
+  return (
+    <Card style={{ ...cardPad, marginTop: '16px' }}>
+      <SectionHeader icon={History} title="Collection History" />
+      {isLoading && <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>Loading…</p>}
+      {error && <p style={{ margin: 0, fontSize: '13px', color: 'var(--danger)' }}>{error.message}</p>}
+      {!isLoading && !error && rows.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No collection events recorded for this customer.</p>
+      )}
+      {!isLoading && !error && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {rows.map((r) => (
+            <RowLink key={r.id}>
+              <span>{r.status_at ? new Date(r.status_at).toLocaleDateString() : '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>{r.batch_code}</span>
+              <StatusBadge status={r.status} />
+            </RowLink>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function SectionHeader({ icon: Icon, title }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+      <Icon size={16} style={{ color: 'var(--text-muted)' }} />
+      <span style={{ fontSize: '13px', fontWeight: 800 }}>{title}</span>
+    </div>
+  );
+}
+
+function RowLink({ children, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+        padding: '8px 4px', borderBottom: '1px solid var(--border)', fontSize: '13px',
+        cursor: onClick ? 'pointer' : 'default',
+      }}
+    >
+      {children}
     </div>
   );
 }

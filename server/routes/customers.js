@@ -1,6 +1,11 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+// P1 Functional Gaps — Customer Detail's Collection History section
+// reuses Module 8's own getCollectionHistory(), exactly like
+// customerPortal.js already does for the portal's equivalent view — no
+// new query, no duplicated calculation.
+const { getCollectionHistory } = require('../lib/reportsCalculations');
 
 const router = express.Router();
 
@@ -8,6 +13,10 @@ const VALID_TYPES = ['residential', 'commercial'];
 const VALID_STATUSES = ['active', 'suspended', 'archived'];
 const VALID_SHIFTS = ['day', 'night'];
 const CUSTOMER_NUMBER_RE = /^C-\d{2,}$/;
+// Matches reports.js's own OPERATIONAL_ROLES exactly — this endpoint
+// exposes the identical data reports.js's collection-history route
+// already does, just customer-scoped for the Customer Detail page.
+const COLLECTION_HISTORY_ROLES = ['admin', 'gudoomiye', 'zone_accountant'];
 
 // Zones that may write/scope-restrict — mirrors getZoneScope() in the
 // reference backend: admin is global, gudoomiye/zone_accountant are
@@ -321,6 +330,33 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.json({ data: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load customer.', code: 'INTERNAL' } });
+  }
+});
+
+// GET /api/v2/customers/:id/collection-history — P1 Functional Gaps.
+// Reuses getCollectionHistory() with the same wide "all time" window
+// customerPortal.js's own equivalent route already established (the
+// function requires explicit bounds; there is no separate "all time"
+// mode). IDOR-checked identically to GET /:id above.
+router.get('/:id/collection-history', authenticateToken, requireRole(...COLLECTION_HISTORY_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid customer id.', code: 'VALIDATION' } });
+  try {
+    const custRes = await pool.query('SELECT zone_id FROM customers WHERE id = $1', [id]);
+    if (custRes.rows.length === 0) return res.status(404).json({ error: { message: 'Customer not found.', code: 'NOT_FOUND' } });
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && custRes.rows[0].zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this customer.', code: 'FORBIDDEN' } });
+    }
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const rows = await getCollectionHistory({
+      customerId: id, periodStart: '1970-01-01', periodEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      limit, offset,
+    });
+    res.json({ data: rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load collection history.', code: 'INTERNAL' } });
   }
 });
 

@@ -8,6 +8,7 @@ import { apiClient } from '../lib/apiClient.js';
 export function useCashouts(params = {}) {
   const qs = new URLSearchParams();
   if (params.status) qs.set('status', params.status);
+  if (params.q) qs.set('q', params.q);
   const query = qs.toString();
   return useQuery({ queryKey: ['v2', 'cashouts', params], queryFn: () => apiClient.get(`/v2/cashouts${query ? `?${query}` : ''}`) });
 }

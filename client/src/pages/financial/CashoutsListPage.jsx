@@ -10,9 +10,10 @@ const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger'
 
 export default function CashoutsListPage() {
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useCashouts({ status: statusFilter || undefined });
+  const { data, isLoading, error, refetch } = useCashouts({ status: statusFilter || undefined, q: search || undefined });
   const cashouts = data?.data || [];
   const pendingCount = cashouts.filter((c) => c.status === 'pending').length;
   const shortageCount = cashouts.filter((c) => parseFloat(c.shortage) > 0).length;
@@ -36,7 +37,7 @@ export default function CashoutsListPage() {
         <StatCard label="With Shortage" value={error ? '—' : shortageCount} icon={Wallet2} accent="var(--danger)" />
       </div>
 
-      <FilterBar searchValue="" onSearchChange={() => {}} searchPlaceholder="">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search cashout number…">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">All statuses</option>
           <option value="pending">Pending</option>

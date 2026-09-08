@@ -64,6 +64,12 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     const params = [];
     if (myZoneId !== null) { params.push(myZoneId); where.push(`cashouts.zone_id = $${params.length}`); }
     if (req.query.status) { params.push(req.query.status); where.push(`cashouts.status = $${params.length}`); }
+    // P1 Functional Gaps — q search, cashout_number only, per explicit
+    // scope. 2-char minimum, same ILIKE pattern as every other module.
+    if (req.query.q) {
+      const q = req.query.q.trim();
+      if (q.length >= 2) { params.push(`%${q}%`); where.push(`cashouts.cashout_number ILIKE $${params.length}`); }
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT cashouts.*, zones.name AS zone_name,

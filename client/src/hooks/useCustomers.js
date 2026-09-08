@@ -27,6 +27,15 @@ export function useCustomer(id) {
   });
 }
 
+// P1 Functional Gaps — Customer Detail's Collection History section.
+export function useCustomerCollectionHistory(id) {
+  return useQuery({
+    queryKey: ['v2', 'customers', id, 'collection-history'],
+    queryFn: () => apiClient.get(`/v2/customers/${id}/collection-history`),
+    enabled: !!id,
+  });
+}
+
 export function useCreateCustomer() {
   const qc = useQueryClient();
   return useMutation({

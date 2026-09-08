@@ -35,6 +35,24 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(req.query.status);
       where.push(`debts.status = $${params.length}`);
     }
+    // P1 Functional Gaps — customer_id filter (mirrors invoices.js exactly,
+    // used by Customer Detail's own Debts section) and q search by
+    // customer name/number (2-char minimum, same ILIKE pattern already
+    // used by Batches/Groups search — no new pattern invented).
+    if (req.query.customer_id) {
+      const cid = parseStrictId(req.query.customer_id);
+      if (cid === null) return res.status(400).json({ error: { message: 'Invalid customer_id filter.', code: 'VALIDATION' } });
+      params.push(cid);
+      where.push(`debts.customer_id = $${params.length}`);
+    }
+    if (req.query.q) {
+      const q = req.query.q.trim();
+      if (q.length >= 2) {
+        params.push(`%${q}%`);
+        const i = params.length;
+        where.push(`(customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i})`);
+      }
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT debts.*, customers.name AS customer_name, customers.customer_number

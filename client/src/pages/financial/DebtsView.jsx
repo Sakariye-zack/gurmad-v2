@@ -8,8 +8,9 @@ const STATUS_MAP = { unpaid: 'danger', paid: 'success' };
 
 export default function DebtsView() {
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [settleTarget, setSettleTarget] = useState(null);
-  const { data, isLoading, error, refetch } = useDebts({ status: statusFilter || undefined });
+  const { data, isLoading, error, refetch } = useDebts({ status: statusFilter || undefined, q: search || undefined });
   const settleDebt = useSettleDebt();
   const toast = useToast();
   const debts = data?.data || [];
@@ -34,7 +35,7 @@ export default function DebtsView() {
         <StatCard label="Unpaid" value={error ? '—' : unpaidCount} icon={HandCoins} accent="var(--danger)" />
       </div>
 
-      <FilterBar searchValue="" onSearchChange={() => {}} searchPlaceholder="">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by customer name or number…">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">All statuses</option>
           <option value="unpaid">Unpaid</option>

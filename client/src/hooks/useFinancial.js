@@ -9,6 +9,7 @@ export function useInvoices(params = {}) {
   const qs = new URLSearchParams();
   if (params.status) qs.set('status', params.status);
   if (params.customer_id) qs.set('customer_id', params.customer_id);
+  if (params.q) qs.set('q', params.q);
   const query = qs.toString();
   return useQuery({ queryKey: ['v2', 'invoices', params], queryFn: () => apiClient.get(`/v2/invoices${query ? `?${query}` : ''}`) });
 }
@@ -56,6 +57,8 @@ export function useReversePayment(invoiceId) {
 export function useDebts(params = {}) {
   const qs = new URLSearchParams();
   if (params.status) qs.set('status', params.status);
+  if (params.customer_id) qs.set('customer_id', params.customer_id);
+  if (params.q) qs.set('q', params.q);
   const query = qs.toString();
   return useQuery({ queryKey: ['v2', 'debts', params], queryFn: () => apiClient.get(`/v2/debts${query ? `?${query}` : ''}`) });
 }

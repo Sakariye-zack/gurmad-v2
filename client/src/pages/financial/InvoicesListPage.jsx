@@ -10,9 +10,10 @@ const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', void
 
 export default function InvoicesListPage() {
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useInvoices({ status: statusFilter || undefined });
+  const { data, isLoading, error, refetch } = useInvoices({ status: statusFilter || undefined, q: search || undefined });
   const invoices = data?.data || [];
   const unpaidCount = invoices.filter((i) => i.status === 'unpaid').length;
   const partialCount = invoices.filter((i) => i.status === 'partial').length;
@@ -36,7 +37,7 @@ export default function InvoicesListPage() {
         <StatCard label="Partial" value={error ? '—' : partialCount} icon={Receipt} accent="var(--warning)" />
       </div>
 
-      <FilterBar searchValue="" onSearchChange={() => {}} searchPlaceholder="">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search invoice #, customer name or number…">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">All statuses</option>
           <option value="unpaid">Unpaid</option>

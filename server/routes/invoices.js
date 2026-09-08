@@ -52,6 +52,17 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(cid);
       where.push(`invoices.customer_id = $${params.length}`);
     }
+    // P1 Functional Gaps — q search: invoice_number or the joined
+    // customer's name/number. 2-char minimum, same ILIKE pattern already
+    // used by Batches/Groups/Debts.
+    if (req.query.q) {
+      const q = req.query.q.trim();
+      if (q.length >= 2) {
+        params.push(`%${q}%`);
+        const i = params.length;
+        where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i})`);
+      }
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT invoices.*, customers.name AS customer_name, customers.customer_number, customers.phone AS customer_phone
