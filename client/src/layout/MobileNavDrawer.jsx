@@ -93,11 +93,16 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
       >
         <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
           <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
+          {/* QA Defect #1 fix: 44x44 clickable/touchable area (was 28x28,
+              20px icon + 4px padding). Icon itself stays 20px — only the
+              interactive hit area grows, via fixed width/height + flex
+              centering instead of padding, so it meets the >=44x44
+              touch-target requirement without enlarging the visible glyph. */}
           <button
             ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close menu"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px', display: 'flex' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
             <X size={20} />
           </button>
