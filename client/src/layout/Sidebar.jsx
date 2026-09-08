@@ -10,7 +10,11 @@ import NotificationBell from '../components/notifications/NotificationBell.jsx';
 // Information_Architecture.md §2: office-role navigation. Groups mirror the
 // approved V2 IA; only foundation-relevant routes are wired to real pages —
 // business modules are placeholders per the explicit "foundation only" scope.
-const NAV = [
+// Sidebar / Navigation UX — Implementation Spec §9. Exported so
+// MobileNavDrawer.jsx can reuse this exact array (and RoleGate below)
+// rather than maintaining a second, parallel navigation list — the
+// structural guarantee against desktop/mobile RBAC drift.
+export const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/customers', label: 'Customers', icon: Users },
   // View is available to any authenticated staff role that needs zone
@@ -83,7 +87,7 @@ const NAV = [
 export default function Sidebar() {
   const { user, logout } = useAuth();
   return (
-    <aside style={{ width: '240px', flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0 }}>
+    <aside id="app-sidebar" style={{ width: '240px', flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0 }}>
       <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
         <NotificationBell />
