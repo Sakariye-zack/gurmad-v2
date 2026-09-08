@@ -12,9 +12,10 @@ const STATUS_LABELS = { draft: 'Draft', assigned: 'Assigned', in_progress: 'In P
 
 export default function BatchesListPage() {
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useBatches({ status: statusFilter || undefined });
+  const { data, isLoading, error, refetch } = useBatches({ status: statusFilter || undefined, search: search || undefined });
   const batches = data?.data || [];
   const inProgressCount = batches.filter((b) => b.status === 'in_progress').length;
   const draftCount = batches.filter((b) => b.status === 'draft').length;
@@ -38,7 +39,7 @@ export default function BatchesListPage() {
         <StatCard label="Draft" value={error ? '—' : draftCount} icon={ClipboardList} accent="var(--warning)" />
       </div>
 
-      <FilterBar searchValue="" onSearchChange={() => {}} searchPlaceholder="">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by batch code…">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">All statuses</option>
           {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}

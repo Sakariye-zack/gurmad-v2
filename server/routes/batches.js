@@ -82,6 +82,17 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(parseStrictId(req.query.cycle_id));
       where.push(`batches.cycle_id = $${params.length}`);
     }
+    // Search — Implementation Spec §6. Single field (batch_code), zone-scope
+    // already applied above. 2-character minimum: shorter q is silently
+    // ignored, not rejected. No pagination exists on this endpoint and none
+    // is added here (Spec §11 — an intentional, disclosed scope boundary).
+    if (req.query.q) {
+      const q = req.query.q.trim();
+      if (q.length >= 2) {
+        params.push(`%${q}%`);
+        where.push(`batches.batch_code ILIKE $${params.length}`);
+      }
+    }
     // A collector only ever sees batches they're actually assigned to
     // (via task_resources on a task belonging to the batch) — resolved by
     // employee id, never by name (OD-2).

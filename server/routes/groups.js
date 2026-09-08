@@ -60,6 +60,16 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(req.query.status);
       where.push(`g.status = $${params.length}`);
     }
+    // Search — Implementation Spec §7. code/name, zone-scope already applied
+    // above. 2-character minimum: shorter q is silently ignored.
+    if (req.query.q) {
+      const q = req.query.q.trim();
+      if (q.length >= 2) {
+        params.push(`%${q}%`);
+        const i = params.length;
+        where.push(`(g.code ILIKE $${i} OR g.name ILIKE $${i})`);
+      }
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);

@@ -8,6 +8,7 @@ export function useGroups(params = {}) {
   const qs = new URLSearchParams();
   if (params.zone_id) qs.set('zone_id', params.zone_id);
   if (params.status) qs.set('status', params.status);
+  if (params.search) qs.set('q', params.search);
   const query = qs.toString();
   return useQuery({
     queryKey: ['v2', 'groups', params],

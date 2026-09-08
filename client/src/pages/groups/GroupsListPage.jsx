@@ -12,9 +12,10 @@ import GroupFormModal from './GroupFormModal.jsx';
 // hardcoded maximum"); this page paginates rather than assuming a small set.
 export default function GroupsListPage() {
   const [zoneFilter, setZoneFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useGroups({ zone_id: zoneFilter || undefined });
+  const { data, isLoading, error, refetch } = useGroups({ zone_id: zoneFilter || undefined, search: search || undefined });
   const { data: zonesData } = useZonesList();
   const groups = data?.data || [];
   const zones = zonesData?.data || [];
@@ -32,7 +33,7 @@ export default function GroupsListPage() {
         }
       />
 
-      <FilterBar searchValue="" onSearchChange={() => {}} searchPlaceholder="">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by code or name…">
         <select value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} style={selectStyle}>
           <option value="">All zones</option>
           {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}

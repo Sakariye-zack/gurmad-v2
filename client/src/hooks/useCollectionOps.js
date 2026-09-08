@@ -23,6 +23,7 @@ export function useBatches(params = {}) {
   if (params.zone_id) qs.set('zone_id', params.zone_id);
   if (params.status) qs.set('status', params.status);
   if (params.cycle_id) qs.set('cycle_id', params.cycle_id);
+  if (params.search) qs.set('q', params.search);
   const query = qs.toString();
   return useQuery({ queryKey: ['v2', 'batches', params], queryFn: () => apiClient.get(`/v2/batches${query ? `?${query}` : ''}`) });
 }
