@@ -1,0 +1,95 @@
+import React from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Wallet, PlayCircle, CheckCircle2 } from 'lucide-react';
+import { PageHeader, Button, DataTable, StatusBadge, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
+import RoleGate from '../../components/RoleGate.jsx';
+import { usePayrollPeriod, useSetPayrollPeriodStatus, useGeneratePayroll, usePayrollRecords } from '../../hooks/usePayroll.js';
+
+const PERIOD_STATUS_MAP = { open: 'info', processing: 'warning', finalized: 'success', paid: 'success' };
+const RECORD_STATUS_MAP = { open: 'info', processing: 'warning', finalized: 'success', paid: 'success', reversed: 'danger' };
+
+export default function PayrollPeriodDetailPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { data, isLoading, error, refetch } = usePayrollPeriod(id);
+  const { data: recordsData, refetch: refetchRecords } = usePayrollRecords({ payroll_period_id: id });
+  const setStatus = useSetPayrollPeriodStatus();
+  const generate = useGeneratePayroll();
+  const period = data?.data;
+  const records = recordsData?.data || [];
+
+  if (isLoading) return <LoadingState label="Loading payroll period…" />;
+  if (error) return <ErrorState message={error.message} onRetry={refetch} />;
+  if (!period) return null;
+
+  async function handleProcess() {
+    try {
+      await setStatus.mutateAsync({ id: period.id, status: 'processing' });
+      toast.success('Period is now processing.');
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
+  async function handleGenerate() {
+    try {
+      const result = await generate.mutateAsync(period.id);
+      toast.success(`Generated ${result.data.length} payroll record(s).`);
+      if (result.needs_review?.length) toast.error(`${result.needs_review.length} employee(s) have no/zero salary — review before finalizing.`);
+      refetchRecords();
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
+  async function handleFinalize() {
+    try {
+      await setStatus.mutateAsync({ id: period.id, status: 'finalized' });
+      toast.success('Period finalized. Records are now immutable.');
+      refetchRecords();
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
+
+  return (
+    <div>
+      <button onClick={() => navigate('/payroll/periods')} style={backLinkStyle}>
+        <ArrowLeft size={14} /> Back to Payroll Periods
+      </button>
+
+      <PageHeader
+        icon={Wallet}
+        title={period.label}
+        subtitle={`${new Date(period.start_date).toLocaleDateString()} – ${new Date(period.end_date).toLocaleDateString()} · `}
+        actions={
+          <RoleGate roles={['admin']}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {period.status === 'open' && <Button icon={PlayCircle} onClick={handleProcess} disabled={setStatus.isPending}>Start Processing</Button>}
+              {period.status === 'processing' && <Button variant="secondary" onClick={handleGenerate} disabled={generate.isPending}>{generate.isPending ? 'Generating…' : 'Generate Payroll'}</Button>}
+              {period.status === 'processing' && <Button icon={CheckCircle2} onClick={handleFinalize} disabled={setStatus.isPending}>Finalize</Button>}
+            </div>
+          </RoleGate>
+        }
+      />
+
+      <div style={{ marginBottom: '16px' }}><StatusBadge status={period.status} map={PERIOD_STATUS_MAP} /></div>
+
+      <DataTable
+        isEmpty={records.length === 0}
+        emptyTitle="No payroll records generated yet"
+        columns={[{ label: 'Employee' }, { label: 'Salary' }, { label: 'Earnings' }, { label: 'Deductions' }, { label: 'Net' }, { label: 'Status' }]}
+      >
+        {records.map((r) => (
+          <tr key={r.id} onClick={() => navigate(`/payroll/records/${r.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+            <td style={cellStyle}>{r.employee_name}</td>
+            <td style={cellStyle} className="tabular-nums">{parseFloat(r.salary_snapshot).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{parseFloat(r.earnings_total).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{parseFloat(r.deductions_total).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums"><strong>{parseFloat(r.net_salary).toFixed(2)}</strong></td>
+            <td style={cellStyle}><StatusBadge status={r.status} map={RECORD_STATUS_MAP} /></td>
+          </tr>
+        ))}
+      </DataTable>
+    </div>
+  );
+}
+
+const cellStyle = { padding: '12px 14px' };
+const backLinkStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',
+  color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', padding: 0, marginBottom: '16px',
+};

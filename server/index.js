@@ -44,6 +44,13 @@ const calendarRouter = require('./routes/calendar');
 // Group/Route membership. Never joins batch_customers (collection-event
 // GPS remains a hard, out-of-band privacy boundary).
 const mapRouter = require('./routes/map');
+// Master Functional Completion Program — Phase 1: HR & Payroll.
+const attendanceRouter = require('./routes/attendance');
+const leaveTypesRouter = require('./routes/leaveTypes');
+const leaveRequestsRouter = require('./routes/leaveRequests');
+const payrollPeriodsRouter = require('./routes/payrollPeriods');
+const payrollRecordsRouter = require('./routes/payrollRecords');
+const hrReportsRouter = require('./routes/hrReports');
 
 const app = express();
 
@@ -125,6 +132,12 @@ app.use('/api/v2/collection-sync', collectionSyncRouter);
 app.use('/api/v2/staff-notifications', staffNotificationsRouter);
 app.use('/api/v2/calendar', calendarRouter);
 app.use('/api/v2/map', mapRouter);
+app.use('/api/v2/attendance', attendanceRouter);
+app.use('/api/v2/leave-types', leaveTypesRouter);
+app.use('/api/v2/leave-requests', leaveRequestsRouter);
+app.use('/api/v2/payroll-periods', payrollPeriodsRouter);
+app.use('/api/v2/payroll-records', payrollRecordsRouter);
+app.use('/api/v2/hr-reports', hrReportsRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

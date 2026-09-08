@@ -1,6 +1,10 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+// Phase 1 HR & Payroll — the ONE permitted additive change to this
+// CLOSED/FROZEN file (GET /:id/effective-status only). No existing
+// route, schema, or write behavior below this import is touched.
+const { getEffectiveEmployeeStatus, resolveEmployeeIdForRequestUser } = require('../lib/hrCalculations');
 
 const router = express.Router();
 
@@ -268,6 +272,37 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     res.json({ data: pickFields(result.rows[0], [...fieldsForRole(req.user.role), 'zone_name']) });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load employee.', code: 'INTERNAL' } });
+  }
+});
+
+// GET /:id/effective-status — Phase 1 HR & Payroll, Spec §5. Purely
+// additive: reads existing data via getEffectiveEmployeeStatus(), writes
+// nothing, does not alter any other route's behavior. Admin/Gudoomiye/
+// Zone Accountant (own-zone) or the employee themselves (own record).
+router.get('/:id/effective-status', authenticateToken, async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });
+  try {
+    const empRes = await pool.query('SELECT id, zone_id, user_id FROM employees WHERE id = $1', [id]);
+    if (empRes.rows.length === 0) return res.status(404).json({ error: { message: 'Employee not found.', code: 'NOT_FOUND' } });
+    const employee = empRes.rows[0];
+
+    const role = (req.user.role || '').toLowerCase();
+    const isStaffViewer = VIEW_ROLES.includes(role);
+    let authorized = false;
+    if (isStaffViewer) {
+      const myZoneId = await resolveUserZoneId(req.user);
+      authorized = myZoneId === null || employee.zone_id === myZoneId;
+    } else {
+      const myEmployeeId = await resolveEmployeeIdForRequestUser(req.user);
+      authorized = myEmployeeId !== null && myEmployeeId === id;
+    }
+    if (!authorized) return res.status(403).json({ error: { message: 'You do not have access to this employee.', code: 'FORBIDDEN' } });
+
+    const effectiveStatus = await getEffectiveEmployeeStatus(id);
+    res.json({ data: { employee_id: id, effective_status: effectiveStatus } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load effective status.', code: 'INTERNAL' } });
   }
 });
 

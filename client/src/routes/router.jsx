@@ -19,6 +19,16 @@ import CalendarPage from '../pages/calendar/CalendarPage.jsx';
 // Route & GIS / Map — additive route, read-only projection of customer
 // coordinates + Group/Route membership, rendered via Mapbox GL JS.
 import MapPage from '../pages/map/MapPage.jsx';
+// Master Functional Completion Program — Phase 1: HR & Payroll. Additive
+// routes only — no Sidebar/MobileNavDrawer/AppShell/MobileTabBar change
+// (CLOSED/FROZEN); nav entries are a documented future CR (Spec §18).
+import AttendanceListPage from '../pages/hr/AttendanceListPage.jsx';
+import LeaveTypesPage from '../pages/hr/LeaveTypesPage.jsx';
+import LeaveRequestsListPage from '../pages/hr/LeaveRequestsListPage.jsx';
+import PayrollPeriodsListPage from '../pages/payroll/PayrollPeriodsListPage.jsx';
+import PayrollPeriodDetailPage from '../pages/payroll/PayrollPeriodDetailPage.jsx';
+import PayrollRecordDetailPage from '../pages/payroll/PayrollRecordDetailPage.jsx';
+import PayrollHistoryPage from '../pages/payroll/PayrollHistoryPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -117,6 +127,14 @@ export const router = createBrowserRouter([
       { path: 'notifications', element: <NotificationsListPage /> },
       { path: 'calendar', element: <CalendarPage /> },
       { path: 'map', element: <MapPage /> },
+      // Phase 1 HR & Payroll — additive only, no nav entry yet (future CR).
+      { path: 'hr/attendance', element: <AttendanceListPage /> },
+      { path: 'hr/leave-types', element: <LeaveTypesPage /> },
+      { path: 'hr/leave-requests', element: <LeaveRequestsListPage /> },
+      { path: 'payroll/periods', element: <PayrollPeriodsListPage /> },
+      { path: 'payroll/periods/:id', element: <PayrollPeriodDetailPage /> },
+      { path: 'payroll/records/:id', element: <PayrollRecordDetailPage /> },
+      { path: 'payroll/history', element: <PayrollHistoryPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the

@@ -1059,6 +1059,166 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_v2_staff_notifications_recipient_created
       ON v2_staff_notifications(recipient_id, created_at DESC);
   `);
+
+  // ============================================================
+  // Master Functional Completion Program — Phase 1: HR & Payroll.
+  // Per GURMAD_V2_Phase1_HR_Payroll_Implementation_Specification.md.
+  // Fully additive — 7 new tables, zero changes to employees or any
+  // other CLOSED/FROZEN table/constraint.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leave_types (
+      id SERIAL PRIMARY KEY,
+      code VARCHAR(30) UNIQUE NOT NULL,
+      label VARCHAR(100) NOT NULL,
+      is_paid BOOLEAN NOT NULL DEFAULT TRUE,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`
+    INSERT INTO leave_types (code, label, is_paid) VALUES
+      ('annual', 'Annual', TRUE),
+      ('sick', 'Sick', TRUE),
+      ('unpaid', 'Unpaid', FALSE),
+      ('emergency', 'Emergency', TRUE)
+    ON CONFLICT (code) DO NOTHING;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+      attendance_date DATE NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'present' CHECK (status IN ('present', 'absent', 'late', 'on_leave', 'half_day')),
+      clock_in TIMESTAMP,
+      clock_out TIMESTAMP,
+      notes TEXT,
+      corrected_from_id INTEGER REFERENCES attendance_records(id) ON DELETE SET NULL,
+      correction_reason TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // Exactly one *original* (non-correction) record per employee per day —
+  // Spec §1.2. Correction rows (corrected_from_id NOT NULL) are exempt.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_one_active_per_day
+      ON attendance_records(employee_id, attendance_date) WHERE corrected_from_id IS NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_employee_date ON attendance_records(employee_id, attendance_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_records(attendance_date);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leave_requests (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+      leave_type_id INTEGER NOT NULL REFERENCES leave_types(id) ON DELETE RESTRICT,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL CHECK (end_date >= start_date),
+      reason TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      approved_by INTEGER,
+      approved_at TIMESTAMP,
+      cancelled_by INTEGER,
+      cancelled_at TIMESTAMP,
+      cancellation_reason TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_leave_requests_employee_status ON leave_requests(employee_id, status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_leave_requests_dates ON leave_requests(start_date, end_date);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payroll_periods (
+      id SERIAL PRIMARY KEY,
+      label VARCHAR(50) NOT NULL,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL CHECK (end_date >= start_date),
+      status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'processing', 'finalized', 'paid')),
+      finalized_by INTEGER,
+      finalized_at TIMESTAMP,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_periods_status ON payroll_periods(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_periods_dates ON payroll_periods(start_date, end_date);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payroll_records (
+      id SERIAL PRIMARY KEY,
+      payroll_period_id INTEGER NOT NULL REFERENCES payroll_periods(id) ON DELETE RESTRICT,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+      salary_snapshot NUMERIC(12,2) NOT NULL,
+      zone_snapshot_id INTEGER,
+      earnings_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      deductions_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      net_salary NUMERIC(12,2) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'processing', 'finalized', 'paid', 'reversed')),
+      reversed_from_id INTEGER REFERENCES payroll_records(id) ON DELETE SET NULL,
+      finalized_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // Duplicate-payroll prevention (Spec §8), as a PARTIAL unique index
+  // rather than a plain table constraint: a reversal (Spec §13) leaves
+  // the original row in place with status='reversed' and inserts a new
+  // 'open' replacement for the same period/employee — a plain
+  // UNIQUE(payroll_period_id, employee_id) would make that insert
+  // impossible. Excluding 'reversed' rows preserves "at most one active
+  // payroll record per employee per period" while still permitting
+  // exactly the reversal replacement the Specification requires.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_one_active_per_period
+      ON payroll_records(payroll_period_id, employee_id) WHERE status != 'reversed';
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_records_period ON payroll_records(payroll_period_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_records_employee ON payroll_records(employee_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_records_status ON payroll_records(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payroll_items (
+      id SERIAL PRIMARY KEY,
+      payroll_record_id INTEGER NOT NULL REFERENCES payroll_records(id) ON DELETE RESTRICT,
+      item_type VARCHAR(20) NOT NULL CHECK (item_type IN ('earning', 'deduction')),
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      description VARCHAR(255) NOT NULL,
+      source_type VARCHAR(30) CHECK (source_type IS NULL OR source_type IN ('cashout_shortage', 'manual')),
+      source_id INTEGER,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_items_record ON payroll_items(payroll_record_id);`);
+  // A given cashout_shortages row may back at most one payroll deduction
+  // line, company-wide — Spec §1.6, no automatic linkage, duplicate
+  // protection only. No literal FK to cashout_shortages (Spec §1.6.1):
+  // Cashout (CLOSED Module 7) is validated at the application layer, not
+  // depended on at the schema level.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_items_shortage_source
+      ON payroll_items(source_type, source_id) WHERE source_type = 'cashout_shortage';
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payroll_settlements (
+      id SERIAL PRIMARY KEY,
+      payroll_record_id INTEGER NOT NULL UNIQUE REFERENCES payroll_records(id) ON DELETE RESTRICT,
+      method VARCHAR(20) NOT NULL CHECK (method IN ('cash', 'mobile_money')),
+      provider VARCHAR(30),
+      reference VARCHAR(100),
+      amount NUMERIC(12,2) NOT NULL,
+      settled_by INTEGER NOT NULL,
+      settled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
