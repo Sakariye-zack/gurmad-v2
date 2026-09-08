@@ -69,9 +69,11 @@ export default function AppShell() {
             // its 240px width so it never overlaps the Sidebar's own header
             // (its "GURMAD V2" wordmark occupies the same top-left corner
             // this control would otherwise sit on top of). Hidden/mobile:
-            // top-left of the viewport, matching Spec §11.
+            // top-left of the viewport, matching Spec §11. 44x44 — Hardening
+            // touch-target check: meets the standard WCAG minimum, the
+            // original 36x36 did not.
             position: 'fixed', top: '16px', left: showDesktopSidebar ? '252px' : '16px', zIndex: 92,
-            width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center',
             borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface)',
             color: 'var(--text)', cursor: 'pointer',
           }}

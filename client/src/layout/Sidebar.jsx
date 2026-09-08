@@ -92,7 +92,14 @@ export default function Sidebar() {
         <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
         <NotificationBell />
       </div>
-      <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      {/* Sidebar / Navigation UX — Hardening. overflowY:auto + minHeight:0
+          so a full 17-item NAV list scrolls within its own flex region
+          instead of overflowing the aside's fixed 100vh height and pushing
+          the user-info/logout footer below the viewport. flex:1 alone does
+          not shrink a flex item below its content height without an
+          explicit minHeight:0 — same family of fix as AppShell's own
+          minWidth:0 guard on <main>. */}
+      <nav style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {NAV.map((item) => {
           const link = (
             <NavLink
