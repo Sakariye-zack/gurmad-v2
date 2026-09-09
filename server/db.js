@@ -1219,6 +1219,50 @@ async function runMigrations() {
       settled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // ============================================================
+  // Master Functional Completion Program — Phase 2: Fleet Management.
+  // Per GURMAD_V2_Phase2_Fleet_Implementation_Specification.md.
+  // Fully additive — 2 new tables, zero changes to trucks or any other
+  // CLOSED/FROZEN table/constraint. Create-only (no UPDATE/DELETE route
+  // anywhere touches these) — a correction is a new row.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS truck_maintenance_records (
+      id SERIAL PRIMARY KEY,
+      truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE RESTRICT,
+      description TEXT NOT NULL,
+      cost NUMERIC(12,2) NOT NULL CHECK (cost > 0),
+      next_service_date DATE,
+      provider VARCHAR(255),
+      zone_snapshot_id INTEGER,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_maintenance_truck ON truck_maintenance_records(truck_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_maintenance_zone_snapshot ON truck_maintenance_records(zone_snapshot_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_maintenance_next_service ON truck_maintenance_records(next_service_date);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS truck_fuel_records (
+      id SERIAL PRIMARY KEY,
+      truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE RESTRICT,
+      liters NUMERIC(10,2) NOT NULL CHECK (liters > 0),
+      cost NUMERIC(12,2) NOT NULL CHECK (cost > 0),
+      odometer_reading INTEGER CHECK (odometer_reading IS NULL OR odometer_reading >= 0),
+      record_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      notes TEXT,
+      zone_snapshot_id INTEGER,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // (truck_id, created_at) — the exact ordering the odometer-anomaly
+  // comparison (Spec §5) uses to find the most recent prior reading.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_truck_created ON truck_fuel_records(truck_id, created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_zone_snapshot ON truck_fuel_records(zone_snapshot_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_record_date ON truck_fuel_records(record_date);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

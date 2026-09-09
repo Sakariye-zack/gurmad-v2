@@ -29,6 +29,12 @@ import PayrollPeriodsListPage from '../pages/payroll/PayrollPeriodsListPage.jsx'
 import PayrollPeriodDetailPage from '../pages/payroll/PayrollPeriodDetailPage.jsx';
 import PayrollRecordDetailPage from '../pages/payroll/PayrollRecordDetailPage.jsx';
 import PayrollHistoryPage from '../pages/payroll/PayrollHistoryPage.jsx';
+// Master Functional Completion Program — Phase 2: Fleet Management.
+// Additive only — Trucks pages/Sidebar untouched (CLOSED/FROZEN); nav
+// entries are a documented future CR.
+import FleetMaintenanceListPage from '../pages/fleet/FleetMaintenanceListPage.jsx';
+import FleetFuelListPage from '../pages/fleet/FleetFuelListPage.jsx';
+import FleetExpiryPage from '../pages/fleet/FleetExpiryPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -135,6 +141,10 @@ export const router = createBrowserRouter([
       { path: 'payroll/periods/:id', element: <PayrollPeriodDetailPage /> },
       { path: 'payroll/records/:id', element: <PayrollRecordDetailPage /> },
       { path: 'payroll/history', element: <PayrollHistoryPage /> },
+      // Phase 2 Fleet Management — additive only, no nav entry yet (future CR).
+      { path: 'fleet/maintenance', element: <FleetMaintenanceListPage /> },
+      { path: 'fleet/fuel', element: <FleetFuelListPage /> },
+      { path: 'fleet/expiry', element: <FleetExpiryPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
