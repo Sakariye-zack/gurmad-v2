@@ -147,11 +147,17 @@ router.get('/stores', authenticateToken, requireRole(...VIEW_ROLES), async (req,
     const myZoneId = await resolveUserZoneId(req.user);
     const params = [];
     const filters = [];
-    if (myZoneId !== null) { params.push(myZoneId); filters.push(`(zone_id = $${params.length} OR zone_id IS NULL)`); }
-    if (req.query.status) { params.push(req.query.status); filters.push(`status = $${params.length}`); }
+    // Hardening fix: these filters previously referenced unqualified
+    // column names (zone_id, status, name) against a query that LEFT
+    // JOINs zones — which also has its own name column. Any `q` search
+    // therefore hit Postgres's ambiguous-column-reference error and
+    // returned a 500 for every caller, not just malicious input. All
+    // three now explicitly qualify s. (inventory_stores).
+    if (myZoneId !== null) { params.push(myZoneId); filters.push(`(s.zone_id = $${params.length} OR s.zone_id IS NULL)`); }
+    if (req.query.status) { params.push(req.query.status); filters.push(`s.status = $${params.length}`); }
     if (req.query.q) {
       const q = req.query.q.trim();
-      if (q.length >= 2) { params.push(`%${q}%`); filters.push(`name ILIKE $${params.length}`); }
+      if (q.length >= 2) { params.push(`%${q}%`); filters.push(`s.name ILIKE $${params.length}`); }
     }
     const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const result = await pool.query(`SELECT s.*, z.name AS zone_name FROM inventory_stores s LEFT JOIN zones z ON s.zone_id = z.id ${whereSql} ORDER BY s.name ASC`, params);
@@ -543,10 +549,18 @@ router.post('/movements/receive-from-procurement', authenticateToken, requireRol
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // Read-only against Procurement's own (CLOSED) tables.
+    // Read-only against Procurement's own (CLOSED) tables. Joined all the
+    // way through to purchase_orders so the originating supplier can be
+    // recorded on the resulting inventory movement (Hardening fix — this
+    // was previously derivable but not captured, leaving
+    // source_supplier_id NULL for every procurement-sourced receipt).
+    // Still strictly read-only: SELECT only, no write to any Procurement
+    // table below.
     const receiptRes = await client.query(
-      `SELECT ri.id, ri.quantity_received, poi.inventory_item_id
-       FROM purchase_order_receipt_items ri JOIN purchase_order_items poi ON ri.purchase_order_item_id = poi.id
+      `SELECT ri.id, ri.quantity_received, poi.inventory_item_id, po.supplier_id
+       FROM purchase_order_receipt_items ri
+       JOIN purchase_order_items poi ON ri.purchase_order_item_id = poi.id
+       JOIN purchase_orders po ON poi.purchase_order_id = po.id
        WHERE ri.id = $1`,
       [receiptItemId]
     );
@@ -566,9 +580,9 @@ router.post('/movements/receive-from-procurement', authenticateToken, requireRol
     let inserted;
     try {
       inserted = await client.query(
-        `INSERT INTO inventory_movements (item_id, store_id, movement_type, quantity, source_purchase_order_receipt_item_id, created_by)
-         VALUES ($1,$2,'receipt',$3,$4,$5) RETURNING *`,
-        [receiptLine.inventory_item_id, storeId, receiptLine.quantity_received, receiptItemId, req.user.id]
+        `INSERT INTO inventory_movements (item_id, store_id, movement_type, quantity, source_purchase_order_receipt_item_id, source_supplier_id, created_by)
+         VALUES ($1,$2,'receipt',$3,$4,$5,$6) RETURNING *`,
+        [receiptLine.inventory_item_id, storeId, receiptLine.quantity_received, receiptItemId, receiptLine.supplier_id, req.user.id]
       );
     } catch (insertErr) {
       await client.query('ROLLBACK');
