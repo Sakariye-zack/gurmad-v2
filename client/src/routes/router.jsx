@@ -42,6 +42,14 @@ import ProcurementRequestsListPage from '../pages/procurement/ProcurementRequest
 import ProcurementRequestDetailPage from '../pages/procurement/ProcurementRequestDetailPage.jsx';
 import PurchaseOrdersListPage from '../pages/procurement/PurchaseOrdersListPage.jsx';
 import PurchaseOrderDetailPage from '../pages/procurement/PurchaseOrderDetailPage.jsx';
+import InventoryItemsListPage from '../pages/inventory/InventoryItemsListPage.jsx';
+import InventoryItemDetailPage from '../pages/inventory/InventoryItemDetailPage.jsx';
+import InventoryStoresListPage from '../pages/inventory/InventoryStoresListPage.jsx';
+import InventoryStoreDetailPage from '../pages/inventory/InventoryStoreDetailPage.jsx';
+import InventoryMovementsPage from '../pages/inventory/InventoryMovementsPage.jsx';
+import InventoryAdjustmentsPage from '../pages/inventory/InventoryAdjustmentsPage.jsx';
+import AssetsListPage from '../pages/inventory/AssetsListPage.jsx';
+import AssetDetailPage from '../pages/inventory/AssetDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -159,6 +167,15 @@ export const router = createBrowserRouter([
       { path: 'procurement/requests/:id', element: <ProcurementRequestDetailPage /> },
       { path: 'procurement/purchase-orders', element: <PurchaseOrdersListPage /> },
       { path: 'procurement/purchase-orders/:id', element: <PurchaseOrderDetailPage /> },
+      // Phase 4 Inventory & Assets — additive only, no nav entry yet (future CR), direct-URL access only.
+      { path: 'inventory/items', element: <InventoryItemsListPage /> },
+      { path: 'inventory/items/:id', element: <InventoryItemDetailPage /> },
+      { path: 'inventory/stores', element: <InventoryStoresListPage /> },
+      { path: 'inventory/stores/:id', element: <InventoryStoreDetailPage /> },
+      { path: 'inventory/movements', element: <InventoryMovementsPage /> },
+      { path: 'inventory/adjustments', element: <InventoryAdjustmentsPage /> },
+      { path: 'inventory/assets', element: <AssetsListPage /> },
+      { path: 'inventory/assets/:id', element: <AssetDetailPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the

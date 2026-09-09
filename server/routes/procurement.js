@@ -468,10 +468,21 @@ router.post('/purchase-orders', authenticateToken, requireRole(...PO_ROLES), asy
     const insertedItems = [];
     for (const item of items) {
       const lineTotal = calculatePOLineTotal(item.quantity, item.unit_price);
+      // Phase 4 Inventory & Assets — Decisions §12/Spec §1.7: the ONE
+      // explicitly-authorized narrow addition to this route. Optional
+      // inventory_item_id mapping, validated against inventory_items
+      // if provided. No other line of this handler changes.
+      let inventoryItemId = null;
+      if (item.inventory_item_id !== undefined && item.inventory_item_id !== null && item.inventory_item_id !== '') {
+        inventoryItemId = parseInt(item.inventory_item_id, 10);
+        if (isNaN(inventoryItemId)) { await client.query('ROLLBACK'); return res.status(400).json({ error: { message: 'Invalid inventory_item_id.', code: 'VALIDATION' } }); }
+        const invRes = await client.query('SELECT id FROM inventory_items WHERE id = $1', [inventoryItemId]);
+        if (invRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: { message: 'inventory_item_id does not reference an existing inventory item.', code: 'VALIDATION' } }); }
+      }
       const itemRes = await client.query(
-        `INSERT INTO purchase_order_items (purchase_order_id, procurement_request_item_id, item_name, quantity, unit_price, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [po.id, item.procurement_request_item_id || null, String(item.item_name).trim(), parseInt(item.quantity, 10), parseFloat(item.unit_price), lineTotal]
+        `INSERT INTO purchase_order_items (purchase_order_id, procurement_request_item_id, item_name, quantity, unit_price, line_total, inventory_item_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [po.id, item.procurement_request_item_id || null, String(item.item_name).trim(), parseInt(item.quantity, 10), parseFloat(item.unit_price), lineTotal, inventoryItemId]
       );
       insertedItems.push(itemRes.rows[0]);
     }
@@ -559,10 +570,19 @@ router.put('/purchase-orders/:id', authenticateToken, requireRole(...PO_ROLES), 
     const insertedItems = [];
     for (const item of items) {
       const lineTotal = calculatePOLineTotal(item.quantity, item.unit_price);
+      // Phase 4 Inventory & Assets — Decisions §12/Spec §1.7: same
+      // narrow addition as the create route above.
+      let inventoryItemId = null;
+      if (item.inventory_item_id !== undefined && item.inventory_item_id !== null && item.inventory_item_id !== '') {
+        inventoryItemId = parseInt(item.inventory_item_id, 10);
+        if (isNaN(inventoryItemId)) { await client.query('ROLLBACK'); return res.status(400).json({ error: { message: 'Invalid inventory_item_id.', code: 'VALIDATION' } }); }
+        const invRes = await client.query('SELECT id FROM inventory_items WHERE id = $1', [inventoryItemId]);
+        if (invRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: { message: 'inventory_item_id does not reference an existing inventory item.', code: 'VALIDATION' } }); }
+      }
       const itemRes = await client.query(
-        `INSERT INTO purchase_order_items (purchase_order_id, procurement_request_item_id, item_name, quantity, unit_price, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [id, item.procurement_request_item_id || null, String(item.item_name).trim(), parseInt(item.quantity, 10), parseFloat(item.unit_price), lineTotal]
+        `INSERT INTO purchase_order_items (purchase_order_id, procurement_request_item_id, item_name, quantity, unit_price, line_total, inventory_item_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [id, item.procurement_request_item_id || null, String(item.item_name).trim(), parseInt(item.quantity, 10), parseFloat(item.unit_price), lineTotal, inventoryItemId]
       );
       insertedItems.push(itemRes.rows[0]);
     }

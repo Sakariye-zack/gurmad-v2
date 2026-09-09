@@ -1373,6 +1373,140 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_receipt_items_item ON purchase_order_receipt_items(purchase_order_item_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_receipt_items_receipt ON purchase_order_receipt_items(purchase_order_receipt_id);`);
+
+  // ============================================================
+  // Master Functional Completion Program — Phase 4: Inventory & Assets.
+  // Per GURMAD_V2_Phase4_Inventory_Assets_Implementation_Specification.md.
+  // Fully additive — 7 new tables + 1 additive column on Phase 3's
+  // (CLOSED) purchase_order_items. Zero mutable balance column
+  // anywhere — every stock figure is derived from inventory_movements
+  // at read time. No CASCADE on any historical/ledger FK.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id SERIAL PRIMARY KEY,
+      sku VARCHAR(50),
+      name VARCHAR(255) NOT NULL,
+      category VARCHAR(100),
+      unit_of_measure VARCHAR(50) NOT NULL,
+      description TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      reorder_level INTEGER CHECK (reorder_level IS NULL OR reorder_level >= 0),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_items_sku ON inventory_items(sku) WHERE sku IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_items_status ON inventory_items(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_stores (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_stores_zone ON inventory_stores(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_stores_status ON inventory_stores(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id SERIAL PRIMARY KEY,
+      item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE RESTRICT,
+      store_id INTEGER NOT NULL REFERENCES inventory_stores(id) ON DELETE RESTRICT,
+      movement_type VARCHAR(20) NOT NULL CHECK (movement_type IN ('opening_balance', 'receipt', 'issue', 'transfer_out', 'transfer_in', 'adjustment', 'return')),
+      quantity INTEGER NOT NULL CHECK (quantity != 0),
+      unit_cost NUMERIC(12,2),
+      reference TEXT,
+      reason TEXT,
+      transfer_group_id UUID,
+      source_purchase_order_receipt_item_id INTEGER,
+      source_supplier_id INTEGER REFERENCES suppliers(id) ON DELETE RESTRICT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_movements_item_store_created ON inventory_movements(item_id, store_id, created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_movements_transfer_group ON inventory_movements(transfer_group_id);`);
+  // Duplicate Procurement-conversion prevention (Spec §1.3.2) — a given
+  // purchase_order_receipt_items row may generate at most one inventory
+  // movement, company-wide, ever.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_movements_source_receipt_item
+      ON inventory_movements(source_purchase_order_receipt_item_id) WHERE source_purchase_order_receipt_item_id IS NOT NULL;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asset_register (
+      id SERIAL PRIMARY KEY,
+      asset_tag VARCHAR(50),
+      name VARCHAR(255) NOT NULL,
+      category VARCHAR(100),
+      serial_number VARCHAR(100),
+      acquisition_date DATE,
+      acquisition_cost NUMERIC(12,2) CHECK (acquisition_cost IS NULL OR acquisition_cost >= 0),
+      supplier_id INTEGER REFERENCES suppliers(id) ON DELETE RESTRICT,
+      purchase_order_id INTEGER REFERENCES purchase_orders(id) ON DELETE RESTRICT,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      store_location_id INTEGER REFERENCES inventory_stores(id) ON DELETE RESTRICT,
+      assigned_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      condition VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'assigned', 'in_maintenance', 'retired')),
+      retired_reason TEXT,
+      retired_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_register_tag ON asset_register(asset_tag) WHERE asset_tag IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asset_register_zone ON asset_register(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asset_register_status ON asset_register(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asset_register_assigned ON asset_register(assigned_employee_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asset_transfers (
+      id SERIAL PRIMARY KEY,
+      asset_id INTEGER NOT NULL REFERENCES asset_register(id) ON DELETE RESTRICT,
+      from_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      to_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      from_zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      to_zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      transferred_by INTEGER NOT NULL,
+      transferred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reason TEXT NOT NULL
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asset_transfers_asset ON asset_transfers(asset_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_adjustment_requests (
+      id SERIAL PRIMARY KEY,
+      item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE RESTRICT,
+      store_id INTEGER NOT NULL REFERENCES inventory_stores(id) ON DELETE RESTRICT,
+      requested_quantity INTEGER NOT NULL CHECK (requested_quantity != 0),
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      requested_by INTEGER NOT NULL,
+      approved_by INTEGER,
+      approved_at TIMESTAMP,
+      rejected_reason TEXT,
+      resulting_movement_id INTEGER REFERENCES inventory_movements(id) ON DELETE RESTRICT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_adjustment_requests_status ON inventory_adjustment_requests(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_adjustment_requests_item_store ON inventory_adjustment_requests(item_id, store_id);`);
+
+  // Procurement integration (Spec §1.7 / Decisions §12) — the ONE
+  // explicitly-authorized narrow additive column against Phase 3's own
+  // CLOSED purchase_order_items table. Nullable; no existing column,
+  // constraint, index, or route behavior is touched. No item_name
+  // string-matching — a real FK only.
+  await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS inventory_item_id INTEGER REFERENCES inventory_items(id) ON DELETE SET NULL;`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
