@@ -35,6 +35,13 @@ import PayrollHistoryPage from '../pages/payroll/PayrollHistoryPage.jsx';
 import FleetMaintenanceListPage from '../pages/fleet/FleetMaintenanceListPage.jsx';
 import FleetFuelListPage from '../pages/fleet/FleetFuelListPage.jsx';
 import FleetExpiryPage from '../pages/fleet/FleetExpiryPage.jsx';
+// Master Functional Completion Program — Phase 3: Procurement.
+import SuppliersListPage from '../pages/procurement/SuppliersListPage.jsx';
+import SupplierDetailPage from '../pages/procurement/SupplierDetailPage.jsx';
+import ProcurementRequestsListPage from '../pages/procurement/ProcurementRequestsListPage.jsx';
+import ProcurementRequestDetailPage from '../pages/procurement/ProcurementRequestDetailPage.jsx';
+import PurchaseOrdersListPage from '../pages/procurement/PurchaseOrdersListPage.jsx';
+import PurchaseOrderDetailPage from '../pages/procurement/PurchaseOrderDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -145,6 +152,13 @@ export const router = createBrowserRouter([
       { path: 'fleet/maintenance', element: <FleetMaintenanceListPage /> },
       { path: 'fleet/fuel', element: <FleetFuelListPage /> },
       { path: 'fleet/expiry', element: <FleetExpiryPage /> },
+      // Phase 3 Procurement — additive only, no nav entry yet (future CR).
+      { path: 'procurement/suppliers', element: <SuppliersListPage /> },
+      { path: 'procurement/suppliers/:id', element: <SupplierDetailPage /> },
+      { path: 'procurement/requests', element: <ProcurementRequestsListPage /> },
+      { path: 'procurement/requests/:id', element: <ProcurementRequestDetailPage /> },
+      { path: 'procurement/purchase-orders', element: <PurchaseOrdersListPage /> },
+      { path: 'procurement/purchase-orders/:id', element: <PurchaseOrderDetailPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the

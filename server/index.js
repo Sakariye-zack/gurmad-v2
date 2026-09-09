@@ -53,6 +53,8 @@ const payrollRecordsRouter = require('./routes/payrollRecords');
 const hrReportsRouter = require('./routes/hrReports');
 // Master Functional Completion Program — Phase 2: Fleet Management.
 const fleetRouter = require('./routes/fleet');
+// Master Functional Completion Program — Phase 3: Procurement.
+const procurementRouter = require('./routes/procurement');
 
 const app = express();
 
@@ -141,6 +143,7 @@ app.use('/api/v2/payroll-periods', payrollPeriodsRouter);
 app.use('/api/v2/payroll-records', payrollRecordsRouter);
 app.use('/api/v2/hr-reports', hrReportsRouter);
 app.use('/api/v2/fleet', fleetRouter);
+app.use('/api/v2/procurement', procurementRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

@@ -1263,6 +1263,116 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_truck_created ON truck_fuel_records(truck_id, created_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_zone_snapshot ON truck_fuel_records(zone_snapshot_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_fuel_record_date ON truck_fuel_records(record_date);`);
+
+  // ============================================================
+  // Master Functional Completion Program — Phase 3: Procurement.
+  // Per GURMAD_V2_Phase3_Procurement_Implementation_Specification.md.
+  // Fully additive — 7 new tables, zero changes to any existing table.
+  // No hard delete anywhere; suppliers are archive-only.
+  // ============================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      contact VARCHAR(100),
+      phone VARCHAR(20),
+      email VARCHAR(255),
+      address TEXT,
+      category VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_suppliers_status ON suppliers(status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procurement_requests (
+      id SERIAL PRIMARY KEY,
+      request_number VARCHAR(20) UNIQUE NOT NULL,
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      requested_by INTEGER NOT NULL,
+      priority VARCHAR(10) NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high')),
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      approved_by INTEGER,
+      approved_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_procurement_requests_zone_status ON procurement_requests(zone_id, status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_procurement_requests_requested_by ON procurement_requests(requested_by);`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS procurement_request_number_seq;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procurement_request_items (
+      id SERIAL PRIMARY KEY,
+      procurement_request_id INTEGER NOT NULL REFERENCES procurement_requests(id) ON DELETE RESTRICT,
+      item_name VARCHAR(255) NOT NULL,
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      estimated_unit_price NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (estimated_unit_price >= 0),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_procurement_request_items_request ON procurement_request_items(procurement_request_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id SERIAL PRIMARY KEY,
+      po_number VARCHAR(20) UNIQUE NOT NULL,
+      procurement_request_id INTEGER NOT NULL REFERENCES procurement_requests(id) ON DELETE RESTRICT,
+      supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'ordered', 'partially_received', 'received', 'cancelled')),
+      total_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_orders_request ON purchase_orders(procurement_request_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS purchase_order_number_seq;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS purchase_order_items (
+      id SERIAL PRIMARY KEY,
+      purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE RESTRICT,
+      procurement_request_item_id INTEGER REFERENCES procurement_request_items(id) ON DELETE SET NULL,
+      item_name VARCHAR(255) NOT NULL,
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
+      line_total NUMERIC(12,2) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+      id SERIAL PRIMARY KEY,
+      purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE RESTRICT,
+      received_by INTEGER NOT NULL,
+      received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_po ON purchase_order_receipts(purchase_order_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS purchase_order_receipt_items (
+      id SERIAL PRIMARY KEY,
+      purchase_order_receipt_id INTEGER NOT NULL REFERENCES purchase_order_receipts(id) ON DELETE RESTRICT,
+      purchase_order_item_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE RESTRICT,
+      quantity_received INTEGER NOT NULL CHECK (quantity_received > 0),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_receipt_items_item ON purchase_order_receipt_items(purchase_order_item_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_order_receipt_items_receipt ON purchase_order_receipt_items(purchase_order_receipt_id);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
