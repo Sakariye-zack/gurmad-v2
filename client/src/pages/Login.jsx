@@ -1,40 +1,59 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Lock, User, ArrowRight } from 'lucide-react';
+import { Shield, ChevronRight, MapPin } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
-import { Button, useToast } from '../components/ui/index.js';
+import { useToast } from '../components/ui/index.js';
 import CompanyLogo from '../components/CompanyLogo.jsx';
 
-// Design pass (user-requested, Phase 10) — the previous version was a
-// bare centered form: no background treatment, small unstyled logo slot,
-// plain browser-default inputs. Redesigned within the EXISTING design
-// system only (design-system/tokens.css's --brand/--accent/--bg palette,
-// drawn from the logo itself per that file's own header comment) — no
-// new tokens invented, no component library added. Functionality is
-// byte-for-byte identical: same submit handler, same 2FA branch, same
-// useAuth/useToast/useNavigate calls.
-const inputWrapStyle = {
-  position: 'relative',
-  display: 'flex',
-  alignItems: 'center',
-};
-const inputIconStyle = {
-  position: 'absolute',
-  left: '14px',
+// Design pass 2 (user-requested rework — "not generic/AI, fits waste
+// collection"). Dropped the soft-gradient SaaS-card look entirely for a
+// "fleet dispatch manifest" concept instead: a route-map backdrop, hazard-
+// stripe edge tape (the reflective marking on an actual collection truck),
+// and a permit/manifest-styled access card — monospace data labels,
+// stamped logo badge, condensed industrial display type. Still built
+// entirely from the app's own --brand/--accent/--bg palette (tokens.css) —
+// only the typefaces are new (Oswald + JetBrains Mono, loaded in
+// index.html, scoped to this page via inline fontFamily only). Zero
+// functional change: identical submit handler, 2FA branch, and auth calls
+// as before.
+const DISPLAY_FONT = "'Oswald', ui-sans-serif, sans-serif";
+const MONO_FONT = "'JetBrains Mono', ui-monospace, monospace";
+
+const fieldLabelStyle = {
+  display: 'block',
+  fontFamily: MONO_FONT,
+  fontSize: '10px',
+  fontWeight: 700,
+  letterSpacing: '0.12em',
   color: 'var(--text-muted)',
-  pointerEvents: 'none',
+  marginBottom: '8px',
 };
 const inputStyle = {
   width: '100%',
-  padding: '13px 14px 13px 42px',
-  borderRadius: 'var(--radius-md)',
-  border: '1.5px solid var(--border)',
+  padding: '13px 14px',
+  borderRadius: '4px',
+  border: '2px solid var(--border)',
   background: 'var(--bg)',
   color: 'var(--text)',
   boxSizing: 'border-box',
+  fontFamily: MONO_FONT,
   fontSize: '14px',
-  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+  transition: 'border-color 0.12s ease',
 };
+
+// A stop-and-go collection route: a dashed line threading between a few
+// waypoint dots, ending at a filled pin — the one decorative graphic on
+// the page, kept faint and pushed to a back corner. Not a stock map icon.
+function RouteMotif({ style }) {
+  return (
+    <svg viewBox="0 0 260 200" width="260" height="200" style={style} aria-hidden="true">
+      <path d="M8 170 C 60 170, 60 110, 110 110 S 160 40, 210 40" fill="none" stroke="var(--brand)" strokeWidth="2.5" strokeDasharray="1 9" strokeLinecap="round" opacity="0.5" />
+      <circle cx="8" cy="170" r="4" fill="var(--brand)" opacity="0.55" />
+      <circle cx="110" cy="110" r="4" fill="var(--accent)" opacity="0.55" />
+      <circle cx="210" cy="40" r="5.5" fill="var(--accent)" opacity="0.7" />
+    </svg>
+  );
+}
 
 export default function Login() {
   const { login, loading } = useAuth();
@@ -62,129 +81,130 @@ export default function Login() {
     }
   };
 
-  const focusRing = (name) =>
-    focused === name
-      ? { borderColor: 'var(--brand)', boxShadow: '0 0 0 3px var(--success-bg)' }
-      : {};
+  const focusRing = (name) => (focused === name ? { borderColor: 'var(--brand)' } : {});
+  const hazardTape = 'repeating-linear-gradient(-45deg, var(--brand) 0 14px, var(--accent) 14px 28px)';
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
-        position: 'relative',
-        overflow: 'hidden',
-        background: 'var(--bg)',
-      }}
-    >
-      {/* Ambient brand-colored glow, purely decorative — two soft radial
-          blobs in the logo's own green/orange, well below any text's
-          contrast requirements against --bg either theme. */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute', inset: 0, pointerEvents: 'none',
-          background:
-            'radial-gradient(600px circle at 15% 20%, color-mix(in srgb, var(--brand) 16%, transparent), transparent 60%), ' +
-            'radial-gradient(560px circle at 85% 85%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%)',
-        }}
-      />
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+      {/* Reflective hazard tape — the edge marking on a real collection
+          truck, not a UI gradient. Thin, functional, unmistakably
+          industrial rather than decorative-SaaS. */}
+      <div style={{ height: '8px', background: hazardTape, flexShrink: 0 }} />
 
-      <div style={{ position: 'relative', width: '100%', maxWidth: '400px' }}>
-        <div
-          style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            boxShadow: '0 20px 48px -12px rgba(28, 35, 29, 0.18), var(--shadow-sm)',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Top accent strip in the two logo colors — the one deliberate
-              flourish on an otherwise quiet, utilitarian page. */}
-          <div style={{ height: '5px', background: 'linear-gradient(90deg, var(--brand), var(--accent))' }} />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', position: 'relative', overflow: 'hidden' }}>
+        <RouteMotif style={{ position: 'absolute', bottom: '-10px', right: '-10px', opacity: 0.8 }} />
+        <RouteMotif style={{ position: 'absolute', top: '-30px', left: '-30px', transform: 'rotate(180deg)', opacity: 0.4 }} />
 
-          <div style={{ padding: '40px 36px 32px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginBottom: '30px' }}>
+        <div style={{ position: 'relative', width: '100%', maxWidth: '384px' }}>
+          <div
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderLeft: '6px solid var(--brand)',
+              borderRadius: '6px',
+              boxShadow: '0 16px 40px -14px rgba(0, 0, 0, 0.25)',
+              padding: '34px 32px 30px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '22px' }}>
+              <MapPin size={12} color="var(--accent)" />
+              <span style={{ fontFamily: MONO_FONT, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>
+                COLLECTION OPS &nbsp;/&nbsp; ACCESS TERMINAL
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '28px' }}>
               <div
                 style={{
-                  width: '68px', height: '68px', borderRadius: 'var(--radius-lg)',
-                  background: 'var(--success-bg)', border: '1px solid var(--border)',
+                  width: '54px', height: '54px', flexShrink: 0,
+                  background: 'var(--bg)', border: '2px dashed var(--border)', borderRadius: '4px',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  marginBottom: '16px',
                 }}
               >
-                <CompanyLogo height={40} fallback={<Shield size={30} color="var(--brand)" />} />
+                <CompanyLogo height={32} fallback={<Shield size={24} color="var(--brand)" />} />
               </div>
-              <h1 style={{ fontSize: '22px' }}>Gurmad V2</h1>
-              <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>Foundation build — staging</div>
+              <div>
+                <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '26px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
+                  Gurmad
+                </h1>
+                <div style={{ fontFamily: MONO_FONT, fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px', letterSpacing: '0.04em' }}>
+                  Foundation build — staging
+                </div>
+              </div>
             </div>
 
             <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginBottom: '7px', color: 'var(--text)' }}>Username</label>
-                <div style={inputWrapStyle}>
-                  <User size={16} style={inputIconStyle} />
-                  <input
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    onFocus={() => setFocused('username')}
-                    onBlur={() => setFocused(null)}
-                    required
-                    autoFocus
-                    autoComplete="username"
-                    style={{ ...inputStyle, ...focusRing('username') }}
-                  />
-                </div>
+                <label style={fieldLabelStyle}>[ USERNAME ]</label>
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  onFocus={() => setFocused('username')}
+                  onBlur={() => setFocused(null)}
+                  required
+                  autoFocus
+                  autoComplete="username"
+                  style={{ ...inputStyle, ...focusRing('username') }}
+                />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginBottom: '7px', color: 'var(--text)' }}>Password</label>
-                <div style={inputWrapStyle}>
-                  <Lock size={16} style={inputIconStyle} />
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    onFocus={() => setFocused('password')}
-                    onBlur={() => setFocused(null)}
-                    required
-                    autoComplete="current-password"
-                    style={{ ...inputStyle, ...focusRing('password') }}
-                  />
-                </div>
+                <label style={fieldLabelStyle}>[ PASSWORD ]</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onFocus={() => setFocused('password')}
+                  onBlur={() => setFocused(null)}
+                  required
+                  autoComplete="current-password"
+                  style={{ ...inputStyle, ...focusRing('password') }}
+                />
               </div>
 
               {require2FA && (
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginBottom: '7px', color: 'var(--text)' }}>Authenticator code</label>
-                  <div style={inputWrapStyle}>
-                    <Shield size={16} style={inputIconStyle} />
-                    <input
-                      value={token}
-                      onChange={(e) => setToken(e.target.value)}
-                      onFocus={() => setFocused('token')}
-                      onBlur={() => setFocused(null)}
-                      maxLength={6}
-                      autoFocus
-                      style={{ ...inputStyle, ...focusRing('token'), letterSpacing: '3px', fontWeight: 700 }}
-                    />
-                  </div>
+                  <label style={fieldLabelStyle}>[ AUTH CODE ]</label>
+                  <input
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    onFocus={() => setFocused('token')}
+                    onBlur={() => setFocused(null)}
+                    maxLength={6}
+                    autoFocus
+                    style={{ ...inputStyle, ...focusRing('token'), letterSpacing: '0.3em', textAlign: 'center', fontWeight: 700 }}
+                  />
                 </div>
               )}
 
-              <Button type="submit" icon={ArrowRight} disabled={loading} style={{ marginTop: '8px', width: '100%', padding: '13px 16px', fontSize: '15px' }}>
-                {loading ? 'Signing in…' : 'Sign in'}
-              </Button>
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  marginTop: '6px', width: '100%', padding: '14px 16px', border: 'none', borderRadius: '4px',
+                  background: 'var(--brand)', color: '#fff',
+                  fontFamily: DISPLAY_FONT, fontSize: '15px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                  cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.65 : 1,
+                }}
+              >
+                {loading ? 'Signing in…' : 'Sign In'}
+                {!loading && <ChevronRight size={17} strokeWidth={3} />}
+              </button>
             </form>
           </div>
-        </div>
 
-        <div style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)', marginTop: '20px' }}>
-          Waste Management System
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+              fontFamily: MONO_FONT, fontSize: '10px', letterSpacing: '0.1em', color: 'var(--text-muted)',
+              marginTop: '18px', textTransform: 'uppercase',
+            }}
+          >
+            <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
+            Waste Collection &amp; Management Network
+            <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
+          </div>
         </div>
       </div>
     </div>

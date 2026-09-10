@@ -10,6 +10,16 @@
          manifest's scope) — no separate manifest file needed per app. -->
     <link rel="manifest" id="v2-manifest-link" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#2F7D3E" />
+    <!-- Fleet-manifest login redesign (user-requested "not AI-generated,
+         fits waste collection"). Scoped to the 3 login screens only via
+         inline fontFamily there — the app-wide --font-display/--font-body
+         tokens in design-system/tokens.css are untouched, so no other
+         page's typography changes. Oswald = condensed industrial display
+         face (route-signage feel); JetBrains Mono = manifest/dispatch
+         data labels. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>
