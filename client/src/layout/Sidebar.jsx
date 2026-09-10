@@ -36,6 +36,11 @@ export const NAV = [
   // cashier has no role in collection operations at all (matches the
   // backend's VIEW_ROLES on /v2/cycles and /v2/batches).
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
+  // Batches page (/collection-cycles/batches) existed and worked but had
+  // NO nav entry anywhere — found live (a real user's browser) during
+  // Phase 10 Gap Audit. Same roles as Collection Cycles itself, since a
+  // batch is meaningless without its parent cycle's own access boundary.
+  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
   // Operational Calendar — Decisions §"RBAC": Admin (company-wide),
   // Gudoomiye/Zone Accountant/Head of Cashiers (own-zone-scoped). Cashier
   // and Collector get no v1 access — matches the backend's own requireRole

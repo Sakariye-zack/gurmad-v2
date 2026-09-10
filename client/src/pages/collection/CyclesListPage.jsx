@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { CalendarRange, Plus } from 'lucide-react';
+import { CalendarRange, ClipboardList, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader, Button, DataTable, StatusBadge, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useCycles, useCreateCycle } from '../../hooks/useCollectionOps.js';
@@ -9,6 +10,7 @@ export default function CyclesListPage() {
   const { data, isLoading, error, refetch } = useCycles();
   const [formOpen, setFormOpen] = useState(false);
   const cycles = data?.data || [];
+  const navigate = useNavigate();
 
   return (
     <div>
@@ -17,9 +19,18 @@ export default function CyclesListPage() {
         title="Collection Cycles"
         subtitle="Monthly, weekly, or custom collection periods per zone."
         actions={
-          <RoleGate roles={['admin', 'gudoomiye']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Cycle</Button>
-          </RoleGate>
+          <>
+            {/* Phase 10 Gap Audit fix — the Batches page (/collection-cycles/batches)
+                existed and worked but had NO link anywhere in the UI leading to it
+                (not here, not in Sidebar.jsx's NAV) — a user had to already know the
+                exact URL. A cycle only becomes useful once batches are created from
+                it, so this is the natural, narrow place to close that gap; purely
+                additive, no other behavior on this page changes. */}
+            <Button variant="secondary" icon={ClipboardList} onClick={() => navigate('/collection-cycles/batches')}>View Batches</Button>
+            <RoleGate roles={['admin', 'gudoomiye']}>
+              <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Cycle</Button>
+            </RoleGate>
+          </>
         }
       />
       <DataTable
