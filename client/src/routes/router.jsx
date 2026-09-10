@@ -52,6 +52,8 @@ import AssetsListPage from '../pages/inventory/AssetsListPage.jsx';
 import AssetDetailPage from '../pages/inventory/AssetDetailPage.jsx';
 import DocumentsListPage from '../pages/documents/DocumentsListPage.jsx';
 import DocumentDetailPage from '../pages/documents/DocumentDetailPage.jsx';
+import MasterDataImportPage from '../pages/masterData/MasterDataImportPage.jsx';
+import MasterDataExportPage from '../pages/masterData/MasterDataExportPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -181,6 +183,9 @@ export const router = createBrowserRouter([
       // Phase 5 Document & File Management — additive only, no nav entry yet (future CR), direct-URL access only.
       { path: 'documents', element: <DocumentsListPage /> },
       { path: 'documents/:id', element: <DocumentDetailPage /> },
+      // Phase 6 Import/Export + Master Data Governance — additive only, no nav entry yet (future CR), direct-URL access only.
+      { path: 'master-data/import', element: <MasterDataImportPage /> },
+      { path: 'master-data/export', element: <MasterDataExportPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
