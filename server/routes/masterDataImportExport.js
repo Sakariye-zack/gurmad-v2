@@ -139,7 +139,11 @@ async function runValidationPipeline({ client, entity, entityDef, buffer, actor,
         item.insertedId = result.id;
       }
     } catch (err) {
-      item.errors.push({ field: null, code: 'DB_ERROR', message: 'Database rejected this row: ' + err.message });
+      if (err.code === '23505') {
+        item.errors.push({ field: entityDef.canonicalKey || null, code: 'DUPLICATE_IN_DATABASE', message: 'This row conflicts with a record created by a concurrent request.' });
+      } else {
+        item.errors.push({ field: null, code: 'DB_ERROR', message: 'Database rejected this row: ' + err.message });
+      }
     } finally {
       await client.query('ROLLBACK TO SAVEPOINT row_check');
     }
@@ -262,9 +266,33 @@ router.post('/:entity/import/commit', authenticateToken, async (req, res, next) 
     // Layer 9: the actual inserts, for real this time (not inside a
     // savepoint-then-rollback — this is the one code path where insert()
     // results are kept).
+    //
+    // Hardening fix: each entity's own insert() does a SELECT-then-INSERT
+    // duplicate pre-check, which is not atomic against a second, truly
+    // concurrent transaction that has not committed yet (both see "no
+    // duplicate" under READ COMMITTED). The loser's real INSERT then
+    // throws a raw Postgres 23505 unique-violation, which previously
+    // propagated uncaught to the outer catch block and returned a bare
+    // 500 instead of the correct 409 — found live via a 3x-repeated
+    // concurrent-commit-on-the-same-canonical-key test (2 of 3 runs
+    // produced 201/500 instead of the required 201/409). Fixed by
+    // catching 23505 here and translating it into the same
+    // DUPLICATE_IN_DATABASE error shape the pre-check already produces,
+    // so a genuine database-level race is reported identically to a
+    // pipeline-detected one — no business-rule change, purely a
+    // concurrency-safety fix.
     let created = 0;
     for (const row of result.parsedRows) {
-      const insertResult = await entityDef.insert(client, row, { actorId: req.user.id, zoneId });
+      let insertResult;
+      try {
+        insertResult = await entityDef.insert(client, row, { actorId: req.user.id, zoneId });
+      } catch (insertErr) {
+        if (insertErr.code === '23505') {
+          insertResult = { ok: false, code: 'DUPLICATE_IN_DATABASE', field: entityDef.canonicalKey || null, message: 'This row conflicts with a record created by a concurrent request. Please re-validate and retry.' };
+        } else {
+          throw insertErr;
+        }
+      }
       if (!insertResult.ok) {
         await client.query('ROLLBACK');
         return res.status(409).json({ error: { message: 'A row failed at commit time; the entire import was rolled back.', code: 'VALIDATION_FAILED' }, data: { errors: [{ field: insertResult.field, code: insertResult.code, message: insertResult.message }] } });
