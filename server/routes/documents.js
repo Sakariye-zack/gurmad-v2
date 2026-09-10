@@ -380,15 +380,28 @@ router.post('/:id/replace', authenticateToken, requireRole(...UPLOAD_ROLES), upl
 // Lifecycle: archive / restore / void
 // ============================================================
 
+// Hardening fix: archive/restore/void previously did a plain SELECT-then-
+// UPDATE with no row lock and no WHERE-clause guard on the prior status —
+// two concurrent requests against the same document could both pass the
+// read-time status check and both succeed, silently double-transitioning
+// (or, for void, overwriting each other's reason with no 409 to either
+// caller). Found live: a concurrent-archive test returned 200/200 instead
+// of 200/409. Fixed by making the status check part of the UPDATE's own
+// WHERE clause (atomic, no separate lock needed for a single-statement
+// transition) and checking rowCount to detect the race loser. This is a
+// concurrency-safety fix only — no lifecycle rule changes.
+
 router.put('/:id/archive', authenticateToken, requireRole(...ADMIN_ONLY), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid document id.', code: 'VALIDATION' } });
   try {
-    const before = await pool.query('SELECT * FROM documents WHERE id = $1', [id]);
-    if (before.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
-    if (before.rows[0].status !== 'active') return res.status(409).json({ error: { message: `Only an active document can be archived (this one is ${before.rows[0].status}).`, code: 'CONFLICT' } });
-    const updated = await pool.query(`UPDATE documents SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [id]);
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.archive', entityType: 'document', entityId: id, before: before.rows[0], after: updated.rows[0] });
+    const updated = await pool.query(`UPDATE documents SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'active' RETURNING *`, [id]);
+    if (updated.rows.length === 0) {
+      const current = await pool.query('SELECT status FROM documents WHERE id = $1', [id]);
+      if (current.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
+      return res.status(409).json({ error: { message: `Only an active document can be archived (this one is ${current.rows[0].status}).`, code: 'CONFLICT' } });
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.archive', entityType: 'document', entityId: id, before: { status: 'active' }, after: updated.rows[0] });
     res.json({ data: pickPublicFields(updated.rows[0]) });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to archive document.', code: 'INTERNAL' } });
@@ -399,11 +412,13 @@ router.put('/:id/restore', authenticateToken, requireRole(...ADMIN_ONLY), async 
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid document id.', code: 'VALIDATION' } });
   try {
-    const before = await pool.query('SELECT * FROM documents WHERE id = $1', [id]);
-    if (before.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
-    if (before.rows[0].status !== 'archived') return res.status(409).json({ error: { message: `Only an archived document can be restored (this one is ${before.rows[0].status}).`, code: 'CONFLICT' } });
-    const updated = await pool.query(`UPDATE documents SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [id]);
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.restore', entityType: 'document', entityId: id, before: before.rows[0], after: updated.rows[0] });
+    const updated = await pool.query(`UPDATE documents SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'archived' RETURNING *`, [id]);
+    if (updated.rows.length === 0) {
+      const current = await pool.query('SELECT status FROM documents WHERE id = $1', [id]);
+      if (current.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
+      return res.status(409).json({ error: { message: `Only an archived document can be restored (this one is ${current.rows[0].status}).`, code: 'CONFLICT' } });
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.restore', entityType: 'document', entityId: id, before: { status: 'archived' }, after: updated.rows[0] });
     res.json({ data: pickPublicFields(updated.rows[0]) });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to restore document.', code: 'INTERNAL' } });
@@ -416,14 +431,16 @@ router.put('/:id/void', authenticateToken, requireRole(...ADMIN_ONLY), async (re
   const reason = (req.body?.reason || '').trim();
   if (!reason) return res.status(400).json({ error: { message: 'A reason is required to void a document.', code: 'VALIDATION' } });
   try {
-    const before = await pool.query('SELECT * FROM documents WHERE id = $1', [id]);
-    if (before.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
-    if (before.rows[0].status === 'voided') return res.status(409).json({ error: { message: 'This document is already voided.', code: 'CONFLICT' } });
     const updated = await pool.query(
-      `UPDATE documents SET status = 'voided', voided_reason = $1, voided_by = $2, voided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
+      `UPDATE documents SET status = 'voided', voided_reason = $1, voided_by = $2, voided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND status != 'voided' RETURNING *`,
       [reason, req.user.id, id]
     );
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.void', entityType: 'document', entityId: id, before: before.rows[0], after: updated.rows[0] });
+    if (updated.rows.length === 0) {
+      const current = await pool.query('SELECT status FROM documents WHERE id = $1', [id]);
+      if (current.rows.length === 0) return res.status(404).json({ error: { message: 'Document not found.', code: 'NOT_FOUND' } });
+      return res.status(409).json({ error: { message: 'This document is already voided.', code: 'CONFLICT' } });
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'document.void', entityType: 'document', entityId: id, before: null, after: updated.rows[0] });
     res.json({ data: pickPublicFields(updated.rows[0]) });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to void document.', code: 'INTERNAL' } });

@@ -189,10 +189,14 @@ function VoidDialog({ open, onClose, doc }) {
       onConfirm={handleConfirm}
       title={`Void "${doc.title}"?`}
       message={
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        // ConfirmDialog renders `message` inside a <p> — a <div> here would
+        // be invalid HTML nesting (block content inside a paragraph).
+        // <span style="display:flex"> is phrasing content, so it nests
+        // validly while keeping the same flex-column layout.
+        <span style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <span>This is permanent — a voided document cannot be reactivated. The file and record remain retained for historical evidence.</span>
           <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Void reason" style={inputStyle} />
-        </div>
+        </span>
       }
       confirmLabel="Void"
       danger
