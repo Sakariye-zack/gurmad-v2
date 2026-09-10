@@ -1507,6 +1507,86 @@ async function runMigrations() {
   // constraint, index, or route behavior is touched. No item_name
   // string-matching — a real FK only.
   await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS inventory_item_id INTEGER REFERENCES inventory_items(id) ON DELETE SET NULL;`);
+
+  // Master Functional Completion Program — Phase 5: Document & File
+  // Management. Option B per the Decisions/Implementation Specification:
+  // centralized file_objects/documents/document_attachments, zero
+  // integration with any existing module in MVP. Local filesystem
+  // storage behind a swappable abstraction (server/lib/documentStorage.js).
+  // No CASCADE anywhere — RESTRICT everywhere except employee-style
+  // nullable-on-delete FKs, none of which exist in this feature yet
+  // (document_attachments.entity_id is deliberately NOT an FK — see the
+  // Implementation Specification §2/§4 for why).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS file_objects (
+      id SERIAL PRIMARY KEY,
+      storage_key VARCHAR(300) NOT NULL,
+      original_filename VARCHAR(255) NOT NULL,
+      display_filename VARCHAR(255) NOT NULL,
+      mime_type VARCHAR(100) NOT NULL,
+      extension VARCHAR(10) NOT NULL,
+      file_size INTEGER NOT NULL CHECK (file_size > 0 AND file_size <= 15728640),
+      checksum_sha256 VARCHAR(64),
+      storage_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (storage_provider IN ('local')),
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_file_objects_storage_key ON file_objects(storage_key);`);
+
+  // documents.category — LOCKED by explicit Business-Owner decision
+  // (Phase 5 Decisions Amendment). Exactly these 9 values, CHECK-
+  // enforced at the database level, no lookup table, no free text.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      category VARCHAR(20) NOT NULL CHECK (category IN (
+        'official', 'contract', 'certificate', 'report', 'financial',
+        'hr', 'procurement', 'operational', 'other'
+      )),
+      description TEXT,
+      current_file_object_id INTEGER NOT NULL REFERENCES file_objects(id) ON DELETE RESTRICT,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'voided')),
+      replaces_document_id INTEGER REFERENCES documents(id) ON DELETE RESTRICT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_zone_id ON documents(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);`);
+  // A document may be pointed at by at most one replacement.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_replaces_unique ON documents(replaces_document_id) WHERE replaces_document_id IS NOT NULL;`);
+
+  // document_attachments — infrastructure only. Zero rows are ever
+  // inserted by any Phase 5 MVP route (no module integration shipped).
+  // entity_type is a reserved, constrained enum for future Future-CR
+  // integrations; entity_id deliberately has no FK (cross-module
+  // reference without a hard dependency, mirrors Inventory & Assets'
+  // own source_purchase_order_receipt_item_id precedent).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS document_attachments (
+      id SERIAL PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+      entity_type VARCHAR(30) NOT NULL CHECK (entity_type IN (
+        'employee', 'procurement_request', 'purchase_order', 'inventory_item', 'asset',
+        'complaint', 'cashout', 'customer', 'supplier'
+      )),
+      entity_id INTEGER NOT NULL,
+      zone_id INTEGER REFERENCES zones(id) ON DELETE RESTRICT,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_document_attachments_document_id ON document_attachments(document_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_document_attachments_entity ON document_attachments(entity_type, entity_id);`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

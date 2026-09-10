@@ -50,6 +50,8 @@ import InventoryMovementsPage from '../pages/inventory/InventoryMovementsPage.js
 import InventoryAdjustmentsPage from '../pages/inventory/InventoryAdjustmentsPage.jsx';
 import AssetsListPage from '../pages/inventory/AssetsListPage.jsx';
 import AssetDetailPage from '../pages/inventory/AssetDetailPage.jsx';
+import DocumentsListPage from '../pages/documents/DocumentsListPage.jsx';
+import DocumentDetailPage from '../pages/documents/DocumentDetailPage.jsx';
 import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
 import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
 import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
@@ -176,6 +178,9 @@ export const router = createBrowserRouter([
       { path: 'inventory/adjustments', element: <InventoryAdjustmentsPage /> },
       { path: 'inventory/assets', element: <AssetsListPage /> },
       { path: 'inventory/assets/:id', element: <AssetDetailPage /> },
+      // Phase 5 Document & File Management — additive only, no nav entry yet (future CR), direct-URL access only.
+      { path: 'documents', element: <DocumentsListPage /> },
+      { path: 'documents/:id', element: <DocumentDetailPage /> },
     ],
   },
   // Phase 4 — Customer Portal: a fully separate route tree, outside the
