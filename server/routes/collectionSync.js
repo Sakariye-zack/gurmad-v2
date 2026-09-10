@@ -1,7 +1,11 @@
 const express = require('express');
+const crypto = require('crypto');
+const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
+const { sniffFileType } = require('../lib/fileSniff');
+const { putFile, getFileStream, fileExists } = require('../lib/documentStorage');
 const logger = require('../lib/logger');
 
 const router = express.Router();
@@ -248,5 +252,122 @@ async function processOneAction(action, user, employeeId) {
     client.release();
   }
 }
+
+// ---------- POST /photo — Serviced-visit photo evidence ----------
+//
+// Future CR promoted to in-scope, Phase 10 Gap Audit follow-up (High
+// priority, from the consolidated Future CR register). The client's own
+// "Serviced requires a photo" rule (CollectionActionScreen.jsx §15) had
+// no backend counterpart — the photo was captured only as a camera-
+// permission proof-of-access, never actually uploaded. Fixed here as a
+// SEPARATE endpoint from /replay, not folded into it, because a photo is
+// binary multipart data and the offline action queue itself carries only
+// JSON (§14) — the client is expected to call this once its /replay call
+// for the matching action_uuid comes back `accepted`.
+//
+// Reuses, unmodified: the exact same idempotency-lookup + ownership
+// pattern already proven in processOneAction() above; documentStorage.js
+// (Phase 5's storage seam, unmodified — the SAME upload directory
+// Documents already uses, no new one created); fileSniff.js (Phase 10's
+// content-sniffing fix, applied here too, not skipped). ZERO schema
+// change: batch_customers.status_photo already exists (added by the
+// original Collection Operations CR, commit 8e9ac5a) and was simply
+// never written to by any route until now — this is "wire up an
+// existing dead column," not a new column.
+const PHOTO_ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const uploadPhoto = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // a phone camera photo, not a general document — same order of magnitude as Settings' logo limit, not Documents' 15MB
+  fileFilter: (req, file, cb) => cb(null, PHOTO_ALLOWED_MIME.includes(file.mimetype)),
+});
+
+router.post('/photo', requireRole('collector', 'admin'), uploadPhoto.single('photo'), async (req, res) => {
+  const action_uuid = typeof req.body?.action_uuid === 'string' ? req.body.action_uuid : null;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!action_uuid || !UUID_RE.test(action_uuid)) {
+    return res.status(400).json({ error: { message: 'action_uuid must be a valid UUID.', code: 'VALIDATION' } });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: { message: 'A photo file is required (JPEG, PNG, or WEBP, max 8MB).', code: 'VALIDATION' } });
+  }
+  if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
+    return res.status(400).json({ error: { message: 'Photo content does not match its claimed type.', code: 'VALIDATION' } });
+  }
+
+  // The photo may only be attached to an action THIS actor already got
+  // `accepted` for — same actor_id scoping rationale as H-1 above (never
+  // trust a client-supplied batch_customer id directly).
+  const priorRes = await pool.query(
+    `SELECT entity_id, after_data FROM v2_audit_log WHERE action = 'collection_sync.accepted' AND actor_id = $1 AND after_data->>'action_uuid' = $2 LIMIT 1`,
+    [req.user.id, action_uuid]
+  );
+  if (priorRes.rows.length === 0) {
+    return res.status(409).json({ error: { message: 'No accepted status-change was found for this action_uuid. Sync the status change first.', code: 'CONFLICT' } });
+  }
+  const batchCustomerId = priorRes.rows[0].entity_id;
+  if (priorRes.rows[0].after_data?.status !== 'serviced') {
+    return res.status(400).json({ error: { message: 'A photo may only be attached to a Serviced status change.', code: 'VALIDATION' } });
+  }
+
+  const ext = { 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[req.file.mimetype];
+  const storageKey = `visit-${Date.now()}-${crypto.randomInt(1e9)}${ext}`;
+
+  try {
+    // One-shot, like every other status_* column on this row — a second
+    // photo for the same visit is rejected, not silently overwritten,
+    // matching how status/status_reason/status_note are already immutable
+    // once the visit is recorded.
+    const updateRes = await pool.query(
+      `UPDATE batch_customers SET status_photo = $1 WHERE id = $2 AND status_photo IS NULL RETURNING id`,
+      [storageKey, batchCustomerId]
+    );
+    if (updateRes.rows.length === 0) {
+      return res.status(409).json({ error: { message: 'A photo has already been recorded for this visit.', code: 'CONFLICT' } });
+    }
+    await putFile(req.file.buffer, storageKey);
+    await logAudit({
+      actorId: req.user.id, actorUsername: req.user.username, action: 'collection_sync.photo_attached',
+      entityType: 'batch_customer', entityId: batchCustomerId, before: null, after: { action_uuid },
+    });
+    res.status(201).json({ data: { batch_customer_id: batchCustomerId, uploaded: true } });
+  } catch (err) {
+    logger.error('collection_sync_photo_failure', { action_uuid, message: err.message });
+    res.status(500).json({ error: { message: 'Failed to save photo; this may be retried.', code: 'INTERNAL' } });
+  }
+});
+
+// ---------- GET /photo/:batchCustomerId — stream a visit photo ----------
+//
+// Same VIEW_ROLES as batches.js's own GET routes; zone-scoped the same
+// way (gudoomiye/zone_accountant restricted to their own zone's batch).
+const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector'];
+router.get('/photo/:batchCustomerId', requireRole(...VIEW_ROLES), async (req, res) => {
+  const id = /^\d+$/.test(String(req.params.batchCustomerId)) ? parseInt(req.params.batchCustomerId, 10) : null;
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid id.', code: 'VALIDATION' } });
+
+  const r = await pool.query(
+    `SELECT bc.status_photo, b.zone_id FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id WHERE bc.id = $1`,
+    [id]
+  );
+  if (r.rows.length === 0 || !r.rows[0].status_photo) {
+    return res.status(404).json({ error: { message: 'No photo found for this visit.', code: 'NOT_FOUND' } });
+  }
+  const role = (req.user.role || '').toLowerCase();
+  if (['gudoomiye', 'zone_accountant'].includes(role)) {
+    const zoneRes = await pool.query('SELECT id FROM zones WHERE name = $1', [req.user.zone]);
+    const myZoneId = zoneRes.rows[0]?.id ?? null;
+    if (myZoneId === null || r.rows[0].zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this photo.', code: 'FORBIDDEN' } });
+    }
+  }
+  const storageKey = r.rows[0].status_photo;
+  if (!fileExists(storageKey)) {
+    return res.status(404).json({ error: { message: 'Photo file is missing.', code: 'NOT_FOUND' } });
+  }
+  const extToMime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+  const ext = (storageKey.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  res.type(extToMime[ext] || 'application/octet-stream');
+  getFileStream(storageKey).pipe(res);
+});
 
 module.exports = router;
