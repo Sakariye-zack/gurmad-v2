@@ -82,6 +82,47 @@ export const NAV = [
   // ungated (no `roles`), matching the backend's own /v2/auth/* routes,
   // which only require authenticateToken, never requireRole.
   { to: '/account/security', label: 'Account Security', icon: ShieldAlert },
+  // Phase 1-6 Master Functional Completion Program — Future CR promoted to
+  // in-scope: these pages/routes/backends were already built and hardened
+  // across Phases 1-6 but had NO sidebar entry ("direct-URL access only",
+  // per router.jsx's own comments) — found during Phase 8 API/Integration
+  // audit. Purely additive: wiring already-existing, already-tested pages
+  // into navigation, no backend/schema/business-logic change. Roles below
+  // mirror each page's own backend VIEW_ROLES exactly (see cited route
+  // files), so nothing is exposed to a role that couldn't already reach it
+  // by typing the URL directly.
+  // Phase 1 — HR & Payroll (routes/attendance.js, leaveRequests.js,
+  // leaveTypes.js, payrollPeriods.js, payrollRecords.js VIEW_ROLES).
+  { to: '/hr/attendance', label: 'Attendance', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+  { to: '/hr/leave-requests', label: 'Leave Requests', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+  { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, roles: ['admin'] },
+  { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  { to: '/payroll/history', label: 'Payroll History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+  // Phase 2 — Fleet Management (routes/fleet.js VIEW_ROLES).
+  { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+  { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+  { to: '/fleet/expiry', label: 'Document Expiry', icon: History, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+  // Phase 3 — Procurement (routes/procurement.js VIEW_ROLES).
+  { to: '/procurement/suppliers', label: 'Suppliers', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  { to: '/procurement/requests', label: 'Procurement Requests', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  { to: '/procurement/purchase-orders', label: 'Purchase Orders', icon: Receipt, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  // Phase 4 — Inventory & Assets (routes/inventory.js VIEW_ROLES /
+  // ADMIN_ONLY for adjustments).
+  { to: '/inventory/items', label: 'Inventory Items', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  { to: '/inventory/stores', label: 'Inventory Stores', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  { to: '/inventory/movements', label: 'Stock Movements', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  { to: '/inventory/adjustments', label: 'Inventory Adjustments', icon: ShieldAlert, roles: ['admin'] },
+  { to: '/inventory/assets', label: 'Assets', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  // Phase 5 — Document & File Management (routes/documents.js VIEW_ROLES).
+  { to: '/documents', label: 'Documents', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+  // Phase 6 — Import/Export + Master Data Governance. Import is
+  // admin-heavy per-entity (routes/masterDataImportExport.js +
+  // lib/masterDataEntities.js importRoles, admin or admin+gudoomiye
+  // depending on entity — the page itself further restricts per entity);
+  // export is broader (exportRoles: admin/gudoomiye/zone_accountant on
+  // every entity).
+  { to: '/master-data/import', label: 'Data Import', icon: ClipboardList, roles: ['admin', 'gudoomiye'] },
+  { to: '/master-data/export', label: 'Data Export', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
 ];
 
 export default function Sidebar() {

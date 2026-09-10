@@ -152,7 +152,7 @@ export const router = createBrowserRouter([
       { path: 'notifications', element: <NotificationsListPage /> },
       { path: 'calendar', element: <CalendarPage /> },
       { path: 'map', element: <MapPage /> },
-      // Phase 1 HR & Payroll — additive only, no nav entry yet (future CR).
+      // Phase 1 HR & Payroll — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'hr/attendance', element: <AttendanceListPage /> },
       { path: 'hr/leave-types', element: <LeaveTypesPage /> },
       { path: 'hr/leave-requests', element: <LeaveRequestsListPage /> },
@@ -160,18 +160,18 @@ export const router = createBrowserRouter([
       { path: 'payroll/periods/:id', element: <PayrollPeriodDetailPage /> },
       { path: 'payroll/records/:id', element: <PayrollRecordDetailPage /> },
       { path: 'payroll/history', element: <PayrollHistoryPage /> },
-      // Phase 2 Fleet Management — additive only, no nav entry yet (future CR).
+      // Phase 2 Fleet Management — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'fleet/maintenance', element: <FleetMaintenanceListPage /> },
       { path: 'fleet/fuel', element: <FleetFuelListPage /> },
       { path: 'fleet/expiry', element: <FleetExpiryPage /> },
-      // Phase 3 Procurement — additive only, no nav entry yet (future CR).
+      // Phase 3 Procurement — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'procurement/suppliers', element: <SuppliersListPage /> },
       { path: 'procurement/suppliers/:id', element: <SupplierDetailPage /> },
       { path: 'procurement/requests', element: <ProcurementRequestsListPage /> },
       { path: 'procurement/requests/:id', element: <ProcurementRequestDetailPage /> },
       { path: 'procurement/purchase-orders', element: <PurchaseOrdersListPage /> },
       { path: 'procurement/purchase-orders/:id', element: <PurchaseOrderDetailPage /> },
-      // Phase 4 Inventory & Assets — additive only, no nav entry yet (future CR), direct-URL access only.
+      // Phase 4 Inventory & Assets — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'inventory/items', element: <InventoryItemsListPage /> },
       { path: 'inventory/items/:id', element: <InventoryItemDetailPage /> },
       { path: 'inventory/stores', element: <InventoryStoresListPage /> },
@@ -180,10 +180,10 @@ export const router = createBrowserRouter([
       { path: 'inventory/adjustments', element: <InventoryAdjustmentsPage /> },
       { path: 'inventory/assets', element: <AssetsListPage /> },
       { path: 'inventory/assets/:id', element: <AssetDetailPage /> },
-      // Phase 5 Document & File Management — additive only, no nav entry yet (future CR), direct-URL access only.
+      // Phase 5 Document & File Management — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'documents', element: <DocumentsListPage /> },
       { path: 'documents/:id', element: <DocumentDetailPage /> },
-      // Phase 6 Import/Export + Master Data Governance — additive only, no nav entry yet (future CR), direct-URL access only.
+      // Phase 6 Import/Export + Master Data Governance — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'master-data/import', element: <MasterDataImportPage /> },
       { path: 'master-data/export', element: <MasterDataExportPage /> },
     ],
