@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { NAV } from './Sidebar.jsx';
 import RoleGate from '../components/RoleGate.jsx';
+import CompanyLogo from '../components/CompanyLogo.jsx';
 
 // Sidebar / Navigation UX — Implementation Spec §7/§9/§13/§15. The mobile
 // drawer for non-field roles. Imports the exact same NAV array and RoleGate
@@ -92,7 +93,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
         }}
       >
         <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
+          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>} height={28} />
           {/* QA Defect #1 fix: 44x44 clickable/touchable area (was 28x28,
               20px icon + 4px padding). Icon itself stays 20px — only the
               interactive hit area grows, via fixed width/height + flex

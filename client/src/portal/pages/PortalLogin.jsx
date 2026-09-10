@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../PortalAuthContext.jsx';
+import CompanyLogo from '../../components/CompanyLogo.jsx';
 
 export default function PortalLogin() {
   const { login, loading } = usePortalAuth();
@@ -23,6 +24,7 @@ export default function PortalLogin() {
   return (
     <div style={wrapStyle}>
       <form onSubmit={handleSubmit} style={cardStyle}>
+        <CompanyLogo height={36} fallback={null} style={{ marginBottom: '10px' }} />
         <h2 style={{ margin: '0 0 4px' }}>Customer Portal</h2>
         <p style={{ margin: '0 0 20px', color: 'var(--text-muted)', fontSize: '13px' }}>Sign in with your phone number.</p>
         {error && <div style={errorStyle}>{error}</div>}

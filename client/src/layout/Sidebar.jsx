@@ -6,6 +6,7 @@ import RoleGate from '../components/RoleGate.jsx';
 // Staff Notifications — additive-only import, does not touch NAV or any
 // existing nav-item logic below.
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
+import CompanyLogo from '../components/CompanyLogo.jsx';
 
 // Information_Architecture.md §2: office-role navigation. Groups mirror the
 // approved V2 IA; only foundation-relevant routes are wired to real pages —
@@ -135,7 +136,7 @@ export default function Sidebar() {
   return (
     <aside id="app-sidebar" style={{ width: '240px', flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0 }}>
       <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>
+        <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>} height={28} />
         <NotificationBell />
       </div>
       {/* Sidebar / Navigation UX — Hardening. overflowY:auto + minHeight:0

@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthContext.jsx';
 import { Button, Card } from '../../components/ui/index.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { deriveKeyFromToken } from '../lib/collectorCrypto.js';
+import CompanyLogo from '../../components/CompanyLogo.jsx';
 
 // Screen 6.1 (Decisions §17). Reuses useAuth().login() exactly as the
 // existing desktop Login page does — the desktop pages/Login.jsx file
@@ -50,9 +51,14 @@ export default function LoginScreen() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', background: 'var(--bg)' }}>
       <Card style={{ padding: '28px', width: '100%', maxWidth: '360px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Truck size={20} color="var(--brand)" />
-          </div>
+          <CompanyLogo
+            height={40}
+            fallback={
+              <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Truck size={20} color="var(--brand)" />
+              </div>
+            }
+          />
           <div>
             <h2 style={{ margin: 0 }}>GURMAD Collector</h2>
             <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '12px' }}>Field collection app</p>

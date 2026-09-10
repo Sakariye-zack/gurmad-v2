@@ -15,6 +15,31 @@ const router = express.Router();
 // complaints.js (no second generic file-management system). No file in
 // this router touches auth.js, middleware/auth.js, or any Audit &
 // Security Center file — all CLOSED and untouched.
+//
+// Phase 10 Gap Audit, explicitly user-confirmed exception (not a
+// unilateral decision): GET /company/logo below is registered BEFORE
+// this admin gate, so it alone is reachable without authentication —
+// every other route in this router (including GET /company itself)
+// still requires authenticateToken + requireRole('admin'), unchanged.
+// Rationale: a company logo is branding, not sensitive data, and needs
+// to render on surfaces where no session exists yet — the staff/
+// Customer Portal/Collector login screens, and the Sidebar header for
+// every authenticated role, not just admin (the logo upload/replace
+// action itself remains admin-only, untouched, below).
+router.get('/company/logo', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT logo_storage_path, logo_mime_type FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
+    const row = result.rows[0];
+    if (!row || !row.logo_storage_path) return res.status(404).json({ error: { message: 'No company logo is set.', code: 'NOT_FOUND' } });
+    const filePath = path.join(UPLOAD_DIR, row.logo_storage_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Logo file not found.', code: 'NOT_FOUND' } });
+    res.setHeader('Content-Type', row.logo_mime_type || 'application/octet-stream');
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load company logo.', code: 'INTERNAL' } });
+  }
+});
+
 router.use(authenticateToken, requireRole('admin'));
 
 const SETTINGS_ROW_ID = 1; // single-row convention, enforced here only
@@ -242,20 +267,7 @@ router.post('/company/logo', (req, res, next) => {
   }
 });
 
-// GET /api/v2/settings/company/logo — authorized binary fetch, same
-// pattern as cashouts.js's own /:id/attachments/:attachmentId/file.
-router.get('/company/logo', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT logo_storage_path, logo_mime_type FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
-    const row = result.rows[0];
-    if (!row || !row.logo_storage_path) return res.status(404).json({ error: { message: 'No company logo is set.', code: 'NOT_FOUND' } });
-    const filePath = path.join(UPLOAD_DIR, row.logo_storage_path);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Logo file not found.', code: 'NOT_FOUND' } });
-    res.setHeader('Content-Type', row.logo_mime_type || 'application/octet-stream');
-    res.sendFile(filePath);
-  } catch (err) {
-    res.status(500).json({ error: { message: 'Failed to load company logo.', code: 'INTERNAL' } });
-  }
-});
+// GET /company/logo itself now lives at the TOP of this file (public,
+// registered before the admin gate) — not duplicated here.
 
 module.exports = router;

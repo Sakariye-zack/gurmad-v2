@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Shield } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { Button, Card, useToast } from '../components/ui/index.js';
+import CompanyLogo from '../components/CompanyLogo.jsx';
 
 export default function Login() {
   const { login, loading } = useAuth();
@@ -33,9 +34,14 @@ export default function Login() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
       <Card style={{ padding: '32px', width: '100%', maxWidth: '380px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Shield size={20} color="var(--brand)" />
-          </div>
+          <CompanyLogo
+            height={40}
+            fallback={
+              <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Shield size={20} color="var(--brand)" />
+              </div>
+            }
+          />
           <div>
             <h2>Gurmad V2</h2>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Foundation build — staging</div>
