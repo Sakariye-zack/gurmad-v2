@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { pool, logAudit } = require('../db');
+const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
@@ -194,6 +195,13 @@ router.post('/company/logo', (req, res, next) => {
   });
 }, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: { message: 'A logo file is required (png or jpeg).', code: 'VALIDATION' } });
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10
+  // Gap Audit) — see lib/fileSniff.js. diskStorage means the file is
+  // already written by the time this handler runs; read it back to sniff.
+  if (!sniffFileType(fs.readFileSync(req.file.path), req.file.mimetype)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
+  }
   try {
     const existing = await pool.query('SELECT * FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
     const before = existing.rows[0] || null;

@@ -4,6 +4,7 @@ const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { putFile, getFileStream, fileExists, UPLOAD_DIR } = require('../lib/documentStorage');
+const { sniffFileType } = require('../lib/fileSniff');
 
 const router = express.Router();
 
@@ -45,6 +46,11 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, ALLOWED_MIME.includes(file.mimetype)),
 });
+
+// Content-sniffing validation — Future CR promoted to in-scope, Phase 10
+// Gap Audit follow-up. See lib/fileSniff.js for the full rationale;
+// shared across every upload endpoint in the codebase, not reimplemented
+// per-route.
 
 function parseStrictId(raw) {
   if (!/^\d+$/.test(String(raw ?? ''))) return null;
@@ -112,6 +118,11 @@ router.post('/', authenticateToken, requireRole(...UPLOAD_ROLES), upload.single(
   const expectedExts = MIME_TO_EXTENSIONS[req.file.mimetype] || [];
   if (!expectedExts.includes(originalExt)) {
     return res.status(400).json({ error: { message: 'File extension does not match its detected type.', code: 'VALIDATION' } });
+  }
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10) —
+  // see sniffFileType()'s own header comment for why this exists.
+  if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
 
   const role = (req.user.role || '').toLowerCase();
@@ -307,6 +318,11 @@ router.post('/:id/replace', authenticateToken, requireRole(...UPLOAD_ROLES), upl
   const expectedExts = MIME_TO_EXTENSIONS[req.file.mimetype] || [];
   if (!expectedExts.includes(originalExt)) {
     return res.status(400).json({ error: { message: 'File extension does not match its detected type.', code: 'VALIDATION' } });
+  }
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10) —
+  // see sniffFileType()'s own header comment for why this exists.
+  if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
   const { title, category, description } = req.body;
   if (category !== undefined && category !== '' && !CATEGORY_VALUES.includes(category)) {

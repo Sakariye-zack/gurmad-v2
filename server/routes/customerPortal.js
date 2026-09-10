@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const { pool, logPortalAudit } = require('../db');
+const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { authenticateCustomerPortal, issuePortalToken } = require('../middleware/customerPortalAuth');
 const { getInvoiceBalance } = require('../lib/financialCalculations');
@@ -694,6 +695,13 @@ router.post('/complaints', authenticateCustomerPortal, uploadComplaintPhoto.sing
   const { title, description } = req.body || {};
   if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim()) {
     return res.status(400).json({ error: { message: 'title and description are required.', code: 'VALIDATION' } });
+  }
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10
+  // Gap Audit) — see lib/fileSniff.js. Checked before creating the
+  // complaint so a bad photo never leaves an orphan complaint row behind.
+  if (req.file && !sniffFileType(fs.readFileSync(req.file.path), req.file.mimetype)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: { message: 'Photo content does not match its claimed type.', code: 'VALIDATION' } });
   }
   // QA fix (Phase 5 QA, defect found live-testing): priority is staff-set
   // only, per the approved Decision Record — a customer-supplied priority

@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { pool } = require('../db');
+const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const {
   MANAGEMENT_ROLES, createComplaint, getComplaintsForStaff, getComplaintDetailForStaff,
@@ -167,6 +168,13 @@ router.post('/:id/attachments', authenticateToken, requireRole(...MANAGEMENT_ROL
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });
   if (!req.file) return res.status(400).json({ error: { message: 'A file (PDF, JPEG, or PNG, max 10MB) is required.', code: 'VALIDATION' } });
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10
+  // Gap Audit) — see lib/fileSniff.js. diskStorage means the file is
+  // already written by the time this handler runs; read it back to sniff.
+  if (!sniffFileType(fs.readFileSync(req.file.path), req.file.mimetype)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
+  }
   try {
     const complaintRes = await pool.query('SELECT id FROM complaints WHERE id = $1', [id]);
     if (complaintRes.rows.length === 0) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });

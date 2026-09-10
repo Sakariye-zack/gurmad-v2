@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { pool, logAudit } = require('../db');
+const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { computeExpectedForPeriod, hasOverlappingCashout, EPSILON } = require('../lib/cashoutCalculations');
 const { buildCashoutDocx } = require('../lib/documentGenerators');
@@ -446,6 +447,13 @@ router.post('/:id/attachments', authenticateToken, requireRole(...VIEW_ROLES), u
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
   if (!req.file) return res.status(400).json({ error: { message: 'No file uploaded, or the file type is not allowed (PDF/JPG/JPEG/PNG only).', code: 'VALIDATION' } });
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10
+  // Gap Audit) — see lib/fileSniff.js. diskStorage means the file is
+  // already written by the time this handler runs; read it back to sniff.
+  if (!sniffFileType(fs.readFileSync(req.file.path), req.file.mimetype)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
+  }
   const documentType = req.body.document_type;
   if (!DOCUMENT_TYPES.includes(documentType)) {
     fs.unlink(req.file.path, () => {});

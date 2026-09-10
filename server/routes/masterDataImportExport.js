@@ -6,6 +6,7 @@ const {
   MAX_FILE_SIZE, MAX_ROWS, parseCsv, validateHeaders, toCsv, sha256, issueValidationToken, verifyValidationToken,
 } = require('../lib/csvImportExport');
 const { IMPORT_ENTITIES, EXPORT_ENTITIES, resolveUserZoneId } = require('../lib/masterDataEntities');
+const { sniffFileType } = require('../lib/fileSniff');
 
 const router = express.Router();
 
@@ -172,6 +173,13 @@ router.post('/:entity/import/validate', authenticateToken, async (req, res, next
   if (!req.file) return res.status(400).json({ error: { message: 'A CSV file is required.', code: 'VALIDATION' } });
   if (!req.file.mimetype.includes('csv') && !req.file.originalname.toLowerCase().endsWith('.csv') && req.file.mimetype !== 'text/plain' && req.file.mimetype !== 'application/vnd.ms-excel') {
     return res.status(400).json({ error: { message: 'Only .csv files are accepted.', code: 'VALIDATION' } });
+  }
+  // Content-sniffing validation (Future CR promoted to in-scope, Phase 10
+  // Gap Audit) — see lib/fileSniff.js. The commit endpoint re-checks this
+  // same file's hash against the token minted here (§ existing FILE_CHANGED
+  // check), so sniffing here alone covers both steps.
+  if (!sniffFileType(req.file.buffer, 'text/csv')) {
+    return res.status(400).json({ error: { message: 'File content does not look like a valid CSV/text file.', code: 'VALIDATION' } });
   }
 
   const role = (req.user.role || '').toLowerCase();
