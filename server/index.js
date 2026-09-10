@@ -108,6 +108,16 @@ app.use('/api/v2', generalApiLimiter);
 // connectivity probe — the single most important gap named in every
 // prior Gap Review pass on this exact endpoint. Still fast (a trivial
 // SELECT 1), still safe to hit frequently from a monitoring tool.
+// Friendly root response — this is an API-only backend with no frontend
+// assets of its own (the real app lives on the separate Vite dev server,
+// port 5180). Without this, visiting the bare backend origin/port
+// directly showed Express's raw default 404 ("Cannot GET /"), which reads
+// as a broken app rather than "you're pointed at the wrong port." Purely
+// additive, informational only — no existing route/behavior changed.
+app.get('/', (req, res) => {
+  res.json({ service: 'gurmad-v2-server', status: 'running', hint: 'This is the API server. The application UI runs on a separate origin (the Vite dev server).', health: '/api/v2/health' });
+});
+
 app.get('/api/v2/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
