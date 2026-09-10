@@ -166,6 +166,14 @@ router.put('/:id/status', authenticateToken, requireRole(...APPROVE_ROLES), asyn
     if (before.rows[0].status !== 'pending') return res.status(409).json({ error: { message: `Leave request is already ${before.rows[0].status}.`, code: 'CONFLICT' } });
     const inScope = await assertEmployeeInScope(req.user, before.rows[0].employee_id);
     if (!inScope) return res.status(403).json({ error: { message: 'You cannot act on leave for an employee outside your zone.', code: 'FORBIDDEN' } });
+    // Phase 7 Approval Engine Discovery/Decisions — Future CR promoted to
+    // in-scope: self-approval prevention, mirroring the exact pattern
+    // already proven in Procurement and Inventory Adjustments. The ONE
+    // explicitly-authorized narrow addition to this route.
+    const myEmployeeIdForApproval = await resolveEmployeeIdForRequestUser(req.user);
+    if (myEmployeeIdForApproval !== null && myEmployeeIdForApproval === before.rows[0].employee_id) {
+      return res.status(403).json({ error: { message: 'You cannot approve or reject your own leave request.', code: 'FORBIDDEN' } });
+    }
 
     const updated = await pool.query(
       `UPDATE leave_requests SET status = $1, approved_by = $2, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,

@@ -341,6 +341,15 @@ router.put('/:id/approve', authenticateToken, requireRole(...APPROVE_ROLES), asy
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'This cashout is outside your zone.', code: 'FORBIDDEN' } });
     }
+    // Phase 7 Approval Engine Discovery/Decisions — Future CR promoted to
+    // in-scope: self-approval prevention, mirroring the exact pattern
+    // already proven in Procurement (routes/procurement.js) and Inventory
+    // Adjustments (routes/inventory.js). This is the ONE explicitly-
+    // authorized narrow addition to this route — no other line changes.
+    if (cashout.created_by === req.user.id) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'You cannot approve a cashout you created yourself.', code: 'FORBIDDEN' } });
+    }
     const signedRes = await client.query(`SELECT 1 FROM cashout_attachments WHERE cashout_id = $1 AND document_type = 'signed_cashout_form' AND voided_at IS NULL LIMIT 1`, [id]);
     if (signedRes.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -377,6 +386,12 @@ router.put('/:id/reject', authenticateToken, requireRole(...APPROVE_ROLES), asyn
     if ((req.user.role || '').toLowerCase() === 'gudoomiye' && cashout.zone_id !== await resolveUserZoneId(req.user)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'This cashout is outside your zone.', code: 'FORBIDDEN' } });
+    }
+    // Phase 7 Approval Engine Discovery/Decisions — same narrow,
+    // explicitly-authorized self-approval-prevention addition as /approve above.
+    if (cashout.created_by === req.user.id) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'You cannot reject a cashout you created yourself.', code: 'FORBIDDEN' } });
     }
     if (cashout.status === 'approved') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'An already-approved cashout cannot be rejected.', code: 'CONFLICT' } }); }
     const updated = await client.query(
