@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Camera, ChevronLeft } from 'lucide-react';
+import { Camera, ChevronLeft, RotateCcw } from 'lucide-react';
 import { Button, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { getCachedAssignments } from '../lib/collectorStore.js';
 import { useSyncQueueContext } from '../SyncQueueContext.jsx';
@@ -11,11 +11,19 @@ const STATUSES = [
   { value: 'skipped', label: 'Skipped' },
 ];
 
-// Screen 6.4 (Decisions §17). Composes and queues a single offline action —
-// online or offline, the submit path is identical (queue, then attempt
-// sync), per Spec §14's own deliberate simplification. Client-side
-// validation MIRRORS, never replaces, server-side validation (missed
-// requires reason; serviced requires photo, §15).
+// Photo capture — Phase 10 Gap Audit follow-up. §15's "Serviced requires
+// a photo" rule previously had capturePhoto() do nothing but PROVE camera
+// access (open a stream, immediately stop it) — no image was ever
+// actually taken. This is the real capture: a live <video> preview, a
+// hidden <canvas> the frame is drawn onto at shutter time, downscaled and
+// JPEG-compressed there (not full sensor resolution — this is evidence,
+// not a photograph, and it has to fit through the AES-GCM-encrypted
+// IndexedDB queue as base64), then converted to base64 for
+// useSyncQueueContext().captureAction() to carry through the same queue
+// entry as the status change itself.
+const MAX_DIMENSION = 900; // long-edge cap — plenty for visit evidence, keeps the encoded payload small
+const JPEG_QUALITY = 0.72;
+
 export default function CollectionActionScreen() {
   const { batchId, customerId } = useParams();
   const navigate = useNavigate();
@@ -26,9 +34,13 @@ export default function CollectionActionScreen() {
   const [status, setStatus] = useState(null);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
-  const [photo, setPhoto] = useState(null); // §15 — held client-side only, no upload path yet
+  const [photo, setPhoto] = useState(null); // { base64, mime, previewUrl } | null
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraDenied, setCameraDenied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -39,27 +51,56 @@ export default function CollectionActionScreen() {
     })();
   }, [batchId, customerId]);
 
-  if (customer === undefined) return <LoadingState />;
-  // Hardening finding (P3): a stale/tampered/directly-typed URL for a
-  // batch/customer not in this collector's own cached assignments
-  // previously rendered a blank, dead-end page (no error, no way back).
-  // No data is at risk either way (the lookup is scoped to this
-  // collector's own cache — see CustomerDetailScreen's identical guard),
-  // this is a UX/recovery fix only.
-  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector')} />;
+  // Stream cleanup — a dangling getUserMedia stream keeps the camera's
+  // hardware LED lit and drains battery even after this screen unmounts.
+  useEffect(() => () => stopStream(), []);
 
-  const capturePhoto = async () => {
+  function stopStream() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  }
+
+  const openCamera = async () => {
     try {
-      // §18 — just-in-time camera permission, requested only at first
-      // attempted `serviced` marking. §15 — photo backend has no write
-      // route yet (future CR); held client-side only for this workstream.
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      stream.getTracks().forEach((t) => t.stop()); // proof-of-access only; a real capture UI is an Implementation-stage detail
-      setPhoto('captured');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 960 } } });
+      streamRef.current = stream;
+      setCameraOpen(true);
       setCameraDenied(false);
+      // videoRef isn't mounted until cameraOpen renders it — attach next tick.
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      });
     } catch {
       setCameraDenied(true);
     }
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+    const base64 = dataUrl.split(',')[1];
+    setPhoto({ base64, mime: 'image/jpeg', previewUrl: dataUrl });
+    stopStream();
+    setCameraOpen(false);
+  };
+
+  const retake = () => {
+    setPhoto(null);
+    openCamera();
   };
 
   const captureGps = () =>
@@ -73,6 +114,15 @@ export default function CollectionActionScreen() {
       );
     });
 
+  if (customer === undefined) return <LoadingState />;
+  // Hardening finding (P3): a stale/tampered/directly-typed URL for a
+  // batch/customer not in this collector's own cached assignments
+  // previously rendered a blank, dead-end page (no error, no way back).
+  // No data is at risk either way (the lookup is scoped to this
+  // collector's own cache — see CustomerDetailScreen's identical guard),
+  // this is a UX/recovery fix only.
+  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector')} />;
+
   const submit = async () => {
     if (!status) return toast.error('Select a status.');
     if (status === 'missed' && !reason.trim()) return toast.error('A reason is required to mark Missed.');
@@ -84,6 +134,8 @@ export default function CollectionActionScreen() {
       await captureAction({
         batchId: Number(batchId), customerId: Number(customerId), taskId: customer.task_id,
         status, reason: reason.trim() || null, note: note.trim() || null, lat, lng,
+        photoBase64: status === 'serviced' ? photo?.base64 : null,
+        photoMime: status === 'serviced' ? photo?.mime : null,
       });
       toast.success('Queued — will sync automatically');
       navigate('/collector');
@@ -119,9 +171,31 @@ export default function CollectionActionScreen() {
 
       {status === 'serviced' && (
         <div style={{ marginBottom: '12px' }}>
-          <Button variant={photo ? 'secondary' : 'primary'} icon={Camera} onClick={capturePhoto} style={{ width: '100%', minHeight: '48px' }}>
-            {photo ? 'Photo captured ✓' : 'Take Photo (required)'}
-          </Button>
+          {cameraOpen ? (
+            <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: '#000' }}>
+              <video ref={videoRef} playsInline muted style={{ width: '100%', display: 'block', maxHeight: '360px', objectFit: 'cover' }} />
+              <button
+                onClick={capturePhoto}
+                aria-label="Capture photo"
+                style={{
+                  position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)',
+                  width: '64px', height: '64px', borderRadius: '50%', background: '#fff', border: '4px solid var(--brand)',
+                  cursor: 'pointer',
+                }}
+              />
+            </div>
+          ) : photo ? (
+            <div>
+              <img src={photo.previewUrl} alt="Captured visit evidence" style={{ width: '100%', borderRadius: 'var(--radius-md)', display: 'block', maxHeight: '320px', objectFit: 'cover' }} />
+              <Button variant="secondary" icon={RotateCcw} onClick={retake} style={{ width: '100%', minHeight: '44px', marginTop: '8px' }}>
+                Retake Photo
+              </Button>
+            </div>
+          ) : (
+            <Button icon={Camera} onClick={openCamera} style={{ width: '100%', minHeight: '48px' }}>
+              Take Photo (required)
+            </Button>
+          )}
           {cameraDenied && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
               Camera access is needed to mark a visit as Serviced — you can still mark Missed or Skipped, or enable camera access in your browser settings.

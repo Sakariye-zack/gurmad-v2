@@ -34,6 +34,11 @@ export default function SyncCenterScreen() {
               <div>
                 <div style={{ fontWeight: 700, fontSize: '14px', textTransform: 'capitalize' }}>{e.status}</div>
                 <div style={{ fontSize: '13px', color: `var(--${msg.tone})`, marginTop: '2px' }}>{msg.text}</div>
+                {/* Photo upload state (Phase 10) — separate from the status-
+                    change outcome above; a Serviced visit's photo uploads
+                    independently once the status change itself is accepted. */}
+                {e.photo_state === 'pending' && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>Photo: uploading…</div>}
+                {e.photo_state === 'failed' && <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '2px' }}>Photo: could not be saved</div>}
               </div>
               {isTerminal && (
                 <button onClick={() => dismissTerminalEntry(e.action_uuid)} aria-label="Dismiss" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', minWidth: '44px', minHeight: '44px' }}>

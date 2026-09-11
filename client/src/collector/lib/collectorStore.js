@@ -77,6 +77,30 @@ export async function removeQueueEntry(action_uuid) {
   return withStore(QUEUE_STORE, 'readwrite', (store) => store.delete(action_uuid));
 }
 
+// Generic field-patch — the same get/decrypt/merge/encrypt/put shape as
+// updateQueueEntryOutcome above, but for arbitrary fields (photo_state,
+// clearing photo_base64 once uploaded) instead of duplicating that logic
+// per new field. Phase 10 Gap Audit follow-up (collector photo capture).
+export async function updateQueueEntryFields(action_uuid, patch) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(QUEUE_STORE, 'readwrite');
+    const store = tx.objectStore(QUEUE_STORE);
+    const getReq = store.get(action_uuid);
+    getReq.onsuccess = async () => {
+      const row = getReq.result;
+      if (!row) return resolve(null);
+      const plain = await decryptValue(row.encrypted);
+      if (!plain) return resolve(null);
+      Object.assign(plain, patch);
+      const encrypted = await encryptValue(plain);
+      store.put({ action_uuid, encrypted });
+      resolve(plain);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
 // Returns { entries: [...decrypted], orphanedCount } — an orphaned row
 // (undecryptable under the current key) is never silently deleted; it is
 // reported so the UI can surface the §9-required recovery prompt.

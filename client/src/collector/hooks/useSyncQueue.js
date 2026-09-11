@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
 import {
-  addQueueEntry, getAllQueueEntries, removeQueueEntry, updateQueueEntryOutcome, clearOrphanedEntries,
+  addQueueEntry, getAllQueueEntries, removeQueueEntry, updateQueueEntryOutcome, updateQueueEntryFields, clearOrphanedEntries,
 } from '../lib/collectorStore.js';
 
 // Locked outcome vocabulary (§9 of Decisions) — never renamed/expanded here.
@@ -33,7 +33,20 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
 
   // §14 — capture a new action. Always queue-then-sync, identical code path
   // online or offline (Spec §14's own deliberate simplification).
-  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng }) => {
+  //
+  // photoBase64/photoMime (Phase 10 Gap Audit follow-up — collector photo
+  // capture): the queue entry's own schema comment already anticipated a
+  // photo_blob_ref field; stored here as base64 (not a raw Blob) because
+  // it passes through the exact same JSON.stringify-then-AES-GCM-encrypt
+  // path (collectorCrypto.js's encryptValue) every other field already
+  // uses — a Blob cannot survive JSON.stringify, and adding a SEPARATE
+  // IndexedDB object store just for binary photo data would duplicate the
+  // orphaned-entry/encryption-key-rotation handling collectorStore.js
+  // already solves once for the whole queue. photo_state starts 'pending'
+  // when a photo is present, null when it isn't — trySync() below uploads
+  // it only once the matching status-change action has itself been
+  // accepted server-side (POST /collection-sync/photo requires that).
+  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng, photoBase64, photoMime }) => {
     const action_uuid = makeUuid();
     const entry = {
       action_uuid,
@@ -49,6 +62,9 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
       lng: lng ?? null,
       sync_state: 'captured',
       last_outcome: null,
+      photo_base64: photoBase64 || null,
+      photo_mime: photoMime || null,
+      photo_state: photoBase64 ? 'pending' : null,
     };
     await addQueueEntry(entry);
     await reloadFromStore();
@@ -56,6 +72,42 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
     return action_uuid;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadFromStore]);
+
+  // Decode a base64 string back into a Blob for the multipart upload —
+  // the inverse of what CollectionActionScreen.jsx encodes from the
+  // canvas capture.
+  function base64ToBlob(base64, mime) {
+    const byteChars = atob(base64);
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    return new Blob([new Uint8Array(byteNumbers)], { type: mime });
+  }
+
+  // Uploads one queued entry's pending photo via the Phase 10
+  // POST /collection-sync/photo endpoint. Best-effort and independently
+  // retryable from the status-change sync above — a photo upload failure
+  // (network blip, server error) never re-queues or blocks the already-
+  // accepted status change; it simply stays 'pending' and is retried on
+  // the next trySync() pass, same retry model as a 'technical_error'
+  // status-change outcome.
+  const uploadPendingPhoto = useCallback(async (entry) => {
+    try {
+      const blob = base64ToBlob(entry.photo_base64, entry.photo_mime || 'image/jpeg');
+      const formData = new FormData();
+      formData.append('action_uuid', entry.action_uuid);
+      formData.append('photo', blob, 'visit.jpg');
+      await apiClient.uploadFile('/v2/collection-sync/photo', formData);
+      await updateQueueEntryFields(entry.action_uuid, { photo_state: 'uploaded', photo_base64: null });
+    } catch (err) {
+      // A 409 (already recorded, or the status-change wasn't 'serviced')
+      // is not retryable — anything else (network/5xx) is left 'pending'
+      // for the next sync pass.
+      if (err.status === 409 || err.status === 400) {
+        await updateQueueEntryFields(entry.action_uuid, { photo_state: 'failed', photo_base64: null });
+      }
+      // else: leave photo_state 'pending' untouched — retried next pass.
+    }
+  }, []);
 
   // §11 — one /replay call per sync attempt, oldest-first (already sorted
   // by getAllQueueEntries), per-action outcome handling.
@@ -85,6 +137,16 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
           if (result.outcome === 'rejected_stale' || result.outcome === 'rejected_invalid_state') {
             onStaleOrInvalid && onStaleOrInvalid();
           }
+          // Only a freshly-'accepted' Serviced visit can have its photo
+          // uploaded — 'already_applied' on a prior sync already handled
+          // (or already attempted) its own photo, and a rejected outcome
+          // has no accepted visit for the photo to attach to.
+          if (result.outcome === 'accepted') {
+            const entry = toSend.find((e) => e.action_uuid === result.action_uuid);
+            if (entry && entry.photo_state === 'pending') {
+              await uploadPendingPhoto(entry);
+            }
+          }
         } else if (result.outcome === 'technical_error') {
           // Retryable — held for the next trigger, not looped immediately.
           await updateQueueEntryOutcome(result.action_uuid, 'captured', 'technical_error');
@@ -92,6 +154,13 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
         // 'requires_reauthentication' cannot occur per-action within an
         // already-accepted request (Offline/Sync's own request-level
         // enforcement) — handled by the 401 catch branch below instead.
+      }
+      // Sweep for any earlier-accepted entry whose photo upload didn't
+      // finish last time (a network blip, mid-upload) — retried here
+      // rather than only at the moment of its own status-change accept.
+      const stillPending = pending.filter((e) => e.sync_state === 'synced_terminal' && e.last_outcome === 'accepted' && e.photo_state === 'pending');
+      for (const entry of stillPending) {
+        await uploadPendingPhoto(entry);
       }
     } catch (err) {
       if (err.status === 401 || err.status === 403) {
