@@ -108,7 +108,17 @@ function PaymentPanel({ invoiceId, onRecorded }) {
   const { data, isLoading, refetch } = useInvoice(invoiceId);
   const recordPayment = useRecordPayment();
   const toast = useToast();
-  const [amount, setAmount] = useState('');
+  // User-requested ('hlkan debtga iyo partialkaba iigu soo dar intanan
+  // lacagta record garayn') — split into two amount fields recorded
+  // together in one action, instead of one 'Amount' field: 'Amount
+  // Paid' (real money — Payment method applies to this portion only)
+  // and 'Amount as Debt'. Each becomes its own payment row (the debt
+  // portion with method='debt') — the already-existing auto-debt
+  // tracking (payments.js POST /) picks up the debt-method one exactly
+  // like any other and reflects it on the Debts screen; no backend
+  // change was needed for this, the pieces were already there.
+  const [amountPaid, setAmountPaid] = useState('');
+  const [amountDebt, setAmountDebt] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [method, setMethod] = useState('cash');
   const [error, setError] = useState('');
@@ -120,16 +130,26 @@ function PaymentPanel({ invoiceId, onRecorded }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    const amt = parseFloat(amount);
-    if (isNaN(amt) || amt <= 0) { setError('Enter a valid payment amount.'); return; }
+    const paidAmt = parseFloat(amountPaid) || 0;
+    const debtAmt = parseFloat(amountDebt) || 0;
+    if (paidAmt <= 0 && debtAmt <= 0) { setError('Enter an amount paid, an amount as debt, or both.'); return; }
+    if (paidAmt < 0 || debtAmt < 0) { setError('Amounts cannot be negative.'); return; }
     try {
-      await recordPayment.mutateAsync({ invoice_id: invoiceId, amount: amt, currency, method });
-      toast.success('Payment recorded.');
-      setAmount('');
+      // Two rows, one user action — the server itself still enforces
+      // each individually (row-locked, overpayment-blocked), so a
+      // combined total exceeding the outstanding balance is rejected
+      // exactly like a single payment would be, just on whichever call
+      // hits the limit first.
+      if (paidAmt > 0) await recordPayment.mutateAsync({ invoice_id: invoiceId, amount: paidAmt, currency, method });
+      if (debtAmt > 0) await recordPayment.mutateAsync({ invoice_id: invoiceId, amount: debtAmt, currency, method: 'debt' });
+      toast.success(paidAmt > 0 && debtAmt > 0 ? 'Payment recorded — remainder recorded as debt.' : debtAmt > 0 ? 'Recorded as debt.' : 'Payment recorded.');
+      setAmountPaid('');
+      setAmountDebt('');
       refetch();
       onRecorded?.();
     } catch (err) {
       setError(err.message || 'Something went wrong.');
+      refetch(); // one of the two calls may have already succeeded
     }
   }
 
@@ -159,27 +179,36 @@ function PaymentPanel({ invoiceId, onRecorded }) {
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', gap: '10px' }}>
               <label style={fieldStyle}>
-                <span style={labelStyle}>Amount ({currency})</span>
-                <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} style={inputStyle} />
+                <span style={labelStyle}>Amount Paid ({currency})</span>
+                <input type="number" min="0" step="0.01" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} style={inputStyle} placeholder="0.00" />
               </label>
               <label style={fieldStyle}>
-                <span style={labelStyle}>Currency</span>
-                <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={inputStyle}>
-                  <option value="USD">USD</option>
-                  <option value="SLSH">SLSH</option>
+                <span style={labelStyle}>Payment method</span>
+                <select value={method} onChange={(e) => setMethod(e.target.value)} style={inputStyle}>
+                  <option value="cash">Cash</option>
+                  <option value="zaad">ZAAD</option>
+                  <option value="edahab">eDahab</option>
+                  <option value="slsh">SLSH</option>
                 </select>
               </label>
             </div>
             <label style={fieldStyle}>
-              <span style={labelStyle}>Payment method</span>
-              <select value={method} onChange={(e) => setMethod(e.target.value)} style={inputStyle}>
-                <option value="cash">Cash</option>
-                <option value="zaad">ZAAD</option>
-                <option value="edahab">eDahab</option>
-                <option value="slsh">SLSH</option>
-                <option value="debt">Debt</option>
+              <span style={labelStyle}>Amount as Debt ({currency}) — optional</span>
+              <input type="number" min="0" step="0.01" value={amountDebt} onChange={(e) => setAmountDebt(e.target.value)} style={inputStyle} placeholder="0.00" />
+            </label>
+            <label style={fieldStyle}>
+              <span style={labelStyle}>Currency</span>
+              <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={inputStyle}>
+                <option value="USD">USD</option>
+                <option value="SLSH">SLSH</option>
               </select>
             </label>
+            {(parseFloat(amountPaid) > 0 || parseFloat(amountDebt) > 0) && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Total this action: {currency} {((parseFloat(amountPaid) || 0) + (parseFloat(amountDebt) || 0)).toFixed(2)}
+                {parseFloat(amountDebt) > 0 && ` — ${currency} ${parseFloat(amountDebt).toFixed(2)} will show as an unpaid Debt for this customer.`}
+              </div>
+            )}
             {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
             <Button type="submit" disabled={recordPayment.isPending}>{recordPayment.isPending ? 'Recording…' : 'Record Payment'}</Button>
           </form>
