@@ -47,7 +47,13 @@ export function AuthProvider({ children }) {
       const { token: _t, ...safeUser } = flat;
       localStorage.setItem('gurmad_v2_user', JSON.stringify(safeUser));
       setUser(safeUser);
-      return { success: true };
+      // `user` included directly (not just relying on the caller re-reading
+      // useAuth().user right after) — React state updates from setUser()
+      // above aren't guaranteed visible in the same synchronous callback
+      // that called login(), so a caller needing the just-logged-in role
+      // immediately (Login.jsx's own post-login redirect, Phase 10) would
+      // otherwise read a stale value.
+      return { success: true, user: safeUser };
     } finally {
       setLoading(false);
     }

@@ -34,7 +34,19 @@ export default function Login() {
         return;
       }
       toast.success('Welcome back');
-      navigate('/dashboard');
+      // User-reported live (Phase 10): a collector signing in through
+      // this staff form landed in the field-role bottom-tab shell
+      // (MobileTabBar.jsx's "Home / My Batch / Collect"), which was built
+      // for cashier (Collect -> Billing, a payment-recording page a
+      // collector has no access to at all; My Batch -> Collection Cycles,
+      // a read-only admin list with no click-through to actual assigned
+      // work). None of it is the collector's real job. The fully-built,
+      // purpose-made experience for that job already exists at /collector
+      // (assignments, photo capture, offline sync) and shares this exact
+      // same auth token/localStorage, so no second login is needed - just
+      // send a collector there directly instead of into the mismatched
+      // staff shell.
+      navigate(result.user?.role === 'collector' ? '/collector' : '/dashboard');
     } catch (err) {
       toast.error(err.message || 'Login failed');
     }
