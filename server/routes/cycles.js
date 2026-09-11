@@ -5,7 +5,13 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const router = express.Router();
 
 const VALID_CYCLE_TYPES = ['monthly', 'weekly', 'custom'];
-const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant'];
+// User-reported live (Phase 10): 'collector' was missing here even though
+// Sidebar.jsx's own nav item for Collection Cycles has always listed
+// collector as an allowed viewer, and batches.js's own VIEW_ROLES
+// (identical role set otherwise) already includes it — a collector could
+// see the nav link but every click 403'd. Added to match what the
+// frontend already assumed and batches.js's own established precedent.
+const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector'];
 const WRITE_ROLES = ['admin', 'gudoomiye'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
 
