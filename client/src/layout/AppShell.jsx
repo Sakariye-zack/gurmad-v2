@@ -4,6 +4,7 @@ import { PanelLeftClose, PanelLeftOpen, Menu } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import MobileTabBar from './MobileTabBar.jsx';
 import MobileNavDrawer from './MobileNavDrawer.jsx';
+import FieldTopBar from './FieldTopBar.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 const FIELD_ROLES = ['collector', 'cashier'];
@@ -96,12 +97,20 @@ export default function AppShell() {
           exactly, in every Sidebar/drawer state (Implementation Spec §16). */}
       <main style={{
         flex: 1, minWidth: 0,
-        paddingTop: showFieldTabBar ? '16px' : (showToggleButton ? '56px' : '24px'),
+        // User-reported gap (Phase 10): field roles (cashier) had no
+        // header at all — see FieldTopBar.jsx. paddingTop drops to 0
+        // here (was a flat 16px) because FieldTopBar now owns that
+        // top space itself via its own padding + sticky positioning;
+        // its own bottom margin (-16px…16px) reclaims the 16px side
+        // gutters so it bleeds edge-to-edge while <Outlet/> content
+        // keeps the same 16px it always had.
+        paddingTop: showFieldTabBar ? 0 : (showToggleButton ? '56px' : '24px'),
         paddingLeft: showFieldTabBar ? '16px' : '24px',
         paddingRight: showFieldTabBar ? '16px' : '24px',
         paddingBottom: showFieldTabBar ? '80px' : '24px',
         maxWidth: '1400px',
       }}>
+        {showFieldTabBar && <FieldTopBar />}
         <Outlet />
       </main>
       {showFieldTabBar && <MobileTabBar />}

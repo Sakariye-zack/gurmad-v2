@@ -105,6 +105,10 @@ import CollectorAssignmentsScreen from '../collector/screens/AssignmentsScreen.j
 import CollectorCustomerDetailScreen from '../collector/screens/CustomerDetailScreen.jsx';
 import CollectorCollectionActionScreen from '../collector/screens/CollectionActionScreen.jsx';
 import CollectorSyncCenterScreen from '../collector/screens/SyncCenterScreen.jsx';
+// Note: NotificationsListPage is already imported above (desktop
+// /notifications route) — reused as-is here too (Phase 10), plain
+// content with no desktop-shell dependency, already self-scoped to the
+// authenticated caller server-side.
 import CollectorAccountScreen from '../collector/screens/AccountScreen.jsx';
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
@@ -235,6 +239,7 @@ export const router = createBrowserRouter([
           { path: 'action/:batchId/:customerId', element: <CollectorCollectionActionScreen /> },
           { path: 'sync', element: <CollectorSyncCenterScreen /> },
           { path: 'account', element: <CollectorAccountScreen /> },
+          { path: 'notifications', element: <NotificationsListPage /> },
         ],
       },
     ],

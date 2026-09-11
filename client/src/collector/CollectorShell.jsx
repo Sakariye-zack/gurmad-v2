@@ -4,6 +4,7 @@ import { Home, ClipboardList, RefreshCw, ShieldAlert, LogOut } from 'lucide-reac
 import { useSyncQueueContext } from './SyncQueueContext.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
+import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import { ConfirmDialog } from '../components/ui/index.js';
 import { purgeAllLocalData } from './lib/collectorStore.js';
 import { discardKey } from './lib/collectorCrypto.js';
@@ -62,6 +63,7 @@ export default function CollectorShell() {
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{user?.zone || 'Collector'}</div>
         </div>
+        <NotificationBell to="/collector/notifications" />
         <button
           onClick={() => setConfirmOpen(true)}
           aria-label="Log out"

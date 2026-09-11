@@ -6,13 +6,19 @@ import { useUnreadNotificationCount } from '../../hooks/useStaffNotifications.js
 // Staff Notifications — Implementation Spec §18. One of exactly 2 approved
 // UI surfaces. Additive element in the shared Sidebar — no existing
 // Sidebar nav-item logic is changed by this component's presence.
-export default function NotificationBell() {
+//
+// `to` — added (Phase 10) when this same bell was reused in the field
+// shells (FieldTopBar.jsx for cashier, CollectorShell.jsx for
+// collector), which live under their own route subtrees rather than
+// the desktop app's top-level '/notifications' — defaults to the
+// original desktop path so Sidebar.jsx's existing call is unaffected.
+export default function NotificationBell({ to = '/notifications' }) {
   const { data } = useUnreadNotificationCount();
   const navigate = useNavigate();
   const count = data?.data?.count || 0;
   return (
     <button
-      onClick={() => navigate('/notifications')}
+      onClick={() => navigate(to)}
       aria-label="Notifications"
       style={{
         position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
