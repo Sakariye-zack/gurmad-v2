@@ -550,6 +550,17 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_customer_id ON debts(customer_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_invoice_id ON debts(invoice_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);`);
+  // User-reported gap (Phase 10 Billing audit — 'qaabkeebu partial iyo
+  // debt ba u diiwaan galin karaa'): a partial payment (or a payment
+  // recorded with method='debt') previously left the remaining balance
+  // untracked anywhere outside the invoice's own outstanding number —
+  // the Debts module never reflected it. 'source' distinguishes the new
+  // auto-tracked debt rows (payments.js writes/updates/settles these
+  // itself, one per invoice) from ordinary manually-created ones (the
+  // existing Create Debt form), so the automatic upkeep never touches a
+  // debt a human entered by hand. Additive, idempotent — existing rows
+  // default to 'manual' (accurate: they all predate this feature).
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'manual';`);
 
   // ============================================================
   // Phase 3 Module 7 — Cashout & Cash Reconciliation. Approved via

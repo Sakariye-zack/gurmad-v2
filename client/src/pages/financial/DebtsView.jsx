@@ -70,7 +70,18 @@ export default function DebtsView() {
           <tr key={d.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{d.customer_name} <span style={{ color: 'var(--text-muted)' }}>({d.customer_number})</span></td>
             <td style={cellStyle} className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</td>
-            <td style={cellStyle}>{d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>Standalone</span>}</td>
+            <td style={cellStyle}>
+              {d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>Standalone</span>}
+              {/* User-requested (Phase 10 — 'qaabkeebu partial iyo debt
+                  ba u diiwaan galin karaa'): auto-tracked debts (kept in
+                  sync by payments.js on every payment/reversal against
+                  the invoice) are visually distinguished from ones a
+                  person created by hand, so nobody mistakes a live,
+                  system-maintained number for a fixed manual entry. */}
+              {d.source === 'auto_invoice' && (
+                <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: 'var(--info)', textTransform: 'uppercase' }}>auto</span>
+              )}
+            </td>
             <td style={cellStyle}><StatusBadge status={d.status} map={STATUS_MAP} /></td>
             <td style={cellStyle}>
               {d.status === 'unpaid' && (

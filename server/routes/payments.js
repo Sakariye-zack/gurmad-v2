@@ -126,6 +126,48 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
 
     const recalculated = await recalculateInvoiceStatus(invoiceId, client);
 
+    // Auto-track the remaining balance as a Debt — user-reported gap
+    // ('qaabkeebu partial iyo debt ba u diiwaan galin karaa'). Two
+    // scenarios, one rule: (a) a normal partial payment leaves a real
+    // remaining balance the Debts module never reflected; (b) a payment
+    // recorded with method='debt' means no actual cash changed hands —
+    // recalculateInvoiceStatus (frozen, Module 6) still counts it toward
+    // "paid" for invoice-closing purposes (an invoice resolved into a
+    // formal receivable is the existing precedent — see cashout
+    // shortages' own comment on Debts being that mechanism), so a
+    // SEPARATE local sum here excludes method='debt' payments to get the
+    // TRUE amount still actually owed, regardless of what the invoice's
+    // own status says. One auto-tracked debt row per invoice
+    // (source='auto_invoice', distinct from manually-created ones) is
+    // kept in sync: created/updated while something is still owed,
+    // auto-settled the moment it reaches zero. Never touches a
+    // manually-created debt (source='manual').
+    const trueOutstandingRes = await client.query(
+      `SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded' AND method != 'debt'`,
+      [invoiceId]
+    );
+    const trueOutstanding = netTotal - parseFloat(trueOutstandingRes.rows[0].paid);
+    const existingAutoDebt = await client.query(
+      `SELECT * FROM debts WHERE invoice_id = $1 AND source = 'auto_invoice' AND status = 'unpaid' LIMIT 1`,
+      [invoiceId]
+    );
+    if (trueOutstanding > EPSILON) {
+      if (existingAutoDebt.rows.length > 0) {
+        await client.query(`UPDATE debts SET amount = $1 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id]);
+      } else {
+        await client.query(
+          `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
+           VALUES ($1,$2,$3,'USD',$4,'unpaid','auto_invoice',$5)`,
+          [invoice.customer_id, invoiceId, trueOutstanding, `Auto-tracked remaining balance on ${invoice.invoice_number}`, req.user.id]
+        );
+      }
+    } else if (existingAutoDebt.rows.length > 0) {
+      await client.query(
+        `UPDATE debts SET status = 'paid', settled_at = NOW(), settled_by = $1 WHERE id = $2`,
+        [req.user.id, existingAutoDebt.rows[0].id]
+      );
+    }
+
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: payment });
     res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding } });
@@ -162,13 +204,44 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
     // Module 6 route (§11 of the Implementation Spec) to prevent a
     // deadlock between concurrent operations on the same invoice. The
     // invoice was not yet locked above, so lock it now before writing.
-    await client.query('SELECT id FROM invoices WHERE id = $1 FOR UPDATE', [payment.invoice_id]);
+    // (full row, not just id — the auto-debt sync below needs
+    // customer_id/invoice_total/discount_amount/invoice_number.)
+    const invLockRes = await client.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [payment.invoice_id]);
+    const lockedInvoice = invLockRes.rows[0];
 
     const updated = await client.query(
       `UPDATE payments SET status = 'reversed', reversed_at = NOW(), reversed_by = $1, reversed_reason = $2 WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id]
     );
     const recalculated = await recalculateInvoiceStatus(payment.invoice_id, client);
+
+    // Keep the auto-tracked debt (source='auto_invoice') in sync after a
+    // reversal too — same rule as POST / above, see its own comment.
+    // Without this it would only self-correct on the invoice's NEXT
+    // payment, leaving it stale (understated) in the meantime.
+    const netTotal = parseFloat(lockedInvoice.invoice_total) - parseFloat(lockedInvoice.discount_amount);
+    const trueOutstandingRes = await client.query(
+      `SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded' AND method != 'debt'`,
+      [payment.invoice_id]
+    );
+    const trueOutstanding = netTotal - parseFloat(trueOutstandingRes.rows[0].paid);
+    const existingAutoDebt = await client.query(
+      `SELECT * FROM debts WHERE invoice_id = $1 AND source = 'auto_invoice' AND status = 'unpaid' LIMIT 1`,
+      [payment.invoice_id]
+    );
+    if (trueOutstanding > EPSILON) {
+      if (existingAutoDebt.rows.length > 0) {
+        await client.query(`UPDATE debts SET amount = $1 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id]);
+      } else {
+        await client.query(
+          `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
+           VALUES ($1,$2,$3,'USD',$4,'unpaid','auto_invoice',$5)`,
+          [lockedInvoice.customer_id, payment.invoice_id, trueOutstanding, `Auto-tracked remaining balance on ${lockedInvoice.invoice_number}`, req.user.id]
+        );
+      }
+    } else if (existingAutoDebt.rows.length > 0) {
+      await client.query(`UPDATE debts SET status = 'paid', settled_at = NOW(), settled_by = $1 WHERE id = $2`, [req.user.id, existingAutoDebt.rows[0].id]);
+    }
 
     // Debt-integrity check (§6 of the Implementation Spec): a reversal
     // can move an invoice from paid back to partial/unpaid. If a linked
