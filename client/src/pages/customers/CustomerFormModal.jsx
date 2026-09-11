@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, MapPin, LocateFixed } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
@@ -12,6 +12,14 @@ const EMPTY = {
   // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
   // §26-1: no forced/fake default, no required-field validation added).
   group_id: '', route_id: '',
+  // Map location — the backend (routes/customers.js) has always validated
+  // and stored lat/lng and the Map page (pages/map/MapPage.jsx) has always
+  // read them; this form was the one gap in that chain — a customer could
+  // never actually get coordinates through the normal registration flow,
+  // only ever via a direct API call. Optional, same as every other field
+  // here — a customer with no coordinates simply doesn't plot on the map,
+  // not a validation error.
+  lat: '', lng: '',
 };
 
 function toFormState(customer) {
@@ -24,6 +32,7 @@ function toFormState(customer) {
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
     group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '',
+    lat: customer.lat ?? '', lng: customer.lng ?? '',
   };
 }
 
@@ -43,6 +52,7 @@ function CustomerFormModalContent({ onClose, customer }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [duplicateMatches, setDuplicateMatches] = useState(null);
   const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
+  const [locating, setLocating] = useState(false);
   const toast = useToast();
   const createCustomer = useCreateCustomer();
   const updateCustomer = useUpdateCustomer(customer?.id);
@@ -81,6 +91,25 @@ function CustomerFormModalContent({ onClose, customer }) {
     setDuplicateMatches(result.data || []);
   }
 
+  // Captures the DEVICE'S current position — correct only when whoever is
+  // filling this form is physically standing at (or very near) the
+  // customer's location, e.g. a field registration visit. For office-desk
+  // registration the lat/lng inputs below stay directly editable (typed
+  // in from a separately-known coordinate, or left blank) rather than
+  // forcing this button as the only path in.
+  function captureLocation() {
+    if (!navigator.geolocation) { toast.error('Location is not available on this device/browser.'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setForm((f) => ({ ...f, lat: String(pos.coords.latitude.toFixed(6)), lng: String(pos.coords.longitude.toFixed(6)) }));
+        setLocating(false);
+      },
+      () => { toast.error('Could not get your location — check location permission.'); setLocating(false); },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  }
+
   function validate() {
     const errs = {};
     if (!form.name.trim()) errs.name = 'Name is required.';
@@ -88,6 +117,10 @@ function CustomerFormModalContent({ onClose, customer }) {
     if (!form.zone_id) errs.zone_id = 'Zone is required.';
     if (isCommercial && !form.business_name.trim()) errs.business_name = 'Business name is required for commercial customers.';
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = 'Enter a valid email address.';
+    // Same range the backend itself enforces (routes/customers.js) —
+    // caught here so a typo doesn't round-trip to the server first.
+    if (form.lat !== '' && (Number.isNaN(Number(form.lat)) || Number(form.lat) < -90 || Number(form.lat) > 90)) errs.lat = 'Latitude must be between -90 and 90.';
+    if (form.lng !== '' && (Number.isNaN(Number(form.lng)) || Number(form.lng) < -180 || Number(form.lng) > 180)) errs.lng = 'Longitude must be between -180 and 180.';
     setFieldErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -116,6 +149,8 @@ function CustomerFormModalContent({ onClose, customer }) {
       fee: form.fee === '' ? null : parseFloat(form.fee), notes: form.notes.trim() || null,
       group_id: form.group_id ? parseInt(form.group_id, 10) : null,
       route_id: form.route_id ? parseInt(form.route_id, 10) : null,
+      lat: form.lat === '' ? null : parseFloat(form.lat),
+      lng: form.lng === '' ? null : parseFloat(form.lng),
     };
     try {
       if (isEdit) {
@@ -197,6 +232,29 @@ function CustomerFormModalContent({ onClose, customer }) {
 
         <Field label="Address">
           <input value={form.address_line} onChange={(e) => set('address_line', e.target.value)} style={inputStyle} />
+        </Field>
+
+        {/* Map location — see EMPTY's own comment above for why this
+            exists. "Use my current location" only makes sense when
+            whoever is filling this form is physically at the customer's
+            site; the two inputs stay directly editable either way, so
+            office-desk registration from a known coordinate still works. */}
+        <Field label="Map location (optional)" hint="Needed for this customer to appear on the Map page — leave blank if unknown.">
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+            <input value={form.lat} onChange={(e) => set('lat', e.target.value)} placeholder="Latitude" style={{ ...inputStyle, flex: 1 }} />
+            <input value={form.lng} onChange={(e) => set('lng', e.target.value)} placeholder="Longitude" style={{ ...inputStyle, flex: 1 }} />
+            <Button type="button" variant="secondary" icon={locating ? undefined : LocateFixed} onClick={captureLocation} disabled={locating} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+              {locating ? 'Locating…' : 'Use my location'}
+            </Button>
+          </div>
+          {(fieldErrors.lat || fieldErrors.lng) && (
+            <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{fieldErrors.lat || fieldErrors.lng}</span>
+          )}
+          {form.lat !== '' && form.lng !== '' && (
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+              <MapPin size={11} /> Will plot at {Number(form.lat).toFixed(5)}, {Number(form.lng).toFixed(5)}
+            </span>
+          )}
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
