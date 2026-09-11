@@ -3,6 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Phone, MapPin, ChevronLeft } from 'lucide-react';
 import { Button, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
 import { getCachedAssignments } from '../lib/collectorStore.js';
+// Reused, not reimplemented — user-requested (Phase 10): the same
+// Mapbox GL canvas + house-icon marker the Staff Map already uses,
+// dropped in here so a collector can actually see where they're going,
+// not just read an address string. collection-sync's own /my-assignments
+// response now includes the customer's lat/lng for exactly this (see
+// routes/collectionSync.js's own comment on why that's not the "no raw
+// GPS fed back" boundary this file's sibling screens rely on elsewhere).
+import MapCanvas from '../../pages/map/MapCanvas.jsx';
 
 // Screen 6.3 (Decisions §17). Purely a focused render of ALREADY-FETCHED,
 // already-cached data — no separate network call, per Spec §6.3's own
@@ -33,11 +41,21 @@ export default function CustomerDetailScreen() {
       </button>
       <h2 style={{ margin: '0 0 4px' }}>{customer.business_name || customer.name}</h2>
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>{batchCode} · {customer.customer_type}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
         <InfoRow icon={MapPin} label={customer.address_line || 'No address on file'} />
         {customer.phone && <InfoRow icon={Phone} label={customer.phone} href={`tel:${customer.phone}`} />}
         <div><StatusBadge status={customer.status} /></div>
       </div>
+
+      {Number.isFinite(Number(customer.lat)) && Number.isFinite(Number(customer.lng)) ? (
+        <div style={{ height: '220px', marginBottom: '24px' }}>
+          <MapCanvas points={[customer]} />
+        </div>
+      ) : (
+        <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-muted)', fontSize: '13px', marginBottom: '24px' }}>
+          No map location on file for this customer.
+        </div>
+      )}
       <Button
         style={{ width: '100%', minHeight: '52px', fontSize: '16px' }}
         disabled={customer.status !== 'pending'}

@@ -66,6 +66,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
          b.id AS batch_id, b.batch_code, b.status AS batch_status, b.zone_id, b.cycle_id,
          t.id AS task_id, t.status AS task_status,
          c.id AS customer_id, c.customer_number, c.name, c.business_name, c.phone, c.address_line, c.customer_type,
+         c.lat, c.lng,
          bc.status AS customer_status
        FROM task_resources tr
        JOIN tasks t ON t.id = tr.task_id
@@ -79,7 +80,17 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
     );
 
     // Shape into { batches: [ { ...batch fields, customers: [...] } ] } —
-    // minimized fields only, no raw GPS fed back, no financial data.
+    // minimized fields only, no financial data. lat/lng ARE included
+    // (user-requested, Phase 10) — this is the customer's own registered
+    // location (the same field CustomerFormModal.jsx now captures at
+    // registration, and the Staff Map already plots), needed here so the
+    // collector can actually navigate to the site they're assigned to.
+    // Distinct from the "no raw GPS fed back" guarantee this comment
+    // originally referred to, which is about never exposing a COLLECTION
+    // EVENT's own captured GPS (where a collector stood when marking a
+    // visit — a hard, out-of-band privacy boundary per the Map module's
+    // own design) — that boundary is untouched; this is static customer
+    // master data, already visible here via address_line/phone/name.
     const batches = new Map();
     for (const row of result.rows) {
       if (!batches.has(row.batch_id)) {
@@ -92,6 +103,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
         customer_id: row.customer_id, customer_number: row.customer_number,
         name: row.name, business_name: row.business_name, phone: row.phone,
         address_line: row.address_line, customer_type: row.customer_type,
+        lat: row.lat, lng: row.lng,
         status: row.customer_status, task_id: row.task_id, task_status: row.task_status,
       });
     }
