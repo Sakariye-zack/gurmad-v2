@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Wallet2, Plus, FileCheck2 } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useCashouts, useCreateCashout, useReconciliationPreview } from '../../hooks/useCashouts.js';
+import { useCashouts, useCreateCashout, useReconciliationPreview, useCashiers } from '../../hooks/useCashouts.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
@@ -97,10 +97,17 @@ function CashoutFormContent({ onClose }) {
   const [remarks, setRemarks] = useState('');
   const [error, setError] = useState('');
   const { data: zonesData } = useZonesList();
+  const { data: cashiersData } = useCashiers();
   const preview = useReconciliationPreview(cashierId, toIsoZ(periodStart), toIsoZ(periodEnd));
   const createCashout = useCreateCashout();
   const toast = useToast();
   const zones = zonesData?.data || [];
+  // User-reported gap (Phase 10 Billing audit): the field below used to
+  // be a raw "type the numeric user id" input — same class of bug already
+  // fixed once this session for Employees' "Linked user account ID".
+  // Narrowed to the cashiers in the selected zone when one is chosen
+  // (zone is picked first in this form), full list otherwise.
+  const cashiers = (cashiersData?.data || []).filter((c) => !zoneId || !c.zone || c.zone === zones.find((z) => String(z.id) === zoneId)?.name);
 
   const actual = (parseFloat(cash) || 0) + (parseFloat(zaad) || 0) + (parseFloat(edahab) || 0) + (parseFloat(slsh) || 0);
   const expected = preview.data?.data?.expectedAmount ?? null;
@@ -145,8 +152,11 @@ function CashoutFormContent({ onClose }) {
             </select>
           </label>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Cashier (User ID)</span>
-            <input type="number" min="1" value={cashierId} onChange={(e) => setCashierId(e.target.value)} style={inputStyle} placeholder="e.g. 3" />
+            <span style={labelStyle}>Cashier</span>
+            <select value={cashierId} onChange={(e) => setCashierId(e.target.value)} style={inputStyle}>
+              <option value="">Select a cashier…</option>
+              {cashiers.map((c) => <option key={c.id} value={c.id}>{c.full_name || c.username} ({c.username}{c.zone ? `, ${c.zone}` : ''})</option>)}
+            </select>
           </label>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>

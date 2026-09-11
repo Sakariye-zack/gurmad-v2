@@ -85,6 +85,28 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
   }
 });
 
+// GET /cashiers — user-reported gap (Phase 10 Billing audit): the New
+// Cashout form's 'Cashier' field was a raw numeric user-id text input —
+// Head of Cashiers had to already know a cashier's internal database id
+// by heart, the exact same class of bug already fixed once this session
+// for Employees' "Linked user account ID" field. GET /v2/users (the
+// obvious source) is admin-only, and employees.js's VIEW_ROLES doesn't
+// include head_of_cashiers either — so this is a small, narrowly-scoped
+// new endpoint rather than widening either of those admin-facing
+// surfaces: id/username/full_name/zone only, role='cashier' only,
+// same CREATE_ROLES as the cashout form itself. Registered BEFORE
+// '/:id' for the same reason as reconciliation-preview below.
+router.get('/cashiers', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, username, full_name, zone FROM v2_users WHERE role = 'cashier' AND is_active = TRUE ORDER BY full_name, username`
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to list cashiers.', code: 'INTERNAL' } });
+  }
+});
+
 // Read-only helper for the Cashout Form's own reconciliation preview
 // (Head of Cashiers picks a cashier + period, sees server-computed expected
 // amount before submitting) — same computation the create route itself

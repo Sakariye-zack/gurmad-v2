@@ -15,6 +15,13 @@ export function useCashouts(params = {}) {
 export function useCashout(id) {
   return useQuery({ queryKey: ['v2', 'cashouts', id], queryFn: () => apiClient.get(`/v2/cashouts/${id}`), enabled: !!id });
 }
+// User-reported gap (Phase 10 Billing audit): the New Cashout form's
+// 'Cashier' field was a raw numeric id text input — see GET
+// /v2/cashouts/cashiers' own comment in cashouts.js for why this is a
+// small dedicated endpoint rather than reusing GET /v2/users (admin-only).
+export function useCashiers() {
+  return useQuery({ queryKey: ['v2', 'cashouts', 'cashiers'], queryFn: () => apiClient.get('/v2/cashouts/cashiers') });
+}
 export function useReconciliationPreview(cashierId, periodStart, periodEnd) {
   const enabled = !!cashierId && !!periodStart && !!periodEnd;
   const qs = new URLSearchParams({ cashier_id: cashierId || '', period_start: periodStart || '', period_end: periodEnd || '' });
