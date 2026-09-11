@@ -70,6 +70,7 @@ import DebtsView from '../pages/financial/DebtsView.jsx';
 import CashoutsListPage from '../pages/financial/CashoutsListPage.jsx';
 import ReportsPage from '../pages/reports/ReportsPage.jsx';
 import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
+import ExchangeRatesPage from '../pages/financial/ExchangeRatesPage.jsx';
 import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
 import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
 import UsersListPage from '../pages/users/UsersListPage.jsx';
@@ -146,6 +147,7 @@ export const router = createBrowserRouter([
       { path: 'financial/debts', element: <DebtsView /> },
       { path: 'financial/cashouts', element: <CashoutsListPage /> },
       { path: 'financial/cashouts/:id', element: <CashoutDetailPage /> },
+      { path: 'financial/exchange-rate', element: <ExchangeRatesPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'billing', element: <BillingView /> },
       { path: 'complaints', element: <ComplaintsListPage /> },

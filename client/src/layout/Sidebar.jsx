@@ -43,6 +43,13 @@ export const NAV = [
   { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'], group: 'Financial' },
   { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
   { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
+  // Added (Phase 10 Billing audit) — the backend (GET/POST
+  // /v2/exchange-rates) and frontend hooks already existed; this was the
+  // one missing nav entry to actually reach the page. Same VIEW_ROLES as
+  // the backend route itself (admin, cashier) — setting a new rate is
+  // admin-only, enforced inside the page via RoleGate, same pattern as
+  // every other Financial item here.
+  { to: '/financial/exchange-rate', label: 'Exchange Rate', icon: DollarSign, roles: ['admin', 'cashier'], group: 'Financial' },
 
   // ---- HR & Payroll ----
   { to: '/employees', label: 'Employees', icon: Users2, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
