@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateEmployee, useUpdateEmployee } from '../../hooks/useEmployees.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
+import { useUsers } from '../../hooks/useUsers.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
 
 const EMPTY = {
   name: '', job_role: '', employee_type: 'office', phone: '', zone_id: '',
@@ -38,6 +40,14 @@ function Content({ onClose, employee }) {
   const updateEmployee = useUpdateEmployee(employee?.id);
   const { data: zonesData } = useZonesList();
   const zones = zonesData?.data || [];
+  // "Linked user account" picker (user-requested fix — was a raw numeric
+  // ID text box: "e.g. 3", nothing to look the number up against). Only
+  // admin can actually list users (GET /v2/users is admin-only), so the
+  // dropdown is admin-only too; a non-admin sees the original ID input
+  // unchanged, since they have no way to look up a valid one either way.
+  const isAdmin = (useAuth().user?.role || '').toLowerCase() === 'admin';
+  const { data: usersData } = useUsers(isAdmin);
+  const users = usersData?.data || [];
   const busy = createEmployee.isPending || updateEmployee.isPending;
   const isCollector = form.employee_type === 'collector';
   const isCommercial = form.collector_type === 'commercial';
@@ -175,9 +185,30 @@ function Content({ onClose, employee }) {
           </Field>
         </div>
 
-        <Field label="Linked user account ID" error={fieldErrors.user_id} hint="Optional, recorded as a reference only — not verified against the login system.">
-          <input value={form.user_id} onChange={(e) => set('user_id', e.target.value)} style={inputStyle} placeholder="e.g. 3" />
-        </Field>
+        {isAdmin ? (
+          <Field label="Linked user account (optional)" hint="For collectors who sign in to the Collector Mobile app — links this employee to their login.">
+            <select value={form.user_id} onChange={(e) => set('user_id', e.target.value)} style={inputStyle}>
+              <option value="">No linked account</option>
+              {users.map((u) => {
+                // A user already linked to a DIFFERENT employee is shown
+                // but disabled — picking it here would silently steal the
+                // link from whichever employee currently has it, which the
+                // backend itself doesn't guard against (user_id has no
+                // uniqueness constraint), so it's guarded here instead.
+                const linkedElsewhere = u.employee_id && u.employee_id !== employee?.id;
+                return (
+                  <option key={u.id} value={u.id} disabled={linkedElsewhere}>
+                    {u.full_name || u.username} ({u.username}, {u.role}){linkedElsewhere ? ` — already linked to ${u.employee_name}` : ''}
+                  </option>
+                );
+              })}
+            </select>
+          </Field>
+        ) : (
+          <Field label="Linked user account ID" error={fieldErrors.user_id} hint="Optional, recorded as a reference only — not verified against the login system.">
+            <input value={form.user_id} onChange={(e) => set('user_id', e.target.value)} style={inputStyle} placeholder="e.g. 3" />
+          </Field>
+        )}
 
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '2px' }}>
           <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>

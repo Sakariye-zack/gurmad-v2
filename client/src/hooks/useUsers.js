@@ -2,10 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../lib/apiClient.js';
 
 // User & Access Administration — admin-only user management.
-export function useUsers() {
+// `enabled` (default true) — GET /v2/users is itself admin-only
+// (routes/users.js), so a caller outside the Users & Access page
+// (EmployeeFormModal.jsx's "Linked user account" picker, reachable by
+// gudoomiye/zone_accountant too) must pass `enabled: isAdmin` to avoid
+// firing a request that always 403s for a non-admin viewer.
+export function useUsers(enabled = true) {
   return useQuery({
     queryKey: ['v2', 'users'],
     queryFn: () => apiClient.get('/v2/users'),
+    enabled,
   });
 }
 
