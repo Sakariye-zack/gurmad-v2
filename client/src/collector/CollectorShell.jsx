@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { ClipboardList, RefreshCw, ShieldAlert, LogOut } from 'lucide-react';
+import { Home, ClipboardList, RefreshCw, ShieldAlert, LogOut } from 'lucide-react';
 import { useSyncQueueContext } from './SyncQueueContext.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
@@ -94,7 +94,8 @@ export default function CollectorShell() {
         borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-around',
         padding: '8px 0 max(8px, env(safe-area-inset-bottom))', zIndex: 50,
       }}>
-        <NavTab to="/collector" icon={ClipboardList} label="Assignments" end />
+        <NavTab to="/collector" icon={Home} label="Home" end />
+        <NavTab to="/collector/assignments" icon={ClipboardList} label="Assignments" />
         <NavTab to="/collector/sync" icon={RefreshCw} label="Sync" badge={activeCount} />
         <NavTab to="/collector/account" icon={ShieldAlert} label="Account" />
       </nav>

@@ -100,6 +100,7 @@ import CollectorApp from '../collector/CollectorApp.jsx';
 import CollectorRequireAuth from '../collector/CollectorRequireAuth.jsx';
 import CollectorShell from '../collector/CollectorShell.jsx';
 import CollectorLoginScreen from '../collector/screens/LoginScreen.jsx';
+import CollectorHomeScreen from '../collector/screens/HomeScreen.jsx';
 import CollectorAssignmentsScreen from '../collector/screens/AssignmentsScreen.jsx';
 import CollectorCustomerDetailScreen from '../collector/screens/CustomerDetailScreen.jsx';
 import CollectorCollectionActionScreen from '../collector/screens/CollectionActionScreen.jsx';
@@ -228,7 +229,8 @@ export const router = createBrowserRouter([
       {
         element: <CollectorShell />,
         children: [
-          { index: true, element: <CollectorAssignmentsScreen /> },
+          { index: true, element: <CollectorHomeScreen /> },
+          { path: 'assignments', element: <CollectorAssignmentsScreen /> },
           { path: 'customer/:batchId/:customerId', element: <CollectorCustomerDetailScreen /> },
           { path: 'action/:batchId/:customerId', element: <CollectorCollectionActionScreen /> },
           { path: 'sync', element: <CollectorSyncCenterScreen /> },

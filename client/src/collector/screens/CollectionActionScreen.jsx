@@ -123,7 +123,7 @@ export default function CollectionActionScreen() {
   // No data is at risk either way (the lookup is scoped to this
   // collector's own cache — see CustomerDetailScreen's identical guard),
   // this is a UX/recovery fix only.
-  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector')} />;
+  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector/assignments')} />;
 
   const submit = async () => {
     if (!status) return toast.error('Select a status.');
@@ -143,7 +143,7 @@ export default function CollectionActionScreen() {
         photoMime: status === 'serviced' ? photo?.mime : null,
       });
       toast.success('Queued — will sync automatically');
-      navigate('/collector');
+      navigate('/collector/assignments');
     } finally {
       setSubmitting(false);
     }

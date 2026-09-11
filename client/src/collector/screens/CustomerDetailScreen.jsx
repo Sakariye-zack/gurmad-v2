@@ -32,7 +32,7 @@ export default function CustomerDetailScreen() {
   }, [batchId, customerId]);
 
   if (customer === undefined) return <LoadingState />;
-  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector')} />;
+  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector/assignments')} />;
 
   return (
     <div>
