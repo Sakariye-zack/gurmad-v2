@@ -435,6 +435,24 @@ router.put('/:id/cancel', authenticateToken, requireRole(...WRITE_ROLES), async 
         return res.status(409).json({ error: { message: `${incoming.rows[0].c} customer(s) were rescheduled into this batch — re-point them before cancelling.`, code: 'CONFLICT' } });
       }
       const updated = await client.query(`UPDATE batches SET status = 'cancelled', cancelled_at = NOW(), cancelled_reason = $1 WHERE id = $2 RETURNING *`, [reason, id]);
+      // Bug fix (user-reported live, Phase 10): cancelling a batch never
+      // touched its batch_customers rows — a customer who was still
+      // 'pending' in a batch at the moment it got cancelled stayed
+      // 'pending' forever, since no other route ever transitions that
+      // status either. The batch-creation conflict check (`SELECT
+      // customer_id FROM batch_customers WHERE ... status = 'pending'`,
+      // above in this file) has no way to know the batch they're
+      // "pending" in is actually cancelled — so a cancelled batch's
+      // customers became permanently unable to ever be placed in a new
+      // batch. Fixed by clearing only the still-'pending' rows (never
+      // serviced/missed/skipped/rescheduled — those are real completed
+      // history, untouched by the parent batch's later cancellation).
+      // DELETE, not a new status value, because batch_customers.status's
+      // own CHECK constraint has no 'cancelled' member and adding one
+      // would be a schema change for what a plain cleanup already solves
+      // — the batch itself keeps its own cancelled_reason/cancelled_at as
+      // the historical record.
+      await client.query(`DELETE FROM batch_customers WHERE batch_id = $1 AND status = 'pending'`, [id]);
       await client.query('COMMIT');
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch.cancel', entityType: 'batch', entityId: id, before: batch, after: updated.rows[0] });
       // Staff Notifications — Spec §7.3/§8/§14. MUST run only after the
