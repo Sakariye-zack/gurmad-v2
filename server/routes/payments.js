@@ -5,7 +5,12 @@ const { recalculateInvoiceStatus, getCurrentExchangeRate, EPSILON } = require('.
 
 const router = express.Router();
 
-const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
+// 'cashier' added (user-reported live, Phase 10) — same gap and same
+// fix as invoices.js: every check in this file (GET /, POST /) already
+// structurally enforces resolveUserZoneId()'s result, only the role
+// list was missing 'cashier', letting them record payment on any
+// customer's invoice company-wide instead of their own zone only.
+const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'cashier'];
 const VIEW_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant'];
 const RECORD_ROLES = ['admin', 'cashier'];
 const VALID_METHODS = ['cash', 'zaad', 'edahab', 'slsh', 'debt'];

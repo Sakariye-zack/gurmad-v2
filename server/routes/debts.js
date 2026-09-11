@@ -5,7 +5,10 @@ const { getInvoiceBalance, EPSILON } = require('../lib/financialCalculations');
 
 const router = express.Router();
 
-const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
+// 'cashier' added (user-reported live, Phase 10) — same gap/fix as
+// invoices.js and payments.js: this file's own zone checks already
+// existed, only the role list was missing 'cashier'.
+const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'cashier'];
 const VIEW_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'];
 const CREATE_ROLES = ['admin', 'cashier', 'gudoomiye'];
 const SETTLE_ROLES = ['admin', 'cashier'];

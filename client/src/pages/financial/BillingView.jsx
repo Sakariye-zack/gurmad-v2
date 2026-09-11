@@ -13,7 +13,13 @@ const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', void
 // invoice form, and performs zero balance/status calculation itself.
 export default function BillingView() {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(null);
-  const { data, isLoading, error, refetch } = useInvoices({ status: undefined });
+  // Search box — user-reported gap (Phase 10): a cashier had no way to
+  // find a specific customer's invoice quickly, only a flat scroll list.
+  // Reuses the existing, already-wired ?q= backend param (invoice
+  // number / customer name / customer number, ILIKE, 2-char minimum) —
+  // useInvoices already forwards it, no hook change needed.
+  const [q, setQ] = useState('');
+  const { data, isLoading, error, refetch } = useInvoices({ q: q.trim().length >= 2 ? q.trim() : undefined });
   const invoices = (data?.data || []).filter((i) => i.status !== 'voided' && i.status !== 'paid');
 
   return (
@@ -23,10 +29,24 @@ export default function BillingView() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', alignItems: 'flex-start' }}>
         <div>
           <span style={sectionLabelStyle}>Outstanding Invoices</span>
+          <div style={{ position: 'relative', marginBottom: '10px' }}>
+            <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by customer name or number…"
+              style={{
+                width: '100%', padding: '11px 12px 11px 36px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+                fontSize: '14px', fontFamily: 'inherit', minHeight: '44px',
+              }}
+            />
+          </div>
           {isLoading && <LoadingState label="Loading…" />}
           {error && <Card style={{ padding: '16px' }}><p style={{ margin: 0, color: 'var(--danger)', fontSize: '13px' }}>{error.message}</p></Card>}
           {!isLoading && !error && invoices.length === 0 && (
-            <Card style={{ padding: '16px' }}><p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>Nothing outstanding.</p></Card>
+            <Card style={{ padding: '16px' }}><p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{q.trim().length >= 2 ? 'No match for that search.' : 'Nothing outstanding.'}</p></Card>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {invoices.map((inv) => (

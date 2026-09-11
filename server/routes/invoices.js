@@ -8,7 +8,18 @@ const router = express.Router();
 
 // Same zone-scope pattern as every prior V2 module (local resolver, not a
 // shared cross-module utility) — matches customers.js/batches.js exactly.
-const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
+//
+// 'cashier' added (user-reported live, Phase 10 — 'cashierku qaab
+// noocee ah bu u bixinayaa lacagta wali halkaa malaha waxbaa iga
+// dhiman'): a cashier was NOT zone-scoped here even though every
+// downstream check in this file (GET /, GET /:id, POST /) already
+// structurally enforces resolveUserZoneId()'s result — so a cashier
+// could see and collect payment against ANY customer's invoice
+// company-wide, not just their own zone, contradicting the zone-scoped
+// cashier workflow already established elsewhere this session (cashout
+// reconciliation). No other route logic changes — the enforcement code
+// already existed, only the role list was missing 'cashier'.
+const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'cashier'];
 const VIEW_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant'];
 const CREATE_ROLES = ['admin', 'cashier'];
 
