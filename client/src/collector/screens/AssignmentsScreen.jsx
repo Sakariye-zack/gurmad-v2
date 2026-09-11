@@ -47,7 +47,13 @@ export default function AssignmentsScreen() {
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '15px' }}>{c.business_name || c.name}</div>
+                  {/* Fix: a bare <button> does not inherit body's text color
+                      in any browser (buttons default to their own control
+                      color, unlike normal elements) — without this, dark
+                      mode rendered near-black text on a dark card, almost
+                      unreadable. Every other collector-screen button that
+                      shows customer/entity names has the identical gap. */}
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text)' }}>{c.business_name || c.name}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
                     <MapPin size={12} /> {c.address_line || 'No address on file'}
                   </div>

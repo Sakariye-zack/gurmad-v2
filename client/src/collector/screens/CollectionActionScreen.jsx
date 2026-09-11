@@ -158,6 +158,10 @@ export default function CollectionActionScreen() {
               flex: 1, padding: '16px 8px', borderRadius: 'var(--radius-md)', minHeight: '56px', fontWeight: 700, fontSize: '14px',
               border: status === s.value ? '2px solid var(--brand)' : '1px solid var(--border)',
               background: status === s.value ? 'var(--success-bg)' : 'var(--surface)', cursor: 'pointer',
+              // Same fix as AssignmentsScreen.jsx — a bare <button> does not
+              // inherit body's text color, so this rendered near-black in
+              // dark mode without an explicit color.
+              color: 'var(--text)',
             }}>
             {s.label}
           </button>

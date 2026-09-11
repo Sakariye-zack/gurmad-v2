@@ -100,7 +100,14 @@ h1 { font-size: 28px; }
 h2 { font-size: 22px; }
 h3 { font-size: 18px; }
 .tabular-nums { font-variant-numeric: tabular-nums; }
-button, input, select, textarea { font-family: inherit; font-size: inherit; }
+/* color: inherit is the actual fix here — browsers give <button> its own
+   default text color (not the body's), unlike every other element, which
+   is why an unstyled button anywhere in the app silently rendered
+   near-black text on a dark-mode surface until this was added. Found in
+   the Collector Mobile app's Assignments/Collection Action screens; this
+   is the systemic fix so it can't recur anywhere else in the app rather
+   than a per-screen patch. */
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
