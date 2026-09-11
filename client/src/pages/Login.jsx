@@ -57,37 +57,89 @@ function IsoTruck({ style }) {
           <stop offset="0" stopColor="var(--brand)" />
           <stop offset="1" stopColor="var(--brand-dark)" />
         </linearGradient>
+        <linearGradient id="hopperSide" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="var(--brand-dark)" />
+          <stop offset="1" stopColor="#000" stopOpacity="0.18" />
+        </linearGradient>
+        <radialGradient id="headlamp" cx="0.5" cy="0.5" r="0.6">
+          <stop offset="0" stopColor="#fff6d8" />
+          <stop offset="1" stopColor="#e8c96a" />
+        </radialGradient>
       </defs>
+
       {/* ground shadow */}
-      <ellipse cx="170" cy="200" rx="130" ry="12" fill="#000" opacity="0.28" />
+      <ellipse cx="175" cy="206" rx="150" ry="11" fill="#000" opacity="0.3" />
 
-      {/* rear hopper block — three faces for depth */}
-      <path d="M60 70 L180 40 L180 150 L60 180 Z" fill="url(#hopperTop)" />
-      <path d="M180 40 L250 65 L250 172 L180 150 Z" fill="var(--brand-dark)" />
-      <path d="M60 70 L180 40 L250 65 L130 95 Z" fill="var(--brand)" opacity="0.92" />
-      {/* hopper lid seam + rivets, manifest-plate detail */}
-      <path d="M70 95 L172 68" stroke="#000" strokeOpacity="0.18" strokeWidth="2" />
-      <circle cx="90" cy="130" r="3" fill="#000" opacity="0.2" />
-      <circle cx="130" cy="118" r="3" fill="#000" opacity="0.2" />
-      <circle cx="170" cy="106" r="3" fill="#000" opacity="0.2" />
+      {/* rear step / tow bumper, low behind the hopper */}
+      <path d="M50 172 L60 168 L60 186 L50 190 Z" fill="var(--text-muted)" opacity="0.5" />
 
-      {/* cab */}
-      <path d="M250 100 L296 116 L296 172 L250 172 Z" fill="var(--accent)" />
-      <path d="M250 100 L296 116 L262 126 L232 112 Z" fill="var(--accent-dark)" />
-      <path d="M232 112 L262 126 L262 178 L232 178 Z" fill="var(--accent-dark)" opacity="0.9" />
-      {/* windshield */}
-      <path d="M240 116 L258 122 L258 140 L240 136 Z" fill="var(--bg)" opacity="0.85" />
+      {/* hopper block — top, right(dark-shaded), front-left(lit) faces */}
+      <path d="M56 66 L182 34 L182 152 L56 184 Z" fill="url(#hopperTop)" />
+      <path d="M182 34 L252 60 L252 176 L182 152 Z" fill="url(#hopperSide)" />
+      <path d="M56 66 L182 34 L252 60 L126 92 Z" fill="var(--brand)" />
+      {/* corrugated body ribs on the lit face — the ridged-panel look every
+          real hopper body has, not a flat block */}
+      {[0, 1, 2, 3, 4].map((i) => (
+        <path
+          key={i}
+          d={`M${66 + i * 24} ${182 - i * 0.3} L${66 + i * 24 + 4} ${68 + i * 6}`}
+          stroke="#000" strokeOpacity="0.14" strokeWidth="2"
+        />
+      ))}
+      {/* lid seam + a small riveted manifest plate reading the fleet unit */}
+      <path d="M66 91 L174 60" stroke="#000" strokeOpacity="0.22" strokeWidth="2.5" />
+      <rect x="90" y="112" width="46" height="20" rx="2" fill="var(--bg)" opacity="0.85" />
+      <text x="113" y="126" textAnchor="middle" fontFamily="'JetBrains Mono', monospace" fontSize="10" fontWeight="700" fill="var(--brand-dark)">G-07</text>
+      <circle cx="76" cy="150" r="2.6" fill="#000" opacity="0.22" />
+      <circle cx="76" cy="110" r="2.6" fill="#000" opacity="0.22" />
 
-      {/* chassis */}
-      <rect x="60" y="178" width="236" height="10" fill="#000" opacity="0.35" />
+      {/* hazard rear-corner stripe, like real refuse-truck tape */}
+      <path d="M182 138 L200 130 L200 152 L182 160 Z" fill="var(--accent)" opacity="0.9" />
 
-      {/* wheels */}
-      <circle cx="100" cy="196" r="16" fill="#111" />
-      <circle cx="100" cy="196" r="6" fill="var(--text-muted)" />
-      <circle cx="200" cy="196" r="16" fill="#111" />
-      <circle cx="200" cy="196" r="6" fill="var(--text-muted)" />
-      <circle cx="270" cy="196" r="16" fill="#111" />
-      <circle cx="270" cy="196" r="6" fill="var(--text-muted)" />
+      {/* cab — top, dark side, lit front */}
+      <path d="M252 96 L300 114 L300 174 L252 174 Z" fill="var(--accent)" />
+      <path d="M252 96 L300 114 L264 126 L228 108 Z" fill="var(--accent-dark)" />
+      <path d="M228 108 L264 126 L264 182 L228 182 Z" fill="var(--accent-dark)" opacity="0.94" />
+      {/* windshield + door seam + handle, so the cab reads as a cab, not a box */}
+      <path d="M236 112 L256 120 L256 142 L236 138 Z" fill="var(--bg)" opacity="0.9" />
+      <path d="M228 150 L264 164" stroke="#000" strokeOpacity="0.2" strokeWidth="1.5" />
+      <rect x="246" y="152" width="10" height="3" rx="1.5" fill="var(--bg)" opacity="0.6" />
+      {/* side mirror */}
+      <path d="M228 118 L219 116 L219 126 L228 128 Z" fill="var(--accent-dark)" />
+      {/* headlamp + grille on the cab's front face */}
+      <circle cx="292" cy="150" r="7" fill="url(#headlamp)" />
+      <path d="M270 168 L296 172 L296 178 L270 176 Z" fill="#1a1a1a" opacity="0.55" />
+      {/* exhaust stack behind the cab, a real refuse-truck signature */}
+      <rect x="222" y="66" width="7" height="46" rx="2" fill="var(--text-muted)" />
+      <ellipse cx="225.5" cy="66" rx="4.5" ry="2.2" fill="var(--border)" />
+
+      {/* chassis rail */}
+      <rect x="56" y="182" width="244" height="9" fill="#000" opacity="0.38" />
+      {/* mudflaps */}
+      <rect x="94" y="190" width="14" height="16" rx="1.5" fill="#1a1a1a" opacity="0.6" />
+      <rect x="264" y="190" width="14" height="16" rx="1.5" fill="#1a1a1a" opacity="0.6" />
+
+      {/* wheels — tire + rim + 5-spoke hub, twice (rear dual-ish silhouette + front) */}
+      {[[102, 'rear'], [204, 'mid'], [276, 'front']].map(([cx]) => (
+        <g key={cx}>
+          <circle cx={cx} cy="200" r="18" fill="#141414" />
+          <circle cx={cx} cy="200" r="18" fill="none" stroke="#000" strokeOpacity="0.4" strokeWidth="2" />
+          <circle cx={cx} cy="200" r="9.5" fill="var(--text-muted)" />
+          <circle cx={cx} cy="200" r="9.5" fill="none" stroke="#000" strokeOpacity="0.25" strokeWidth="1" />
+          {[0, 72, 144, 216, 288].map((deg) => {
+            const r1 = 2.2, r2 = 8.6;
+            const rad = (deg * Math.PI) / 180;
+            return (
+              <line
+                key={deg}
+                x1={cx + r1 * Math.cos(rad)} y1={200 + r1 * Math.sin(rad)}
+                x2={cx + r2 * Math.cos(rad)} y2={200 + r2 * Math.sin(rad)}
+                stroke="#141414" strokeWidth="2"
+              />
+            );
+          })}
+        </g>
+      ))}
     </svg>
   );
 }
@@ -217,18 +269,27 @@ export default function Login() {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '28px' }}>
-                {/* Embossed medallion — layered inset+outset shadow and a
-                    gradient rim is what fakes a raised, stamped disc here. */}
+                {/* Embossed medallion — a gradient-rim ring (padding trick:
+                    outer disc in brand colors, inner disc inset by 2.5px)
+                    plus layered inset+outset shadow is what fakes a raised,
+                    stamped badge here — like a vehicle inspection seal. */}
                 <div
                   style={{
-                    width: '58px', height: '58px', flexShrink: 0, borderRadius: '50%',
-                    background: 'linear-gradient(155deg, var(--surface), var(--bg))',
-                    boxShadow: '0 1px 0 rgba(255,255,255,0.5) inset, 0 -1px 4px rgba(0,0,0,0.15) inset, 0 6px 14px -4px rgba(0,0,0,0.3)',
-                    border: '1px solid var(--border)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: '62px', height: '62px', flexShrink: 0, borderRadius: '50%', padding: '2.5px',
+                    background: 'conic-gradient(from 200deg, var(--brand), var(--accent), var(--brand))',
+                    boxShadow: '0 8px 18px -6px color-mix(in srgb, var(--brand) 55%, transparent)',
                   }}
                 >
-                  <CompanyLogo height={32} fallback={<Shield size={24} color="var(--brand)" />} style={{ borderRadius: '50%' }} />
+                  <div
+                    style={{
+                      width: '100%', height: '100%', borderRadius: '50%',
+                      background: 'linear-gradient(155deg, var(--surface), var(--bg))',
+                      boxShadow: '0 1px 0 rgba(255,255,255,0.5) inset, 0 -1px 4px rgba(0,0,0,0.18) inset',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <CompanyLogo height={32} fallback={<Shield size={24} color="var(--brand)" />} style={{ borderRadius: '50%' }} />
+                  </div>
                 </div>
                 <div>
                   <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '26px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
