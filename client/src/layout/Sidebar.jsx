@@ -1,6 +1,10 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2, BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut, CalendarDays, Map } from 'lucide-react';
+import React, { useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
+  BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut,
+  CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed,
+} from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 // Staff Notifications — additive-only import, does not touch NAV or any
@@ -15,160 +19,209 @@ import CompanyLogo from '../components/CompanyLogo.jsx';
 // MobileNavDrawer.jsx can reuse this exact array (and RoleGate below)
 // rather than maintaining a second, parallel navigation list — the
 // structural guarantee against desktop/mobile RBAC drift.
+//
+// `group` (user-requested redesign, Phase 10) — organizes what had grown
+// into a single 30+ item flat list into collapsible modules. Purely a
+// presentation grouping: adding/changing a `group` value never touches
+// `to`/`roles`/`permission`, so MobileNavDrawer.jsx (which still renders
+// this array flat, unchanged) and every RBAC boundary already established
+// per item are completely unaffected by this field's presence.
 export const NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/customers', label: 'Customers', icon: Users },
-  // View is available to any authenticated staff role that needs zone
-  // context (Phase 3 Module 1 discovery: "no legitimate role is excluded
-  // from viewing") — ungated. Create/Edit stays admin-only at the page level.
-  { to: '/zones', label: 'Zones', icon: MapPinned },
-  // Group & Group-Based Collection — Change Request. Same visibility rule
-  // as Zones (no legitimate role is excluded from viewing); write access
-  // is gated at the page/backend level (admin/gudoomiye, own zone).
-  { to: '/groups', label: 'Groups', icon: Boxes },
-  // OD-3: unlike Zones/Customers, Employees is genuinely role-restricted —
-  // cashier/collector must not see the staff directory at all, not even the
-  // nav entry (matches the backend's requireRole on every employees route).
-  { to: '/employees', label: 'Employees', icon: Users2, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
-  // OD-4: broad operational view (not HR-sensitive like Employees) —
-  // ungated, matches the backend's own broader VIEW_ROLES for /v2/trucks.
-  { to: '/trucks', label: 'Trucks', icon: Truck },
-  // Cycles/Batches view is admin/gudoomiye/zone_accountant/collector —
-  // cashier has no role in collection operations at all (matches the
-  // backend's VIEW_ROLES on /v2/cycles and /v2/batches).
-  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
-  // Batches page (/collection-cycles/batches) existed and worked but had
-  // NO nav entry anywhere — found live (a real user's browser) during
-  // Phase 10 Gap Audit. Same roles as Collection Cycles itself, since a
-  // batch is meaningless without its parent cycle's own access boundary.
-  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
-  // Operational Calendar — Decisions §"RBAC": Admin (company-wide),
-  // Gudoomiye/Zone Accountant/Head of Cashiers (own-zone-scoped). Cashier
-  // and Collector get no v1 access — matches the backend's own requireRole
-  // on GET /v2/calendar/batches exactly, nav-hidden here for the same set.
-  { to: '/calendar', label: 'Calendar', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // Route & GIS / Map — Decisions §RBAC: identical role set to Calendar.
-  // Cashier and Collector get no v1 access.
-  { to: '/map', label: 'Map', icon: Map, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // Financial — Phase 3 Module 6. Billing and Invoices are deliberately
-  // separate pages (approved architecture), matching the RBAC matrix in
-  // Phase3_Module06_FinancialBilling_Implementation_Spec.md §13: Collector
-  // has no financial nav entry at all; Gudoomiye/Zone Accountant see all
-  // three but are view-only within them (enforced by RoleGate inside each
-  // page + backend requireRole, never by hiding the nav item alone).
-  { to: '/billing', label: 'Billing', icon: Wallet, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
-  { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
-  { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // Module 7 — Cashout & Cash Reconciliation. Head of Cashiers manages it;
-  // Gudoomiye approves (zone-scoped); Zone Accountant/Cashier view only;
-  // Collector has no financial nav entry at all, matching every other
-  // financial page's own boundary.
-  { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // Module 8 — Reports. Collector gets it too (their own Collector-
-  // Performance tab only, server-enforced) — the nav item itself isn't
-  // role-hidden from them, the financial sub-tabs inside the page are.
-  { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'] },
-  // Phase 5 — Complaints. Admin/Gudoomiye = full management (create/assign/
-  // status/priority/reply). Zone Accountant/Head of Cashiers = read-only
-  // (enforced server-side by requireRole on every write route, not just
-  // hidden here). Cashier explicitly excluded — the original "own cashier-
-  // scope" wording was superseded by the approved Decision Review: no
-  // V2-native cashier-scope engine exists, none was built, Cashier = no
-  // access. Collector: zero evidence anywhere supports any access.
-  { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // User & Access Administration — OD-2: admin-only, matches the
-  // backend's own requireRole('admin') on every /v2/users route.
-  { to: '/users', label: 'Users & Access', icon: ShieldCheck, roles: ['admin'] },
-  // Audit & Security Center — Phase 1, D1: Admin-only, company-wide.
-  { to: '/audit', label: 'Audit & Security', icon: History, roles: ['admin'] },
-  // System Settings — Phase 1, D1: Admin-only, company-wide.
-  { to: '/settings', label: 'System Settings', icon: SettingsIcon, roles: ['admin'] },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, group: null },
+
+  // ---- Operations ----
+  { to: '/customers', label: 'Customers', icon: Users, group: 'Operations' },
+  { to: '/zones', label: 'Zones', icon: MapPinned, group: 'Operations' },
+  { to: '/groups', label: 'Groups', icon: Boxes, group: 'Operations' },
+  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'], group: 'Operations' },
+  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'], group: 'Operations' },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Operations' },
+  { to: '/map', label: 'Map', icon: Map, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Operations' },
+
+  // ---- Financial ----
+  { to: '/billing', label: 'Billing', icon: Wallet, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'], group: 'Financial' },
+  { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'], group: 'Financial' },
+  { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
+  { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
+
+  // ---- HR & Payroll ----
+  { to: '/employees', label: 'Employees', icon: Users2, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
+  { to: '/hr/attendance', label: 'Attendance', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
+  { to: '/hr/leave-requests', label: 'Leave Requests', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
+  { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, roles: ['admin'], group: 'HR & Payroll' },
+  { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
+  { to: '/payroll/history', label: 'Payroll History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
+
+  // ---- Fleet ----
+  { to: '/trucks', label: 'Trucks', icon: Truck, group: 'Fleet' },
+  { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
+  { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
+  { to: '/fleet/expiry', label: 'Document Expiry', icon: History, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
+
+  // ---- Procurement ----
+  { to: '/procurement/suppliers', label: 'Suppliers', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
+  { to: '/procurement/requests', label: 'Procurement Requests', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
+  { to: '/procurement/purchase-orders', label: 'Purchase Orders', icon: Receipt, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
+
+  // ---- Inventory ----
+  { to: '/inventory/items', label: 'Inventory Items', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
+  { to: '/inventory/stores', label: 'Inventory Stores', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
+  { to: '/inventory/movements', label: 'Stock Movements', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
+  { to: '/inventory/adjustments', label: 'Inventory Adjustments', icon: ShieldAlert, roles: ['admin'], group: 'Inventory' },
+  { to: '/inventory/assets', label: 'Assets', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
+
+  // ---- Reports & Complaints ----
+  { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'], group: 'Reports & Complaints' },
+  { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Reports & Complaints' },
+
+  // ---- Documents & Data ----
+  { to: '/documents', label: 'Documents', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Documents & Data' },
+  { to: '/master-data/import', label: 'Data Import', icon: ClipboardList, roles: ['admin', 'gudoomiye'], group: 'Documents & Data' },
+  { to: '/master-data/export', label: 'Data Export', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'Documents & Data' },
+
+  // ---- Administration ----
+  { to: '/users', label: 'Users & Access', icon: ShieldCheck, roles: ['admin'], group: 'Administration' },
+  { to: '/audit', label: 'Audit & Security', icon: History, roles: ['admin'], group: 'Administration' },
+  { to: '/settings', label: 'System Settings', icon: SettingsIcon, roles: ['admin'], group: 'Administration' },
+
   // Account Security is self-service — every authenticated staff member
   // manages their own password/sessions, so this item is intentionally
   // ungated (no `roles`), matching the backend's own /v2/auth/* routes,
-  // which only require authenticateToken, never requireRole.
-  { to: '/account/security', label: 'Account Security', icon: ShieldAlert },
-  // Phase 1-6 Master Functional Completion Program — Future CR promoted to
-  // in-scope: these pages/routes/backends were already built and hardened
-  // across Phases 1-6 but had NO sidebar entry ("direct-URL access only",
-  // per router.jsx's own comments) — found during Phase 8 API/Integration
-  // audit. Purely additive: wiring already-existing, already-tested pages
-  // into navigation, no backend/schema/business-logic change. Roles below
-  // mirror each page's own backend VIEW_ROLES exactly (see cited route
-  // files), so nothing is exposed to a role that couldn't already reach it
-  // by typing the URL directly.
-  // Phase 1 — HR & Payroll (routes/attendance.js, leaveRequests.js,
-  // leaveTypes.js, payrollPeriods.js, payrollRecords.js VIEW_ROLES).
-  { to: '/hr/attendance', label: 'Attendance', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
-  { to: '/hr/leave-requests', label: 'Leave Requests', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
-  { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, roles: ['admin'] },
-  { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  { to: '/payroll/history', label: 'Payroll History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
-  // Phase 2 — Fleet Management (routes/fleet.js VIEW_ROLES).
-  { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
-  { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
-  { to: '/fleet/expiry', label: 'Document Expiry', icon: History, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
-  // Phase 3 — Procurement (routes/procurement.js VIEW_ROLES).
-  { to: '/procurement/suppliers', label: 'Suppliers', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  { to: '/procurement/requests', label: 'Procurement Requests', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  { to: '/procurement/purchase-orders', label: 'Purchase Orders', icon: Receipt, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  // Phase 4 — Inventory & Assets (routes/inventory.js VIEW_ROLES /
-  // ADMIN_ONLY for adjustments).
-  { to: '/inventory/items', label: 'Inventory Items', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  { to: '/inventory/stores', label: 'Inventory Stores', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  { to: '/inventory/movements', label: 'Stock Movements', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  { to: '/inventory/adjustments', label: 'Inventory Adjustments', icon: ShieldAlert, roles: ['admin'] },
-  { to: '/inventory/assets', label: 'Assets', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  // Phase 5 — Document & File Management (routes/documents.js VIEW_ROLES).
-  { to: '/documents', label: 'Documents', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
-  // Phase 6 — Import/Export + Master Data Governance. Import is
-  // admin-heavy per-entity (routes/masterDataImportExport.js +
-  // lib/masterDataEntities.js importRoles, admin or admin+gudoomiye
-  // depending on entity — the page itself further restricts per entity);
-  // export is broader (exportRoles: admin/gudoomiye/zone_accountant on
-  // every entity).
-  { to: '/master-data/import', label: 'Data Import', icon: ClipboardList, roles: ['admin', 'gudoomiye'] },
-  { to: '/master-data/export', label: 'Data Export', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+  // which only require authenticateToken, never requireRole. Kept
+  // ungrouped, same as Dashboard — always visible, never collapsed away.
+  { to: '/account/security', label: 'Account Security', icon: ShieldAlert, group: null },
 ];
+
+const GROUP_ICONS = {
+  'Operations': Building2,
+  'Financial': DollarSign,
+  'HR & Payroll': Users2,
+  'Fleet': Truck,
+  'Procurement': ShoppingCart,
+  'Inventory': Warehouse,
+  'Reports & Complaints': BarChart3,
+  'Documents & Data': FolderClosed,
+  'Administration': ShieldCheck,
+};
+// Fixed display order — Object grouping below preserves first-seen order
+// from NAV already, but this is the single source of truth if that ever
+// drifts (e.g. an item inserted out of its group's own block by mistake).
+const GROUP_ORDER = ['Operations', 'Financial', 'HR & Payroll', 'Fleet', 'Procurement', 'Inventory', 'Reports & Complaints', 'Documents & Data', 'Administration'];
+
+function groupNavItems() {
+  const ungrouped = [];
+  const byGroup = {};
+  for (const item of NAV) {
+    if (!item.group) { ungrouped.push(item); continue; }
+    (byGroup[item.group] ||= []).push(item);
+  }
+  return { ungrouped, byGroup };
+}
+
+function NavItemLink({ item, onClick }) {
+  const link = (
+    <NavLink
+      to={item.to}
+      onClick={onClick}
+      style={({ isActive }) => ({
+        display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px',
+        borderRadius: 'var(--radius-sm)', textDecoration: 'none', fontWeight: 700, fontSize: '13px',
+        color: isActive ? 'var(--brand)' : 'var(--text-muted)',
+        background: isActive ? 'var(--success-bg)' : 'transparent',
+      })}
+    >
+      <item.icon size={16} />
+      {item.label}
+    </NavLink>
+  );
+  if (item.roles || item.permission) {
+    return <RoleGate roles={item.roles} permission={item.permission}>{link}</RoleGate>;
+  }
+  return link;
+}
+
+// One collapsible module section — a button header (icon + name + chevron)
+// toggling a list of NavItemLinks. Starts expanded when the currently-
+// active route lives inside it (so navigating here never hides where you
+// are), collapsed otherwise — every module visible-but-tidy on first load
+// rather than either "everything expanded" (the original wall of 30+
+// items this replaces) or "everything collapsed" (hides where you already are).
+function NavGroup({ name, items, currentPath }) {
+  const containsActive = items.some((i) => currentPath === i.to || currentPath.startsWith(i.to + '/'));
+  const [open, setOpen] = useState(containsActive);
+  const Icon = GROUP_ICONS[name] || Boxes;
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px',
+          background: 'none', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius-sm)',
+          fontWeight: 700, fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <Icon size={15} />
+        <span style={{ flex: 1, textAlign: 'left' }}>{name}</span>
+        <ChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+      </button>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '14px', marginTop: '1px', marginBottom: '4px' }}>
+          {items.map((item) => <NavItemLink key={item.to} item={item} />)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
+  const location = useLocation();
+  const { ungrouped, byGroup } = groupNavItems();
+  // Dashboard first, then every group in GROUP_ORDER, then any remaining
+  // ungrouped item (Account Security) pinned last — same visual position
+  // it always occupied.
+  const dashboardItem = ungrouped.find((i) => i.to === '/dashboard');
+  const trailingUngrouped = ungrouped.filter((i) => i.to !== '/dashboard');
+
   return (
     <aside id="app-sidebar" style={{ width: '240px', flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0 }}>
+      {/* Scoped scrollbar restyle (user-requested) — the default browser
+          scrollbar (a wide, opaque, always-visible bar) reads as a UI
+          defect against this panel's dark surface. Scoped to .gv2-sidebar-
+          nav only, not global, so no other scrollable region in the app
+          is affected by this. Both engines: -webkit-scrollbar for Chrome/
+          Edge/Safari, scrollbar-width/scrollbar-color for Firefox. */}
+      <style>{`
+        .gv2-sidebar-nav { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+        .gv2-sidebar-nav::-webkit-scrollbar { width: 6px; }
+        .gv2-sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+        .gv2-sidebar-nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        .gv2-sidebar-nav::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+      `}</style>
+
       <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>} height={28} />
         <NotificationBell />
       </div>
+
       {/* Sidebar / Navigation UX — Hardening. overflowY:auto + minHeight:0
-          so a full 17-item NAV list scrolls within its own flex region
-          instead of overflowing the aside's fixed 100vh height and pushing
-          the user-info/logout footer below the viewport. flex:1 alone does
+          so the full nav scrolls within its own flex region instead of
+          overflowing the aside's fixed 100vh height and pushing the
+          user-info/logout footer below the viewport. flex:1 alone does
           not shrink a flex item below its content height without an
           explicit minHeight:0 — same family of fix as AppShell's own
           minWidth:0 guard on <main>. */}
-      <nav style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        {NAV.map((item) => {
-          const link = (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              style={({ isActive }) => ({
-                display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
-                borderRadius: 'var(--radius-sm)', textDecoration: 'none', fontWeight: 700, fontSize: '13px',
-                color: isActive ? 'var(--brand)' : 'var(--text-muted)',
-                background: isActive ? 'var(--success-bg)' : 'transparent',
-              })}
-            >
-              <item.icon size={17} />
-              {item.label}
-            </NavLink>
-          );
-          if (item.roles || item.permission) {
-            return <RoleGate key={item.to} roles={item.roles} permission={item.permission}>{link}</RoleGate>;
-          }
-          return link;
-        })}
+      <nav className="gv2-sidebar-nav" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {dashboardItem && <NavItemLink item={dashboardItem} />}
+        {GROUP_ORDER.filter((g) => byGroup[g]?.length).map((g) => (
+          <NavGroup key={g} name={g} items={byGroup[g]} currentPath={location.pathname} />
+        ))}
+        {trailingUngrouped.map((item) => <NavItemLink key={item.to} item={item} />)}
       </nav>
+
       <div style={{ padding: '14px', borderTop: '1px solid var(--border)' }}>
         <div style={{ fontSize: '12px', fontWeight: 700 }}>{user?.full_name || user?.username}</div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>{user?.role}{user?.zone ? ` — ${user.zone}` : ''}</div>
