@@ -3,167 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { Shield, ChevronRight, MapPin, Radio, Recycle } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/ui/index.js';
-import CompanyLogo from '../components/CompanyLogo.jsx';
+import {
+  DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
+  IsoTruck, RouteMotif, DispatchStatChip, DispatchMedallion,
+} from '../components/dispatchAuthKit.jsx';
 
-// Design pass 3 (user-requested: richer, more dimensional, "professional").
-// Split layout: a dark illustrated ops panel (isometric collection-truck
-// SVG built from shaded facets for real depth, a HUD-style live readout
-// strip, a route map) on one side, an embossed access-manifest card on
-// the other. Everything still derives from the app's own --brand/
-// --accent/--bg palette (tokens.css); only the two Google Fonts (Oswald,
-// JetBrains Mono, loaded in index.html) and this page's own layout are
-// new. Zero functional change from the original: identical submit
-// handler, 2FA branch, and useAuth/useToast/useNavigate calls.
-const DISPLAY_FONT = "'Oswald', ui-sans-serif, sans-serif";
-const MONO_FONT = "'JetBrains Mono', ui-monospace, monospace";
-
-const fieldLabelStyle = {
-  display: 'block',
-  fontFamily: MONO_FONT,
-  fontSize: '10px',
-  fontWeight: 700,
-  letterSpacing: '0.12em',
-  color: 'var(--text-muted)',
-  marginBottom: '8px',
-};
-const inputStyle = {
-  width: '100%',
-  padding: '13px 14px',
-  borderRadius: '4px',
-  // Longhand, not shorthand `border` — focusRing() below overrides only
-  // borderColor on focus, and mixing shorthand/longhand for the same
-  // property on the same element is a real React warning (style-diffing
-  // can silently drop the shorthand's width/style on the next render).
-  borderWidth: '2px',
-  borderStyle: 'solid',
-  borderColor: 'var(--border)',
-  background: 'var(--bg)',
-  color: 'var(--text)',
-  boxSizing: 'border-box',
-  fontFamily: MONO_FONT,
-  fontSize: '14px',
-  transition: 'border-color 0.12s ease, box-shadow 0.12s ease',
-};
-
-// An isometric collection truck, built from shaded facets (three tones
-// per surface — base/light/shadow) the way real isometric illustration
-// fakes depth without any 3D engine. Recognizable silhouette: cab, chassis,
-// rear hopper with a lifted lid line. Not a stock icon.
-function IsoTruck({ style }) {
-  return (
-    <svg viewBox="0 0 340 220" width="100%" height="100%" style={style} aria-hidden="true">
-      <defs>
-        <linearGradient id="hopperTop" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="var(--brand)" />
-          <stop offset="1" stopColor="var(--brand-dark)" />
-        </linearGradient>
-        <linearGradient id="hopperSide" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="var(--brand-dark)" />
-          <stop offset="1" stopColor="#000" stopOpacity="0.18" />
-        </linearGradient>
-        <radialGradient id="headlamp" cx="0.5" cy="0.5" r="0.6">
-          <stop offset="0" stopColor="#fff6d8" />
-          <stop offset="1" stopColor="#e8c96a" />
-        </radialGradient>
-      </defs>
-
-      {/* ground shadow */}
-      <ellipse cx="175" cy="206" rx="150" ry="11" fill="#000" opacity="0.3" />
-
-      {/* rear step / tow bumper, low behind the hopper */}
-      <path d="M50 172 L60 168 L60 186 L50 190 Z" fill="var(--text-muted)" opacity="0.5" />
-
-      {/* hopper block — top, right(dark-shaded), front-left(lit) faces */}
-      <path d="M56 66 L182 34 L182 152 L56 184 Z" fill="url(#hopperTop)" />
-      <path d="M182 34 L252 60 L252 176 L182 152 Z" fill="url(#hopperSide)" />
-      <path d="M56 66 L182 34 L252 60 L126 92 Z" fill="var(--brand)" />
-      {/* corrugated body ribs on the lit face — the ridged-panel look every
-          real hopper body has, not a flat block */}
-      {[0, 1, 2, 3, 4].map((i) => (
-        <path
-          key={i}
-          d={`M${66 + i * 24} ${182 - i * 0.3} L${66 + i * 24 + 4} ${68 + i * 6}`}
-          stroke="#000" strokeOpacity="0.14" strokeWidth="2"
-        />
-      ))}
-      {/* lid seam + a small riveted manifest plate reading the fleet unit */}
-      <path d="M66 91 L174 60" stroke="#000" strokeOpacity="0.22" strokeWidth="2.5" />
-      <rect x="90" y="112" width="46" height="20" rx="2" fill="var(--bg)" opacity="0.85" />
-      <text x="113" y="126" textAnchor="middle" fontFamily="'JetBrains Mono', monospace" fontSize="10" fontWeight="700" fill="var(--brand-dark)">G-07</text>
-      <circle cx="76" cy="150" r="2.6" fill="#000" opacity="0.22" />
-      <circle cx="76" cy="110" r="2.6" fill="#000" opacity="0.22" />
-
-      {/* hazard rear-corner stripe, like real refuse-truck tape */}
-      <path d="M182 138 L200 130 L200 152 L182 160 Z" fill="var(--accent)" opacity="0.9" />
-
-      {/* cab — top, dark side, lit front */}
-      <path d="M252 96 L300 114 L300 174 L252 174 Z" fill="var(--accent)" />
-      <path d="M252 96 L300 114 L264 126 L228 108 Z" fill="var(--accent-dark)" />
-      <path d="M228 108 L264 126 L264 182 L228 182 Z" fill="var(--accent-dark)" opacity="0.94" />
-      {/* windshield + door seam + handle, so the cab reads as a cab, not a box */}
-      <path d="M236 112 L256 120 L256 142 L236 138 Z" fill="var(--bg)" opacity="0.9" />
-      <path d="M228 150 L264 164" stroke="#000" strokeOpacity="0.2" strokeWidth="1.5" />
-      <rect x="246" y="152" width="10" height="3" rx="1.5" fill="var(--bg)" opacity="0.6" />
-      {/* side mirror */}
-      <path d="M228 118 L219 116 L219 126 L228 128 Z" fill="var(--accent-dark)" />
-      {/* headlamp + grille on the cab's front face */}
-      <circle cx="292" cy="150" r="7" fill="url(#headlamp)" />
-      <path d="M270 168 L296 172 L296 178 L270 176 Z" fill="#1a1a1a" opacity="0.55" />
-      {/* exhaust stack behind the cab, a real refuse-truck signature */}
-      <rect x="222" y="66" width="7" height="46" rx="2" fill="var(--text-muted)" />
-      <ellipse cx="225.5" cy="66" rx="4.5" ry="2.2" fill="var(--border)" />
-
-      {/* chassis rail */}
-      <rect x="56" y="182" width="244" height="9" fill="#000" opacity="0.38" />
-      {/* mudflaps */}
-      <rect x="94" y="190" width="14" height="16" rx="1.5" fill="#1a1a1a" opacity="0.6" />
-      <rect x="264" y="190" width="14" height="16" rx="1.5" fill="#1a1a1a" opacity="0.6" />
-
-      {/* wheels — tire + rim + 5-spoke hub, twice (rear dual-ish silhouette + front) */}
-      {[[102, 'rear'], [204, 'mid'], [276, 'front']].map(([cx]) => (
-        <g key={cx}>
-          <circle cx={cx} cy="200" r="18" fill="#141414" />
-          <circle cx={cx} cy="200" r="18" fill="none" stroke="#000" strokeOpacity="0.4" strokeWidth="2" />
-          <circle cx={cx} cy="200" r="9.5" fill="var(--text-muted)" />
-          <circle cx={cx} cy="200" r="9.5" fill="none" stroke="#000" strokeOpacity="0.25" strokeWidth="1" />
-          {[0, 72, 144, 216, 288].map((deg) => {
-            const r1 = 2.2, r2 = 8.6;
-            const rad = (deg * Math.PI) / 180;
-            return (
-              <line
-                key={deg}
-                x1={cx + r1 * Math.cos(rad)} y1={200 + r1 * Math.sin(rad)}
-                x2={cx + r2 * Math.cos(rad)} y2={200 + r2 * Math.sin(rad)}
-                stroke="#141414" strokeWidth="2"
-              />
-            );
-          })}
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-function RouteMotif({ style }) {
-  return (
-    <svg viewBox="0 0 260 200" width="260" height="200" style={style} aria-hidden="true">
-      <path d="M8 170 C 60 170, 60 110, 110 110 S 160 40, 210 40" fill="none" stroke="var(--brand)" strokeWidth="2.5" strokeDasharray="1 9" strokeLinecap="round" opacity="0.55" />
-      <circle cx="8" cy="170" r="4" fill="var(--brand)" opacity="0.6" />
-      <circle cx="110" cy="110" r="4" fill="var(--accent)" opacity="0.6" />
-      <circle cx="210" cy="40" r="5.5" fill="var(--accent)" opacity="0.75" />
-    </svg>
-  );
-}
-
-function StatChip({ label, value }) {
-  return (
-    <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', minWidth: '84px' }}>
-      <div style={{ fontFamily: MONO_FONT, fontSize: '18px', fontWeight: 700, color: '#fff', lineHeight: 1 }}>{value}</div>
-      <div style={{ fontFamily: MONO_FONT, fontSize: '9px', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.55)', marginTop: '5px', textTransform: 'uppercase' }}>{label}</div>
-    </div>
-  );
-}
-
+// "Fleet dispatch manifest" design — refactored to share its visual kit
+// (dispatchAuthKit.jsx) with PortalLogin.jsx and collector/screens/
+// LoginScreen.jsx, so all three login surfaces read as one system instead
+// of three hand-copied designs. This file now holds only the staff-Login-
+// specific layout (the split ops-panel hero) and its own auth wiring —
+// zero functional change from before the refactor.
 export default function Login() {
   const { login, loading } = useAuth();
   const toast = useToast();
@@ -189,9 +39,6 @@ export default function Login() {
       toast.error(err.message || 'Login failed');
     }
   };
-
-  const focusRing = (name) => (focused === name ? { borderColor: 'var(--brand)', boxShadow: '0 0 0 4px color-mix(in srgb, var(--brand) 22%, transparent)' } : {});
-  const hazardTape = 'repeating-linear-gradient(-45deg, var(--brand) 0 14px, var(--accent) 14px 28px)';
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
@@ -233,9 +80,9 @@ export default function Login() {
             </p>
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '26px' }}>
-              <StatChip label="Zones" value="12+" />
-              <StatChip label="Trucks" value="40+" />
-              <StatChip label="Uptime" value="99.9%" />
+              <DispatchStatChip label="Zones" value="12+" />
+              <DispatchStatChip label="Trucks" value="40+" />
+              <DispatchStatChip label="Uptime" value="99.9%" />
             </div>
           </div>
 
@@ -269,28 +116,7 @@ export default function Login() {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '28px' }}>
-                {/* Embossed medallion — a gradient-rim ring (padding trick:
-                    outer disc in brand colors, inner disc inset by 2.5px)
-                    plus layered inset+outset shadow is what fakes a raised,
-                    stamped badge here — like a vehicle inspection seal. */}
-                <div
-                  style={{
-                    width: '62px', height: '62px', flexShrink: 0, borderRadius: '50%', padding: '2.5px',
-                    background: 'conic-gradient(from 200deg, var(--brand), var(--accent), var(--brand))',
-                    boxShadow: '0 8px 18px -6px color-mix(in srgb, var(--brand) 55%, transparent)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '100%', height: '100%', borderRadius: '50%',
-                      background: 'linear-gradient(155deg, var(--surface), var(--bg))',
-                      boxShadow: '0 1px 0 rgba(255,255,255,0.5) inset, 0 -1px 4px rgba(0,0,0,0.18) inset',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}
-                  >
-                    <CompanyLogo height={32} fallback={<Shield size={24} color="var(--brand)" />} style={{ borderRadius: '50%' }} />
-                  </div>
-                </div>
+                <DispatchMedallion fallback={<Shield size={24} color="var(--brand)" />} />
                 <div>
                   <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '26px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
                     Gurmad
@@ -303,7 +129,7 @@ export default function Login() {
 
               <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
-                  <label style={fieldLabelStyle}>[ USERNAME ]</label>
+                  <label style={dispatchFieldLabelStyle}>[ USERNAME ]</label>
                   <input
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -312,12 +138,12 @@ export default function Login() {
                     required
                     autoFocus
                     autoComplete="username"
-                    style={{ ...inputStyle, ...focusRing('username') }}
+                    style={{ ...dispatchInputStyle, ...dispatchFocusRing(focused === 'username') }}
                   />
                 </div>
 
                 <div>
-                  <label style={fieldLabelStyle}>[ PASSWORD ]</label>
+                  <label style={dispatchFieldLabelStyle}>[ PASSWORD ]</label>
                   <input
                     type="password"
                     value={password}
@@ -326,13 +152,13 @@ export default function Login() {
                     onBlur={() => setFocused(null)}
                     required
                     autoComplete="current-password"
-                    style={{ ...inputStyle, ...focusRing('password') }}
+                    style={{ ...dispatchInputStyle, ...dispatchFocusRing(focused === 'password') }}
                   />
                 </div>
 
                 {require2FA && (
                   <div>
-                    <label style={fieldLabelStyle}>[ AUTH CODE ]</label>
+                    <label style={dispatchFieldLabelStyle}>[ AUTH CODE ]</label>
                     <input
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
@@ -340,7 +166,7 @@ export default function Login() {
                       onBlur={() => setFocused(null)}
                       maxLength={6}
                       autoFocus
-                      style={{ ...inputStyle, ...focusRing('token'), letterSpacing: '0.3em', textAlign: 'center', fontWeight: 700 }}
+                      style={{ ...dispatchInputStyle, ...dispatchFocusRing(focused === 'token'), letterSpacing: '0.3em', textAlign: 'center', fontWeight: 700 }}
                     />
                   </div>
                 )}
