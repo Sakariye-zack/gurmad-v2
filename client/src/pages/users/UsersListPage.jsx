@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ShieldCheck, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, useToast } from '../../components/ui/index.js';
 import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser } from '../../hooks/useUsers.js';
+import UserEditModal from './UserEditModal.jsx';
 
 // User & Access Administration — admin-only. Role assignment is
 // restricted to the 7 approved static roles (OD-2) — this page never
@@ -14,6 +15,7 @@ export default function UsersListPage() {
   const toast = useToast();
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ username: '', password: '', full_name: '', role: 'cashier', employee_id: '' });
+  const [editingUser, setEditingUser] = useState(null);
 
   const createUser = useCreateUser();
   const disableUser = useDisableUser();
@@ -117,6 +119,7 @@ export default function UsersListPage() {
             </td>
             <td style={cellStyle}>
               <div style={{ display: 'flex', gap: '6px' }}>
+                <Button variant="ghost" style={smallBtnStyle} onClick={() => setEditingUser(u)}>Edit</Button>
                 {u.is_active ? (
                   <Button variant="ghost" style={smallBtnStyle} onClick={() => handleDisable(u.id)}>Disable</Button>
                 ) : (
@@ -128,6 +131,8 @@ export default function UsersListPage() {
           </tr>
         ))}
       </DataTable>
+
+      <UserEditModal open={!!editingUser} user={editingUser} onClose={() => setEditingUser(null)} />
     </div>
   );
 }
