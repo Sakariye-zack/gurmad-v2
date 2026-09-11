@@ -8,7 +8,11 @@ const { getEffectiveEmployeeStatus, resolveEmployeeIdForRequestUser } = require(
 
 const router = express.Router();
 
-const VALID_EMPLOYEE_TYPES = ['collector', 'driver', 'office', 'other'];
+// Widened per user request (Phase 10) — 'cashier'/'head_of_cashiers' added
+// alongside the DB constraint's own matching widening (db.js's
+// employees_employee_type_check). Both values already existed as login
+// roles (middleware/auth.js) with no employee_type counterpart before this.
+const VALID_EMPLOYEE_TYPES = ['collector', 'driver', 'office', 'cashier', 'head_of_cashiers', 'other'];
 const VALID_COLLECTOR_TYPES = ['residential', 'commercial'];
 const VALID_SHIFTS = ['day', 'night'];
 const VALID_STATUSES = ['active', 'on_leave', 'suspended', 'archived'];

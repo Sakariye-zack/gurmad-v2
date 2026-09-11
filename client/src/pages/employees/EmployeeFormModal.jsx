@@ -144,6 +144,8 @@ function Content({ onClose, employee }) {
             <option value="office">Office</option>
             <option value="driver">Driver</option>
             <option value="collector">Collector</option>
+            <option value="cashier">Cashier</option>
+            <option value="head_of_cashiers">Head of Cashiers</option>
             <option value="other">Other</option>
           </select>
         </Field>

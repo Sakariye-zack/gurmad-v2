@@ -190,6 +190,23 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_employee_type ON employees(employee_type);`);
 
+  // User-requested widening (Phase 10): 'cashier' and 'head_of_cashiers'
+  // added to employee_type — both already exist as login roles
+  // (middleware/auth.js's own role vocabulary) but had no matching
+  // employee_type value, so a cashier/head-of-cashiers staff member could
+  // never be correctly classified in the Employees directory (only
+  // collector/driver/office/other existed). Purely additive — every
+  // existing row's employee_type value is still valid under the widened
+  // list, nothing is dropped or renamed, so this is safe to run against
+  // a database that already has employees rows. DROP+ADD (not a plain
+  // ALTER ... ADD CHECK, since Postgres offers no "ALTER CHECK" — the
+  // standard idiom) is idempotent: re-running this on a server restart
+  // drops the constraint (a no-op if already widened, since dropping and
+  // recreating the identical definition changes nothing observable) and
+  // recreates it, never loses data either way.
+  await pool.query(`ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_employee_type_check;`);
+  await pool.query(`ALTER TABLE employees ADD CONSTRAINT employees_employee_type_check CHECK (employee_type IN ('collector', 'driver', 'office', 'cashier', 'head_of_cashiers', 'other'));`);
+
   // Phase 3 Module 4 — Trucks (Fleet Master Data).
   // driver_id/collector_id are real FKs to the now-authoritative employees
   // table (Module 3, closed) — ON DELETE RESTRICT is safe since employees
