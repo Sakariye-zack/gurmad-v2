@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { MapPin, ListFilter, Route as RouteIcon } from 'lucide-react';
-import { PageHeader, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { PageHeader, LoadingState, ErrorState } from '../../components/ui/index.js';
 import { useMapCustomers } from '../../hooks/useMap.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
@@ -76,12 +76,26 @@ export default function MapPage() {
 
       {isLoading && <LoadingState label="Loading map…" />}
       {!isLoading && error && <ErrorState message={error.message} onRetry={refetch} />}
-      {!isLoading && !error && points.length === 0 && (
-        <EmptyState icon={MapPin} title="No customer locations in this view" subtitle="Try a different zone, group, or route, or clear the filters." />
-      )}
-      {!isLoading && !error && points.length > 0 && (
-        <div style={{ flex: 1, minHeight: '60vh' }}>
+      {/* The map itself always renders once loaded — even with zero located
+          customers, showing the company's own operating region (Togdheer,
+          Somaliland — see MapCanvas.jsx's default view) reads as "this is
+          the map, nothing to show yet" rather than hiding the map entirely
+          behind an EmptyState, which is indistinguishable from "map is
+          broken" to someone who has never seen it render before. */}
+      {!isLoading && !error && (
+        <div style={{ flex: 1, minHeight: '60vh', position: 'relative' }}>
           <MapCanvas points={points} />
+          {points.length === 0 && (
+            <div style={{
+              position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', zIndex: 1,
+              display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px',
+              background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+              boxShadow: 'var(--shadow-md)', fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600,
+            }}>
+              <MapPin size={14} />
+              No customer locations in this view — try a different zone/group/route, or add coordinates when registering a customer.
+            </div>
+          )}
         </div>
       )}
     </div>

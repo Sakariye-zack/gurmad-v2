@@ -8,6 +8,26 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 // nothing beyond initializing the map, plotting the already-authorized,
 // already-filtered points it's given, and tearing the instance down on
 // unmount. No routing, no directions, no drawing tools, no geocoding.
+// Default view when there are no located customers yet (or before the
+// map has anything to fit bounds to) — the company's actual operating
+// area (Togdheer region, Somaliland; Burco as the regional anchor point),
+// not the previous [0,0] zoom-1 world view, which read as broken/
+// unconfigured rather than "this region, zoomed out."
+const TOGDHEER_CENTER = [45.535, 9.52];
+const TOGDHEER_DEFAULT_ZOOM = 8;
+
+// A pin-shaped marker with a house glyph inside — reads as "customer
+// location" at a glance rather than a generic dot. fill="var(--brand)"
+// works because this is injected as real DOM (Marker({element}) attaches
+// it directly, not a rasterized image), so it inherits the app's theme
+// tokens like any other element and needs no light/dark branching here.
+const HOUSE_ICON_SVG = `
+<svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">
+  <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 23 15 23s15-12.5 15-23C30 6.716 23.284 0 15 0z" fill="var(--brand)"/>
+  <circle cx="15" cy="15" r="10.5" fill="var(--brand-dark)"/>
+  <path d="M15 8.5l7 6.2v8.3h-4.6v-5.2h-4.8v5.2H8V14.7z" fill="#fff"/>
+</svg>`;
+
 export default function MapCanvas({ points }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -34,8 +54,8 @@ export default function MapCanvas({ points }) {
       map = new mapboxgl.Map({
         container: containerRef.current,
         style: 'mapbox://styles/mapbox/streets-v12',
-        center: [0, 0],
-        zoom: 1,
+        center: TOGDHEER_CENTER,
+        zoom: TOGDHEER_DEFAULT_ZOOM,
       });
     } catch {
       setStatus('error');
@@ -94,8 +114,16 @@ export default function MapCanvas({ points }) {
           Type: ${escapeHtml(p.customer_type || '—')}
         </div>
       `;
-      const popup = new mapboxgl.Popup({ offset: 14 }).setHTML(popupHtml);
-      const marker = new mapboxgl.Marker({ color: '#4caf3f' })
+      const popup = new mapboxgl.Popup({ offset: 18 }).setHTML(popupHtml);
+      // House icon, not Mapbox's default teardrop pin — a plain DOM element
+      // marker (Mapbox GL JS's own documented way to use a custom marker),
+      // styled from the app's own --brand token so it stays theme-
+      // consistent rather than a hardcoded color living only here.
+      const el = document.createElement('div');
+      el.innerHTML = HOUSE_ICON_SVG;
+      el.style.cursor = 'pointer';
+      el.style.filter = 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))';
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([lng, lat])
         .setPopup(popup)
         .addTo(map);
