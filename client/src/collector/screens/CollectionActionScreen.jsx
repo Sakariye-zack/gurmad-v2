@@ -11,10 +11,12 @@ const STATUSES = [
   { value: 'skipped', label: 'Skipped' },
 ];
 
-// Photo capture — Phase 10 Gap Audit follow-up. §15's "Serviced requires
-// a photo" rule previously had capturePhoto() do nothing but PROVE camera
-// access (open a stream, immediately stop it) — no image was ever
-// actually taken. This is the real capture: a live <video> preview, a
+// Photo capture — Phase 10 Gap Audit follow-up. §15's original "Serviced
+// requires a photo" rule was later relaxed to optional (user-requested,
+// Phase 10) — a collector can still attach one, it's just no longer a
+// blocker. capturePhoto() previously did nothing but PROVE camera access
+// (open a stream, immediately stop it) — no image was ever actually
+// taken. This is the real capture: a live <video> preview, a
 // hidden <canvas> the frame is drawn onto at shutter time, downscaled and
 // JPEG-compressed there (not full sensor resolution — this is evidence,
 // not a photograph, and it has to fit through the AES-GCM-encrypted
@@ -126,7 +128,10 @@ export default function CollectionActionScreen() {
   const submit = async () => {
     if (!status) return toast.error('Select a status.');
     if (status === 'missed' && !reason.trim()) return toast.error('A reason is required to mark Missed.');
-    if (status === 'serviced' && !photo) return toast.error('A photo is required to mark Serviced.');
+    // User-requested (Phase 10): photo is optional for Serviced, not
+    // required — the "required" copy/validation below is removed; the
+    // capture UI and upload path are unchanged, a collector can still
+    // attach one, it's just no longer a blocker.
 
     setSubmitting(true);
     try {
@@ -197,7 +202,7 @@ export default function CollectionActionScreen() {
             </div>
           ) : (
             <Button icon={Camera} onClick={openCamera} style={{ width: '100%', minHeight: '48px' }}>
-              Take Photo (required)
+              Take Photo (optional)
             </Button>
           )}
           {cameraDenied && (
