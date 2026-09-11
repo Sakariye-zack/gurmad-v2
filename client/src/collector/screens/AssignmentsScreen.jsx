@@ -19,7 +19,14 @@ export default function AssignmentsScreen() {
   }
 
   const batches = data?.batches || [];
-  const totalCustomers = batches.reduce((n, b) => n + b.customers.length, 0);
+  const allCustomers = batches.flatMap((b) => b.customers);
+  const totalCustomers = allCustomers.length;
+  // Progress summary (user-requested, Phase 10) — the list alone never
+  // showed how much of today's work is actually done; computed entirely
+  // client-side from the same already-fetched assignments, no new
+  // backend call. counts.pending is what's left to do today.
+  const counts = { pending: 0, serviced: 0, missed: 0, skipped: 0 };
+  for (const c of allCustomers) { if (counts[c.status] !== undefined) counts[c.status] += 1; }
 
   return (
     <div>
@@ -28,6 +35,16 @@ export default function AssignmentsScreen() {
         subtitle={isOffline ? `Offline — showing data from ${formatTime(fetchedAt)}` : `${totalCustomers} customer${totalCustomers === 1 ? '' : 's'} across ${batches.length} batch${batches.length === 1 ? '' : 'es'}`}
         actions={<Button variant="secondary" icon={RefreshCw} onClick={refresh} style={{ minHeight: '44px' }}>Refresh</Button>}
       />
+
+      {totalCustomers > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '18px' }}>
+          <StatChip label="Pending" value={counts.pending} color="var(--warning)" />
+          <StatChip label="Serviced" value={counts.serviced} color="var(--success)" />
+          <StatChip label="Missed" value={counts.missed} color="var(--danger)" />
+          <StatChip label="Skipped" value={counts.skipped} color="var(--info)" />
+        </div>
+      )}
+
       {batches.length === 0 ? (
         <EmptyState title="No assignments for today" subtitle="Check back later or pull to refresh." />
       ) : (
@@ -71,4 +88,13 @@ export default function AssignmentsScreen() {
 function formatTime(iso) {
   if (!iso) return 'earlier';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function StatChip({ label, value, color }) {
+  return (
+    <div style={{ padding: '10px 6px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', borderTop: `2px solid ${color}`, background: 'var(--surface)', textAlign: 'center' }}>
+      <div style={{ fontSize: '19px', fontWeight: 800, color: 'var(--text)' }}>{value}</div>
+      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>{label}</div>
+    </div>
+  );
 }

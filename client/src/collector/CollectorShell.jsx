@@ -1,17 +1,91 @@
-import React from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
-import { ClipboardList, RefreshCw, ShieldAlert } from 'lucide-react';
+import React, { useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { ClipboardList, RefreshCw, ShieldAlert, LogOut } from 'lucide-react';
 import { useSyncQueueContext } from './SyncQueueContext.jsx';
+import { useAuth } from '../auth/AuthContext.jsx';
+import CompanyLogo from '../components/CompanyLogo.jsx';
+import { ConfirmDialog } from '../components/ui/index.js';
+import { purgeAllLocalData } from './lib/collectorStore.js';
+import { discardKey } from './lib/collectorCrypto.js';
 
 // Field Collector Mobile — Implementation Spec §6/§24. A lightweight,
 // mobile-first shell distinct from the desktop staff AppShell (large touch
 // targets, one-handed bottom-nav reach, per Discovery §13's field-usability
 // findings) — not a redesign of the existing desktop design system, which
 // this shell still consumes via components/ui/* throughout every screen.
+//
+// Top app bar (user-requested, Phase 10) — every screen in this shell
+// previously opened straight into content with no persistent header at
+// all; logout was reachable only by navigating into Account -> scrolling
+// to Active Sessions -> Log out, three steps for something every native
+// mobile app puts one tap away. Logo + collector's own name here (not a
+// generic "GURMAD V2" — this shell is field-worker-facing, the wordmark
+// carries less than knowing who's signed in) + a one-tap logout icon.
 export default function CollectorShell() {
   const { activeCount } = useSyncQueueContext();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  // Identical sequence to AccountScreen.jsx's own doLogout() (purge local
+  // data -> discard the in-memory encryption key -> AuthContext logout()
+  // -> navigate) — duplicated here rather than refactored into one shared
+  // helper only because AccountScreen.jsx's own header explicitly frames
+  // that file as the sole place this orchestration lives; kept the exact
+  // same steps and ordering so the two never drift into different logout
+  // behavior for the same shell.
+  const doLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await purgeAllLocalData();
+    } catch {
+      // eslint-disable-next-line no-console
+      console.error('collector_logout_purge_failed');
+    } finally {
+      discardKey();
+      logout();
+      navigate('/collector/login');
+    }
+  };
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+      <header style={{
+        position: 'sticky', top: 0, zIndex: 40, display: 'flex', alignItems: 'center', gap: '10px',
+        padding: '12px 16px', background: 'var(--surface)', borderBottom: '1px solid var(--border)',
+      }}>
+        <CompanyLogo height={26} fallback={<span style={{ fontWeight: 900, fontSize: '15px', color: 'var(--brand)' }}>GURMAD</span>} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {user?.full_name || user?.username}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{user?.zone || 'Collector'}</div>
+        </div>
+        <button
+          onClick={() => setConfirmOpen(true)}
+          aria-label="Log out"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px',
+            borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg)',
+            color: 'var(--text-muted)', cursor: 'pointer',
+          }}
+        >
+          <LogOut size={17} />
+        </button>
+      </header>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={doLogout}
+        title="Log out"
+        message="This will sign you out and remove all locally saved visit data from this device."
+        confirmLabel="Log out"
+        danger
+        isLoading={loggingOut}
+      />
+
       <main style={{ flex: 1, padding: '16px', paddingBottom: '84px', maxWidth: '520px', margin: '0 auto', width: '100%' }}>
         <Outlet />
       </main>
