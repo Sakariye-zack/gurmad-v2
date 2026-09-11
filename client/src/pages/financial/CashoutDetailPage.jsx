@@ -201,7 +201,7 @@ export default function CashoutDetailPage() {
         <span style={sectionLabelStyle}>Cashier Shortage</span>
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
           {cashout.shortage_record ? (
-            <ShortagePanel cashoutId={id} shortage={cashout.shortage_record} />
+            <ShortagePanel cashoutId={id} shortage={cashout.shortage_record} cashierName={cashout.cashier_name} />
           ) : (
             <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No shortage — nothing to reconcile.</p>
           )}
@@ -309,7 +309,7 @@ function SignatureBlock({ label }) {
 // NOT a Customer Debt (architecture decision). Resolution is manual and
 // audited only — no automatic recovery mechanism (salary deduction, auto-
 // debt, etc.) is offered here.
-function ShortagePanel({ cashoutId, shortage }) {
+function ShortagePanel({ cashoutId, shortage, cashierName }) {
   const [resolveOpen, setResolveOpen] = useState(false);
   const resolveMut = useResolveShortage(cashoutId);
   const toast = useToast();
@@ -328,7 +328,7 @@ function ShortagePanel({ cashoutId, shortage }) {
     <>
       <DetailGrid items={[
         { label: 'Shortage Amount', value: `$${parseFloat(shortage.shortage_amount).toFixed(2)}` },
-        { label: 'Cashier Responsible', value: `#${shortage.cashier_id}` },
+        { label: 'Cashier Responsible', value: cashierName || `#${shortage.cashier_id}` },
         { label: 'Status', value: <StatusBadge status={shortage.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
         { label: 'Reason', value: shortage.reason },
         ...(shortage.status === 'paid' ? [

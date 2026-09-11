@@ -57,9 +57,16 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       }
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    // invoices.invoice_number added (Phase 10 Billing audit, continued
+    // sweep) — the 'Linked Invoice' column previously showed the raw
+    // internal debts.invoice_id ('#21') instead of the same
+    // human-facing number ('INV-000021') every other screen in the app
+    // uses to refer to an invoice. Additive LEFT JOIN only.
     const result = await pool.query(
-      `SELECT debts.*, customers.name AS customer_name, customers.customer_number
-       FROM debts JOIN customers ON debts.customer_id = customers.id
+      `SELECT debts.*, customers.name AS customer_name, customers.customer_number, invoices.invoice_number
+       FROM debts
+       JOIN customers ON debts.customer_id = customers.id
+       LEFT JOIN invoices ON debts.invoice_id = invoices.id
        ${whereSql} ORDER BY debts.created_at DESC`,
       params
     );

@@ -70,7 +70,7 @@ export default function DebtsView() {
           <tr key={d.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{d.customer_name} <span style={{ color: 'var(--text-muted)' }}>({d.customer_number})</span></td>
             <td style={cellStyle} className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</td>
-            <td style={cellStyle}>{d.invoice_id ? `#${d.invoice_id}` : <span style={{ color: 'var(--text-muted)' }}>Standalone</span>}</td>
+            <td style={cellStyle}>{d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>Standalone</span>}</td>
             <td style={cellStyle}><StatusBadge status={d.status} map={STATUS_MAP} /></td>
             <td style={cellStyle}>
               {d.status === 'unpaid' && (
