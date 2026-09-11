@@ -127,9 +127,15 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
     ] : []),
     ...(cashout.remarks ? [new Paragraph({ children: [new TextRun({ text: 'Remarks: ', bold: true }), new TextRun({ text: cashout.remarks })] })] : []),
     sectionTitle('Accountability'),
+    // User-reported gap (Phase 10 Billing audit, continued sweep): every
+    // row here read as a bare numeric id ('#33'). The route now joins
+    // each *_name — fall back to the id only if a user account was since
+    // deleted (name join came back null), never silently blank.
     kvTable([
-      ['Cashier (User ID)', `#${cashout.cashier_id}`], ['Head of Cashiers (User ID)', `#${cashout.head_of_cashiers_id}`],
-      ['Prepared by', `#${cashout.created_by}`], ['Approved by', cashout.approved_by ? `#${cashout.approved_by}` : 'Not yet approved'],
+      ['Cashier', cashout.cashier_name || `#${cashout.cashier_id}`],
+      ['Head of Cashiers', cashout.head_of_cashiers_name || `#${cashout.head_of_cashiers_id}`],
+      ['Prepared by', cashout.created_by_name || `#${cashout.created_by}`],
+      ['Approved by', cashout.approved_by ? (cashout.approved_by_name || `#${cashout.approved_by}`) : 'Not yet approved'],
     ]),
     sectionTitle('Signatures'),
     new Table({

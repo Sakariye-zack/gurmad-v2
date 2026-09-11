@@ -169,13 +169,16 @@ export default function CashoutDetailPage() {
           {cashout.remarks && <p style={{ margin: '6px 0 0', fontSize: '13px' }}><strong>Remarks:</strong> {cashout.remarks}</p>}
         </DocSection>
 
-        {/* 6. Accountability */}
+        {/* 6. Accountability — user-reported gap (Phase 10 Billing audit,
+             continued sweep): every row here used to read as a bare
+             numeric id ('#33'). The backend now joins each name; fall
+             back to the id only if a user account was since deleted. */}
         <DocSection title="Accountability">
           <DetailGrid items={[
-            { label: 'Cashier (User ID)', value: `#${cashout.cashier_id}` },
-            { label: 'Head of Cashiers (User ID)', value: `#${cashout.head_of_cashiers_id}` },
-            { label: 'Prepared by', value: `#${cashout.created_by}` },
-            { label: 'Approved by', value: cashout.approved_by ? `#${cashout.approved_by}` : 'Not yet approved' },
+            { label: 'Cashier', value: cashout.cashier_name || `#${cashout.cashier_id}` },
+            { label: 'Head of Cashiers', value: cashout.head_of_cashiers_name || `#${cashout.head_of_cashiers_id}` },
+            { label: 'Prepared by', value: cashout.created_by_name || `#${cashout.created_by}` },
+            { label: 'Approved by', value: cashout.approved_by ? (cashout.approved_by_name || `#${cashout.approved_by}`) : 'Not yet approved' },
           ]} />
         </DocSection>
 

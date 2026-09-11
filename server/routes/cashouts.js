@@ -134,7 +134,26 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
   try {
-    const coRes = await pool.query(`SELECT cashouts.*, zones.name AS zone_name FROM cashouts LEFT JOIN zones ON cashouts.zone_id = zones.id WHERE cashouts.id = $1`, [id]);
+    // User-reported gap (Phase 10 Billing audit, continued sweep): the
+    // 'Accountability' section previously showed raw numeric ids ('#33',
+    // '#13') for all four roles — additive-only name joins (4 separate
+    // LEFT JOINs since each references v2_users for a different column),
+    // no existing field changed.
+    const coRes = await pool.query(
+      `SELECT cashouts.*, zones.name AS zone_name,
+              cashier.full_name AS cashier_name, cashier.username AS cashier_username,
+              hoc.full_name AS head_of_cashiers_name, hoc.username AS head_of_cashiers_username,
+              preparer.full_name AS created_by_name, preparer.username AS created_by_username,
+              approver.full_name AS approved_by_name, approver.username AS approved_by_username
+       FROM cashouts
+       LEFT JOIN zones ON cashouts.zone_id = zones.id
+       LEFT JOIN v2_users cashier ON cashier.id = cashouts.cashier_id
+       LEFT JOIN v2_users hoc ON hoc.id = cashouts.head_of_cashiers_id
+       LEFT JOIN v2_users preparer ON preparer.id = cashouts.created_by
+       LEFT JOIN v2_users approver ON approver.id = cashouts.approved_by
+       WHERE cashouts.id = $1`,
+      [id]
+    );
     if (coRes.rows.length === 0) return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } });
     const cashout = coRes.rows[0];
     const myZoneId = await resolveUserZoneId(req.user);
@@ -172,7 +191,23 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
   try {
-    const coRes = await pool.query(`SELECT cashouts.*, zones.name AS zone_name FROM cashouts LEFT JOIN zones ON cashouts.zone_id = zones.id WHERE cashouts.id = $1`, [id]);
+    // Same name-join fix as the JSON detail route above — the printed
+    // document had the identical raw-id gap.
+    const coRes = await pool.query(
+      `SELECT cashouts.*, zones.name AS zone_name,
+              cashier.full_name AS cashier_name, cashier.username AS cashier_username,
+              hoc.full_name AS head_of_cashiers_name, hoc.username AS head_of_cashiers_username,
+              preparer.full_name AS created_by_name, preparer.username AS created_by_username,
+              approver.full_name AS approved_by_name, approver.username AS approved_by_username
+       FROM cashouts
+       LEFT JOIN zones ON cashouts.zone_id = zones.id
+       LEFT JOIN v2_users cashier ON cashier.id = cashouts.cashier_id
+       LEFT JOIN v2_users hoc ON hoc.id = cashouts.head_of_cashiers_id
+       LEFT JOIN v2_users preparer ON preparer.id = cashouts.created_by
+       LEFT JOIN v2_users approver ON approver.id = cashouts.approved_by
+       WHERE cashouts.id = $1`,
+      [id]
+    );
     if (coRes.rows.length === 0) return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } });
     const cashout = coRes.rows[0];
     const myZoneId = await resolveUserZoneId(req.user);
