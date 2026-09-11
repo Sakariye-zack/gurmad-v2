@@ -225,6 +225,42 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
   }
 });
 
+// GET /:id/transactions — user-requested (Phase 10, 'link garee' the
+// Collection Summary / breakdown sections): those numbers previously had
+// no way to drill into what actually backs them — this returns the real
+// underlying payment rows. Same zone-scope + asOf snapshot rule as the
+// reconciliation figures themselves (computeExpectedForPeriod) — a
+// cashout's document is a frozen historical view, so a payment recorded
+// AFTER this cashout was created must never silently appear here even if
+// its own timestamp falls inside the period.
+router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
+  try {
+    const coRes = await pool.query('SELECT * FROM cashouts WHERE id = $1', [id]);
+    if (coRes.rows.length === 0) return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } });
+    const cashout = coRes.rows[0];
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && cashout.zone_id !== myZoneId) {
+      return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
+    }
+    const result = await pool.query(
+      `SELECT payments.id, payments.amount, payments.currency, payments.method, payments.amount_usd, payments.created_at,
+              invoices.invoice_number, customers.name AS customer_name, customers.customer_number
+       FROM payments
+       JOIN invoices ON payments.invoice_id = invoices.id
+       JOIN customers ON invoices.customer_id = customers.id
+       WHERE payments.cashier_id = $1 AND payments.status = 'recorded'
+         AND payments.created_at >= $2 AND payments.created_at < $3 AND payments.created_at < $4
+       ORDER BY payments.created_at ASC`,
+      [cashout.cashier_id, cashout.period_start, cashout.period_end, cashout.created_at]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load transactions.', code: 'INTERNAL' } });
+  }
+});
+
 // ---------- Create (atomic: cashout + shortage-debt, one transaction) ----------
 
 router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {

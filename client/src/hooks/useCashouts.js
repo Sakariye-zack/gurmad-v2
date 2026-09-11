@@ -15,6 +15,16 @@ export function useCashouts(params = {}) {
 export function useCashout(id) {
   return useQuery({ queryKey: ['v2', 'cashouts', id], queryFn: () => apiClient.get(`/v2/cashouts/${id}`), enabled: !!id });
 }
+// User-requested (Phase 10 — 'link garee' the Collection Summary /
+// breakdown sections): the real payment rows behind this cashout's
+// reconciliation figures — see GET /:id/transactions' own comment.
+export function useCashoutTransactions(id, enabled) {
+  return useQuery({
+    queryKey: ['v2', 'cashouts', id, 'transactions'],
+    queryFn: () => apiClient.get(`/v2/cashouts/${id}/transactions`),
+    enabled: !!id && enabled !== false,
+  });
+}
 // User-reported gap (Phase 10 Billing audit): the New Cashout form's
 // 'Cashier' field was a raw numeric id text input — see GET
 // /v2/cashouts/cashiers' own comment in cashouts.js for why this is a
