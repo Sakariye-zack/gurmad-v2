@@ -20,6 +20,13 @@ export function useCreateInvoice() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (data) => apiClient.post('/v2/invoices', data), onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'invoices'] }) });
 }
+export function useBulkGenerateInvoices() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId) => apiClient.post('/v2/invoices/bulk-generate', { batch_id: batchId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'invoices'] }),
+  });
+}
 export function useVoidInvoice(id) {
   const qc = useQueryClient();
   return useMutation({

@@ -253,4 +253,79 @@ router.put('/:id/void', authenticateToken, requireRole('admin'), async (req, res
   }
 });
 
+// POST /bulk-generate — user-reported gap (Phase 10 Billing audit): every
+// invoice previously had to be created one at a time, by hand, with no
+// path from an actual serviced collection to a real invoice —
+// batch_customer_id existed in the schema/detail view but nothing ever
+// set it. This is the additive fix: given a batch, create one invoice
+// per serviced customer in it that doesn't already have one, using that
+// customer's on-file fee. Never overwrites/edits an existing invoice —
+// a customer already invoiced for this batch, or missing a fee, is
+// skipped and reported back, never silently guessed at.
+router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
+  const batchId = parseStrictId(String(req.body?.batch_id ?? ''));
+  if (batchId === null) return res.status(400).json({ error: { message: 'A valid batch_id is required.', code: 'VALIDATION' } });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const batchRes = await client.query(
+      `SELECT batches.*, zones.name AS zone_name FROM batches LEFT JOIN zones ON zones.id = batches.zone_id WHERE batches.id = $1`,
+      [batchId]
+    );
+    if (batchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'Batch not found.', code: 'NOT_FOUND' } });
+    }
+    const batch = batchRes.rows[0];
+
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && batch.zone_id !== myZoneId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'You do not have access to this batch.', code: 'FORBIDDEN' } });
+    }
+
+    // Every serviced customer in this batch not already invoiced for it —
+    // the NOT EXISTS guard is what makes this endpoint safely re-runnable
+    // (generate once, fix a missing fee, run again — only the gap fills in).
+    const candidatesRes = await client.query(
+      `SELECT bc.id AS batch_customer_id, c.id AS customer_id, c.name AS customer_name, c.fee
+       FROM batch_customers bc
+       JOIN customers c ON c.id = bc.customer_id
+       WHERE bc.batch_id = $1 AND bc.status = 'serviced'
+         AND NOT EXISTS (SELECT 1 FROM invoices WHERE invoices.batch_customer_id = bc.id)
+       ORDER BY bc.id ASC`,
+      [batchId]
+    );
+
+    const created = [];
+    const skippedNoFee = [];
+    for (const row of candidatesRes.rows) {
+      if (row.fee === null || row.fee === undefined) {
+        skippedNoFee.push({ customer_id: row.customer_id, customer_name: row.customer_name });
+        continue;
+      }
+      const invoiceNumber = await generateInvoiceNumber(client);
+      const inserted = await client.query(
+        `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status, zone_name_snapshot, notes, created_by)
+         VALUES ($1,$2,$3,$4,0,'USD','unpaid',$5,$6,$7) RETURNING *`,
+        [invoiceNumber, row.customer_id, row.batch_customer_id, row.fee, batch.zone_name || null,
+          `Auto-generated from batch ${batch.batch_code}`, req.user.id]
+      );
+      created.push(inserted.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    for (const invoice of created) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.create', entityType: 'invoice', entityId: invoice.id, before: null, after: invoice });
+    }
+    res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: { message: 'Failed to generate invoices.', code: 'INTERNAL' } });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;

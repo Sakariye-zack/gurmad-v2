@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ClipboardList, Play, Flag, XCircle, Plus, Trash2, CalendarClock } from 'lucide-react';
+import { ArrowLeft, ClipboardList, Play, Flag, XCircle, Plus, Trash2, CalendarClock, Receipt } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import CapacityPanel, { CapacityPreview } from '../../components/collection/CapacityPanel.jsx';
@@ -12,6 +12,10 @@ import {
 } from '../../hooks/useCollectionOps.js';
 import { useEmployees } from '../../hooks/useEmployees.js';
 import { useTrucks } from '../../hooks/useTrucks.js';
+// User-reported gap (Phase 10 Billing audit): invoices previously had no
+// path from an actual serviced collection to a real invoice — every one
+// had to be typed by hand. See invoices.js's own POST /bulk-generate.
+import { useBulkGenerateInvoices } from '../../hooks/useFinancial.js';
 
 const STATUS_LABELS = { draft: 'Draft', assigned: 'Assigned', in_progress: 'In Progress', partially_completed: 'Partially Completed', completed: 'Completed', cancelled: 'Cancelled' };
 const CUSTOMER_STATUS_MAP = { pending: 'warning', serviced: 'success', missed: 'danger', skipped: 'info', rescheduled: 'info' };
@@ -26,6 +30,7 @@ export default function BatchDetailPage() {
   const startBatch = useStartBatch(id);
   const closeCycle = useCloseCycleOnBatch(id);
   const cancelBatch = useCancelBatch(id);
+  const bulkGenerateInvoices = useBulkGenerateInvoices();
   const toast = useToast();
   const batch = data?.data;
 
@@ -45,6 +50,19 @@ export default function BatchDetailPage() {
       toast.success(`Batch is now ${STATUS_LABELS[result.data.status]}.`);
     } catch (err) { toast.error(err.message || 'Something went wrong.'); }
   }
+  async function handleGenerateInvoices() {
+    try {
+      const result = await bulkGenerateInvoices.mutateAsync(id);
+      const { created, skipped_no_fee: skippedNoFee } = result.data;
+      if (created.length === 0 && skippedNoFee.length === 0) {
+        toast.success('Nothing to invoice — every serviced customer already has one.');
+      } else if (skippedNoFee.length > 0) {
+        toast.success(`${created.length} invoice(s) created. ${skippedNoFee.length} skipped — no fee on file (${skippedNoFee.map((c) => c.customer_name).join(', ')}).`);
+      } else {
+        toast.success(`${created.length} invoice(s) created.`);
+      }
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
   async function handleCancel(reason) {
     try { await cancelBatch.mutateAsync(reason); toast.success('Batch cancelled.'); setCancelOpen(false); }
     catch (err) { toast.error(err.message || 'Something went wrong.'); }
@@ -61,13 +79,27 @@ export default function BatchDetailPage() {
         title={batch.batch_code}
         subtitle={`${batch.zone_name} · ${batch.customer_type}${batch.commercial_shift ? ` (${batch.commercial_shift})` : ''}`}
         actions={
-          <RoleGate roles={['admin', 'gudoomiye']}>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <RoleGate roles={['admin', 'gudoomiye']}>
               {['draft', 'assigned'].includes(batch.status) && <Button variant="secondary" icon={Play} onClick={handleStart} disabled={startBatch.isPending}>Start</Button>}
               {['in_progress', 'assigned', 'partially_completed'].includes(batch.status) && <Button variant="secondary" icon={Flag} onClick={handleCloseCycle} disabled={closeCycle.isPending}>Close Cycle</Button>}
               {!['completed', 'cancelled'].includes(batch.status) && <Button variant="danger" icon={XCircle} onClick={() => setCancelOpen(true)}>Cancel</Button>}
-            </div>
-          </RoleGate>
+            </RoleGate>
+            {/* Generate Invoices — user-reported gap (Phase 10). Same
+                CREATE_ROLES the backend route itself enforces (admin,
+                cashier — a cashier, not just admin/gudoomiye, is who
+                actually bills customers). Shown once there's at least
+                one serviced customer, regardless of whether the batch
+                itself has been formally closed yet — a partially-worked
+                batch can still have real, billable serviced visits. */}
+            {(progress.serviced ?? 0) > 0 && (
+              <RoleGate roles={['admin', 'cashier']}>
+                <Button variant="secondary" icon={Receipt} onClick={handleGenerateInvoices} disabled={bulkGenerateInvoices.isPending}>
+                  {bulkGenerateInvoices.isPending ? 'Generating…' : 'Generate Invoices'}
+                </Button>
+              </RoleGate>
+            )}
+          </div>
         }
       />
 
