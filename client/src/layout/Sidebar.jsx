@@ -11,6 +11,7 @@ import RoleGate from '../components/RoleGate.jsx';
 // existing nav-item logic below.
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 
 // Information_Architecture.md §2: office-role navigation. Groups mirror the
 // approved V2 IA; only foundation-relevant routes are wired to real pages —
@@ -209,9 +210,23 @@ export default function Sidebar() {
         .gv2-sidebar-nav::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
       `}</style>
 
-      <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>} height={28} />
-        <NotificationBell />
+      {/* User-requested ('magaca systemkana halkaa ka soo muuji... logadana
+          iga qurxi'): CompanyLogo only ever rendered the wordmark TEXT as
+          a fallback for when the logo image itself fails to load — once a
+          real logo image is set (Settings > Company Information), the
+          system's name never appeared anywhere next to it. Text is now
+          always shown alongside the mark, not conditionally on failure. */}
+      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '17px', color: 'var(--brand)' }}>GURMAD</span>} height={26} style={{ flexShrink: 0 }} />
+          <span style={{ fontWeight: 800, fontSize: '15px', letterSpacing: '-0.01em', color: 'var(--text)', whiteSpace: 'nowrap' }}>
+            GURMAD V2
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto', flexShrink: 0 }}>
+            <ThemeToggle />
+            <NotificationBell />
+          </div>
+        </div>
       </div>
 
       {/* Sidebar / Navigation UX — Hardening. overflowY:auto + minHeight:0
