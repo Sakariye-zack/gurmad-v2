@@ -11,7 +11,15 @@ const VALID_CYCLE_TYPES = ['monthly', 'weekly', 'custom'];
 // (identical role set otherwise) already includes it — a collector could
 // see the nav link but every click 403'd. Added to match what the
 // frontend already assumed and batches.js's own established precedent.
-const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector'];
+//
+// 'cashier'/'head_of_cashiers' added later, same pattern (user-reported
+// live, Phase 10): MobileTabBar.jsx's "My Batch" tab always pointed
+// cashier-role users here too, but they weren't in VIEW_ROLES — an
+// identical 403 gap. Confirmed with the user: a cashier legitimately
+// needs to SEE which batches a collector worked vs. didn't (to know
+// whose cash to expect), never to create/edit/close/cancel one — so
+// only VIEW_ROLES widens, WRITE_ROLES is untouched.
+const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector', 'cashier', 'head_of_cashiers'];
 const WRITE_ROLES = ['admin', 'gudoomiye'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
 

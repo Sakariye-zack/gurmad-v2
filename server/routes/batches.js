@@ -11,7 +11,13 @@ const { resolveRecipientForEmployee, resolveDistinctCollectorRecipientsForBatch,
 
 const router = express.Router();
 
-const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector'];
+// 'cashier'/'head_of_cashiers' added (user-reported live, Phase 10):
+// MobileTabBar.jsx's "My Batch" tab lists batches for cashier-role users
+// too, but they weren't in VIEW_ROLES (identical gap already fixed in
+// cycles.js). Confirmed with the user: a cashier legitimately needs to
+// SEE which batches a collector worked vs. didn't, never to
+// create/edit/close/cancel one — only VIEW_ROLES widens.
+const VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector', 'cashier', 'head_of_cashiers'];
 const WRITE_ROLES = ['admin', 'gudoomiye'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
 // DR-1 precedent, carried forward exactly: per-customer status marking is
