@@ -67,12 +67,16 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
          t.id AS task_id, t.status AS task_status,
          c.id AS customer_id, c.customer_number, c.name, c.business_name, c.phone, c.address_line, c.customer_type,
          c.lat, c.lng,
+         z.name AS zone_name, COALESCE(g.name, g.code) AS group_name, COALESCE(r.name, r.code) AS route_name,
          bc.status AS customer_status
        FROM task_resources tr
        JOIN tasks t ON t.id = tr.task_id
        JOIN batches b ON b.id = t.batch_id
        JOIN batch_customers bc ON bc.batch_id = b.id
        JOIN customers c ON c.id = bc.customer_id
+       LEFT JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN groups g ON g.id = c.group_id
+       LEFT JOIN routes r ON r.id = c.route_id
        WHERE tr.resource_type = 'collector' AND tr.resource_id = $1
          AND b.status IN ('assigned', 'in_progress')
        ORDER BY b.id, c.name`,
@@ -104,6 +108,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
         name: row.name, business_name: row.business_name, phone: row.phone,
         address_line: row.address_line, customer_type: row.customer_type,
         lat: row.lat, lng: row.lng,
+        zone_name: row.zone_name, group_name: row.group_name, route_name: row.route_name,
         status: row.customer_status, task_id: row.task_id, task_status: row.task_status,
       });
     }

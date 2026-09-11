@@ -102,10 +102,18 @@ router.get('/customers', async (req, res) => {
     }
 
     const result = await pool.query(
+      // COALESCE(name, code) — group_id (Group)/route_id (Route)'s own
+      // schema has a required `code` and an OPTIONAL `name` (db.js) — the
+      // Create Group/Route forms label it "Name (optional)", so a group
+      // created with only a code (the common case here, confirmed live —
+      // user-reported) previously showed a bare "—" in this popup despite
+      // genuinely having a group/route, since the query only ever read
+      // the (often-null) name column. zones.name has no such gap (NOT
+      // NULL in its own schema), so it's untouched.
       `SELECT c.id, c.customer_number, c.name, c.customer_type, c.status,
               c.lat, c.lng, c.zone_id, z.name AS zone_name,
-              c.group_id, g.name AS group_name,
-              c.route_id, r.name AS route_name
+              c.group_id, COALESCE(g.name, g.code) AS group_name,
+              c.route_id, COALESCE(r.name, r.code) AS route_name
        FROM customers c
        JOIN zones z ON z.id = c.zone_id
        LEFT JOIN groups g ON g.id = c.group_id

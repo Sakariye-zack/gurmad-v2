@@ -104,8 +104,15 @@ export default function MapCanvas({ points }) {
       const lng = Number(p.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return; // defensive only — API already excludes these
 
+      // Explicit dark text color, not inherited — Mapbox's own popup CSS
+      // (mapbox-gl.css) always renders a WHITE popup background regardless
+      // of the app's own light/dark theme, so inheriting this app's
+      // dark-mode --text token (a near-white color, correct against a dark
+      // surface) produced white-on-white, illegible text (user-reported).
+      // A fixed dark color is correct here specifically because the
+      // background this sits on is itself fixed white, not theme-aware.
       const popupHtml = `
-        <div style="font-size:13px;line-height:1.5;">
+        <div style="font-size:13px;line-height:1.6;color:#1c231d;">
           <strong>${escapeHtml(p.name)}</strong><br/>
           ${escapeHtml(p.customer_number)}<br/>
           Zone: ${escapeHtml(p.zone_name || '—')}<br/>
