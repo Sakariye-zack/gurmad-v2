@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Wallet, Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Wallet, Search, Receipt } from 'lucide-react';
 import { PageHeader, Button, Card, StatusBadge, LoadingState, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useInvoices, useInvoice, useRecordPayment } from '../../hooks/useFinancial.js';
@@ -21,10 +22,24 @@ export default function BillingView() {
   const [q, setQ] = useState('');
   const { data, isLoading, error, refetch } = useInvoices({ q: q.trim().length >= 2 ? q.trim() : undefined });
   const invoices = (data?.data || []).filter((i) => i.status !== 'voided' && i.status !== 'paid');
+  // User-reported gap ('qaybtan billing kayga waxba ka dhiman'): every
+  // comparable list screen (InvoicesListPage, DebtsView) opens with
+  // at-a-glance stat cards — Billing, the busiest daily-use screen for a
+  // cashier, had none. Counts only (not a $ total) — invoice_total alone
+  // would overstate a partial invoice's true remaining balance, which
+  // isn't in this list response, so a misleading number is never shown.
+  const unpaidCount = invoices.filter((i) => i.status === 'unpaid').length;
+  const partialCount = invoices.filter((i) => i.status === 'partial').length;
 
   return (
     <div>
       <PageHeader icon={Wallet} title="Billing" subtitle="Record payments against outstanding invoices." />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+        <StatCard label="Outstanding Invoices" value={error ? '—' : invoices.length} icon={Wallet} />
+        <StatCard label="Unpaid" value={error ? '—' : unpaidCount} icon={Wallet} accent="var(--danger)" />
+        <StatCard label="Partial" value={error ? '—' : partialCount} icon={Wallet} accent="var(--warning)" />
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', alignItems: 'flex-start' }}>
         <div>
@@ -89,6 +104,7 @@ export default function BillingView() {
 }
 
 function PaymentPanel({ invoiceId, onRecorded }) {
+  const navigate = useNavigate();
   const { data, isLoading, refetch } = useInvoice(invoiceId);
   const recordPayment = useRecordPayment();
   const toast = useToast();
@@ -119,6 +135,17 @@ function PaymentPanel({ invoiceId, onRecorded }) {
 
   return (
     <Card style={{ padding: '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <strong style={{ fontSize: '14px' }}>{invoice.invoice_number}</strong>
+        {/* User-reported gap ('qaybtan billing kayga waxba ka dhiman'):
+            after collecting cash here, a cashier had no way to reach the
+            printable receipt/document — had to know to navigate to
+            Invoices separately. Direct link to the same invoice's full
+            detail page (Print / Download .docx already live there). */}
+        <Button variant="secondary" icon={Receipt} onClick={() => navigate(`/financial/invoices/${invoiceId}`)} style={{ padding: '6px 10px', fontSize: '12px' }}>
+          View / Print Receipt
+        </Button>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '16px' }}>
         <StatCard label="Invoice Total" value={`$${parseFloat(invoice.invoice_total).toFixed(2)}`} />
         <StatCard label="Paid" value={`$${(balance.paid ?? 0).toFixed?.(2) ?? balance.paid}`} accent="var(--success)" />
