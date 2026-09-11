@@ -74,8 +74,12 @@ export default function EmployeeDetailPage() {
             value: <span style={{ textTransform: 'capitalize' }}>{employee.collector_type || 'Not set'}{employee.commercial_shift ? ` — ${employee.commercial_shift}` : ''}</span>,
           },
           {
+            // User-reported gap (Phase 10 Billing audit, continued
+            // sweep): showed the raw numeric id instead of the username
+            // — the backend now joins it, fall back to the id only if
+            // that user account was since deleted.
             label: 'Linked account (reference only)',
-            value: employee.user_id != null ? `User #${employee.user_id}` : '— (no login account)',
+            value: employee.user_id != null ? (employee.linked_username || `User #${employee.user_id}`) : '— (no login account)',
             hint: employee.user_id != null ? 'Recorded reference, not a verified account link.' : null,
           },
           { label: 'Join date', value: employee.join_date || '—' },

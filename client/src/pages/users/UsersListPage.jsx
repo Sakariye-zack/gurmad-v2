@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ShieldCheck, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, useToast } from '../../components/ui/index.js';
 import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser } from '../../hooks/useUsers.js';
+import { useEmployees } from '../../hooks/useEmployees.js';
 import UserEditModal from './UserEditModal.jsx';
 
 // User & Access Administration — admin-only. Role assignment is
@@ -21,6 +22,14 @@ export default function UsersListPage() {
   const disableUser = useDisableUser();
   const enableUser = useEnableUser();
   const revokeUser = useRevokeUser();
+  // User-reported gap (Phase 10 Billing audit, continued sweep): this
+  // field used to be a raw "type the employee's numeric id" input — same
+  // class of bug already fixed (in the reverse direction) on
+  // EmployeeFormModal.jsx's own "Linked user account" picker. Narrowed
+  // to employees not already linked to a user account, so a mistaken
+  // re-link can't happen through this picker.
+  const { data: employeesData } = useEmployees();
+  const unlinkedEmployees = (employeesData?.data || []).filter((e) => !e.user_id);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -83,8 +92,11 @@ export default function UsersListPage() {
             </select>
           </div>
           <div>
-            <label style={labelStyle}>Employee ID (optional)</label>
-            <input value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} style={inputStyle} placeholder="Links to an existing employee" />
+            <label style={labelStyle}>Linked employee (optional)</label>
+            <select value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} style={inputStyle}>
+              <option value="">None</option>
+              {unlinkedEmployees.map((e) => <option key={e.id} value={e.id}>{e.name} ({e.job_role || e.employee_type})</option>)}
+            </select>
           </div>
           <Button type="submit" disabled={createUser.isPending}>{createUser.isPending ? 'Creating…' : 'Create'}</Button>
         </form>

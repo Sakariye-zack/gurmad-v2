@@ -258,8 +258,17 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });
   try {
+    // v2_users join added (Phase 10 Billing audit, continued sweep) —
+    // EmployeeDetailPage.jsx's own 'Linked user account' row showed
+    // 'User #33' instead of the actual username, the same raw-id
+    // pattern already fixed on the Edit side (EmployeeFormModal.jsx's
+    // picker). Additive LEFT JOIN only.
     const result = await pool.query(
-      'SELECT employees.*, zones.name AS zone_name FROM employees LEFT JOIN zones ON employees.zone_id = zones.id WHERE employees.id = $1',
+      `SELECT employees.*, zones.name AS zone_name, u.username AS linked_username
+       FROM employees
+       LEFT JOIN zones ON employees.zone_id = zones.id
+       LEFT JOIN v2_users u ON u.id = employees.user_id
+       WHERE employees.id = $1`,
       [id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: { message: 'Employee not found.', code: 'NOT_FOUND' } });
