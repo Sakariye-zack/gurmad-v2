@@ -7,7 +7,7 @@ import CapacityPanel, { CapacityPreview } from '../../components/collection/Capa
 import { useAuth } from '../../auth/AuthContext.jsx';
 import {
   useBatch, useBatchCustomers, useStartBatch, useCloseCycleOnBatch, useCancelBatch,
-  useCreateTask, useRemoveResource, useTaskStatus,
+  useCreateTask, useRemoveResource, useAssignResource, useTaskStatus,
   useMarkCustomerStatus, useRescheduleCustomer, useBatches,
 } from '../../hooks/useCollectionOps.js';
 import { useEmployees } from '../../hooks/useEmployees.js';
@@ -168,6 +168,14 @@ function TaskCard({ task, batchId, currentUserRole }) {
   const removeResource = useRemoveResource(batchId, task.id);
   const taskStatus = useTaskStatus(batchId, task.id);
   const isAdminOrGud = currentUserRole === 'admin' || currentUserRole === 'gudoomiye';
+  // User-requested gap-audit sweep ('sii wad'): useAssignResource() already
+  // existed in useCollectionOps.js, fully wired to the backend, but no
+  // button anywhere ever called it — Add Task's own copy explicitly
+  // promises 'add more from the batch's Task card afterward', but that
+  // action was never built. A task left with zero resources (or needing
+  // a second one, e.g. a collector task also needing a truck) had no fix
+  // short of deleting the task and recreating it with Add Task.
+  const [assignOpen, setAssignOpen] = useState(false);
   // Task-start blocking (final hardening pass, §D): a capacity or DR-7
   // stale-assignment block must stay visible on the card, not just flash
   // as a toast — the server's exact message (capacity/current load/excess)
@@ -205,7 +213,7 @@ function TaskCard({ task, batchId, currentUserRole }) {
           {task.status === 'in_progress' && <Button variant="primary" onClick={() => handleStatus('completed')} disabled={taskStatus.isPending}>Complete Task</Button>}
         </div>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
         {task.resources.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No resources assigned.</span>}
         {task.resources.map((r) => (
           <span key={`${r.resource_type}-${r.resource_id}`} style={chipStyle}>
@@ -215,13 +223,87 @@ function TaskCard({ task, batchId, currentUserRole }) {
             )}
           </span>
         ))}
+        {isAdminOrGud && (
+          <Button variant="secondary" icon={Plus} style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => setAssignOpen(true)}>Assign Resource</Button>
+        )}
       </div>
       {startBlockedMessage && (
         <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--danger-bg)', color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>
           Task Start blocked: {startBlockedMessage}
         </div>
       )}
+      <AssignResourceModal open={assignOpen} onClose={() => setAssignOpen(false)} batchId={batchId} taskId={task.id} />
     </Card>
+  );
+}
+
+function AssignResourceModal({ open, onClose, batchId, taskId }) {
+  const [resourceType, setResourceType] = useState('collector');
+  const [resourceId, setResourceId] = useState('');
+  const [error, setError] = useState('');
+  const assign = useAssignResource(batchId, taskId);
+  const { data: employeesData } = useEmployees({ employee_type: resourceType === 'truck' ? undefined : resourceType, status: 'active' });
+  const { data: trucksData } = useTrucks({ status: 'active' });
+  const { data: batchData } = useBatch(batchId);
+  const toast = useToast();
+  const options = resourceType === 'truck' ? (trucksData?.data || []) : (employeesData?.data || []);
+  const batchLoad = batchData?.data?.capacity?.load ?? batchData?.data?.total_customers ?? 0;
+  const selectedTruck = resourceType === 'truck' && resourceId ? options.find((t) => String(t.id) === resourceId) : null;
+  const wouldExceedCapacity = selectedTruck && selectedTruck.capacity != null && batchLoad > selectedTruck.capacity;
+
+  if (!open) return null;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!resourceId) { setError('Select a resource.'); return; }
+    try {
+      await assign.mutateAsync({ resource_type: resourceType, resource_id: parseInt(resourceId, 10) });
+      toast.success('Resource assigned.');
+      onClose();
+      setResourceId('');
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={assign.isPending ? () => {} : onClose}
+      title="Assign Resource"
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={assign.isPending}>Cancel</Button>
+        <Button type="submit" form="assign-resource-form" disabled={assign.isPending || wouldExceedCapacity}>{assign.isPending ? 'Assigning…' : 'Assign'}</Button>
+      </>}
+    >
+      <form id="assign-resource-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>Resource type</span>
+          <select value={resourceType} onChange={(e) => { setResourceType(e.target.value); setResourceId(''); }} style={inputStyle}>
+            <option value="collector">Collector</option>
+            <option value="driver">Driver</option>
+            <option value="truck">Truck</option>
+          </select>
+        </label>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>Resource</span>
+          <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={inputStyle}>
+            <option value="">Select…</option>
+            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (capacity ${o.capacity})` : ''}</option>)}
+          </select>
+        </label>
+        {selectedTruck && selectedTruck.capacity != null && (
+          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: wouldExceedCapacity ? 'var(--danger-bg)' : 'var(--bg)', border: '1px solid var(--border)' }}>
+            <span className="tabular-nums" style={{ fontSize: '12px', fontWeight: wouldExceedCapacity ? 700 : 400, color: wouldExceedCapacity ? 'var(--danger)' : 'var(--text-muted)' }}>
+              Batch load {batchLoad} / truck capacity {selectedTruck.capacity}
+              {wouldExceedCapacity ? ` — Over Capacity by ${batchLoad - selectedTruck.capacity}. This truck cannot be assigned.` : ' — Within Capacity.'}
+            </span>
+          </div>
+        )}
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 
