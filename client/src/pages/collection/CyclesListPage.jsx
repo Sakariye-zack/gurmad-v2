@@ -3,7 +3,7 @@ import { CalendarRange, ClipboardList, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader, Button, DataTable, StatusBadge, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useCycles, useCreateCycle } from '../../hooks/useCollectionOps.js';
+import { useCycles, useCreateCycle, useCloseCycle } from '../../hooks/useCollectionOps.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 
 export default function CyclesListPage() {
@@ -40,20 +40,45 @@ export default function CyclesListPage() {
         isEmpty={!isLoading && !error && cycles.length === 0}
         emptyTitle="No collection cycles yet"
         emptySubtitle="Create the first cycle to start building batches."
-        columns={[{ label: 'Zone' }, { label: 'Type' }, { label: 'Start' }, { label: 'End' }, { label: 'Status' }]}
+        columns={[{ label: 'Zone' }, { label: 'Type' }, { label: 'Start' }, { label: 'End' }, { label: 'Status' }, { label: 'Actions' }]}
       >
-        {cycles.map((c) => (
-          <tr key={c.id} style={{ borderBottom: '1px solid var(--border)' }}>
-            <td style={cellStyle}><strong>{c.zone_name}</strong></td>
-            <td style={cellStyle}><span style={{ textTransform: 'capitalize' }}>{c.cycle_type}</span></td>
-            <td style={cellStyle} className="tabular-nums">{c.start_date}</td>
-            <td style={cellStyle} className="tabular-nums">{c.end_date}</td>
-            <td style={cellStyle}><StatusBadge status={c.is_active ? 'Active' : 'Closed'} map={{ closed: 'info' }} /></td>
-          </tr>
-        ))}
+        {cycles.map((c) => <CycleRow key={c.id} cycle={c} onClosed={refetch} />)}
       </DataTable>
       <CycleFormModal open={formOpen} onClose={() => setFormOpen(false)} />
     </div>
+  );
+}
+
+// User-requested gap-audit sweep ('sii wad qaybaha kale'): useCloseCycle()
+// already existed in useCollectionOps.js, fully wired to the backend
+// (PUT /v2/cycles/:id/close, sets is_active=false), but nothing here
+// ever called it — a cycle, once created, could never be closed
+// through the UI, only ever shown as permanently 'Active'.
+function CycleRow({ cycle: c, onClosed }) {
+  const closeCycle = useCloseCycle(c.id);
+  const toast = useToast();
+  async function handleClose() {
+    try {
+      await closeCycle.mutateAsync();
+      toast.success('Cycle closed.');
+      onClosed?.();
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
+  return (
+    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+      <td style={cellStyle}><strong>{c.zone_name}</strong></td>
+      <td style={cellStyle}><span style={{ textTransform: 'capitalize' }}>{c.cycle_type}</span></td>
+      <td style={cellStyle} className="tabular-nums">{c.start_date}</td>
+      <td style={cellStyle} className="tabular-nums">{c.end_date}</td>
+      <td style={cellStyle}><StatusBadge status={c.is_active ? 'Active' : 'Closed'} map={{ closed: 'info' }} /></td>
+      <td style={cellStyle}>
+        {c.is_active && (
+          <RoleGate roles={['admin', 'gudoomiye']}>
+            <Button variant="secondary" onClick={handleClose} disabled={closeCycle.isPending}>{closeCycle.isPending ? 'Closing…' : 'Close'}</Button>
+          </RoleGate>
+        )}
+      </td>
+    </tr>
   );
 }
 
