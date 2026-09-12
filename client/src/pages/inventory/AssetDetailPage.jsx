@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Boxes, Repeat, Ban } from 'lucide-react';
+import { ArrowLeft, Boxes, Repeat, Ban, Pencil } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, Modal, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useAsset, useAssetTransferHistory, useTransferAsset, useRetireAsset } from '../../hooks/useInventory.js';
+import { useAsset, useAssetTransferHistory, useTransferAsset, useRetireAsset, useUpdateAsset } from '../../hooks/useInventory.js';
 import { useEmployees } from '../../hooks/useEmployees.js';
 
 const STATUS_MAP = { active: 'success', assigned: 'info', in_maintenance: 'warning', retired: 'danger' };
@@ -13,6 +13,14 @@ export default function AssetDetailPage() {
   const navigate = useNavigate();
   const [transferOpen, setTransferOpen] = useState(false);
   const [retireOpen, setRetireOpen] = useState(false);
+  // User-requested gap-audit sweep ('sii wad'): useUpdateAsset() already
+  // existed in useInventory.js, fully wired to the backend (PUT
+  // /v2/inventory/assets/:id, admin-only, blocked once retired — same
+  // rule this page already enforces on Transfer/Retire), but nothing
+  // here ever called it — Transfer and Retire existed, plain field
+  // corrections (category, serial number, acquisition cost/date,
+  // condition) did not.
+  const [editOpen, setEditOpen] = useState(false);
   const { data, isLoading, error, refetch } = useAsset(id);
   const { data: historyData } = useAssetTransferHistory(id);
   const asset = data?.data;
@@ -34,6 +42,9 @@ export default function AssetDetailPage() {
         actions={
           <RoleGate roles={['admin', 'gudoomiye']}>
             <div style={{ display: 'flex', gap: '8px' }}>
+              <RoleGate roles={['admin']}>
+                <Button icon={Pencil} variant="secondary" disabled={isRetired} onClick={() => setEditOpen(true)}>Edit Details</Button>
+              </RoleGate>
               <Button icon={Repeat} variant="secondary" disabled={isRetired} onClick={() => setTransferOpen(true)}>Assign / Transfer</Button>
               <RoleGate roles={['admin']}>
                 <Button icon={Ban} variant="danger" disabled={isRetired} onClick={() => setRetireOpen(true)}>Retire</Button>
@@ -74,9 +85,60 @@ export default function AssetDetailPage() {
         ))}
       </Card>
 
+      <EditAssetModal open={editOpen} onClose={() => setEditOpen(false)} asset={asset} />
       <TransferModal open={transferOpen} onClose={() => setTransferOpen(false)} asset={asset} />
       <RetireDialog open={retireOpen} onClose={() => setRetireOpen(false)} asset={asset} />
     </div>
+  );
+}
+
+function EditAssetModal({ open, onClose, asset }) {
+  const [name, setName] = useState(asset.name || '');
+  const [category, setCategory] = useState(asset.category || '');
+  const [serialNumber, setSerialNumber] = useState(asset.serial_number || '');
+  const [acquisitionDate, setAcquisitionDate] = useState(asset.acquisition_date ? asset.acquisition_date.slice(0, 10) : '');
+  const [acquisitionCost, setAcquisitionCost] = useState(asset.acquisition_cost ?? '');
+  const [condition, setCondition] = useState(asset.condition || '');
+  const [error, setError] = useState('');
+  const update = useUpdateAsset();
+  const toast = useToast();
+
+  if (!open) return null;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!name.trim()) { setError('Name is required.'); return; }
+    try {
+      await update.mutateAsync({
+        id: asset.id, name: name.trim(), category: category.trim() || null, serial_number: serialNumber.trim() || null,
+        acquisition_date: acquisitionDate || null, acquisition_cost: acquisitionCost === '' ? null : parseFloat(acquisitionCost),
+        condition: condition.trim() || null,
+      });
+      toast.success('Asset updated.');
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal open onClose={update.isPending ? () => {} : onClose} title="Edit Asset Details"
+      footer={<><Button variant="secondary" onClick={onClose} disabled={update.isPending}>Cancel</Button><Button type="submit" form="edit-asset-form" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save Changes'}</Button></>}>
+      <form id="edit-asset-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <label style={fieldStyle}><span style={labelStyle}>Name</span><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} /></label>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <label style={{ ...fieldStyle, flex: 1 }}><span style={labelStyle}>Category</span><input value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle} /></label>
+          <label style={{ ...fieldStyle, flex: 1 }}><span style={labelStyle}>Serial number</span><input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} style={inputStyle} /></label>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <label style={{ ...fieldStyle, flex: 1 }}><span style={labelStyle}>Acquisition date</span><input type="date" value={acquisitionDate} onChange={(e) => setAcquisitionDate(e.target.value)} style={inputStyle} /></label>
+          <label style={{ ...fieldStyle, flex: 1 }}><span style={labelStyle}>Acquisition cost</span><input type="number" min="0" step="0.01" value={acquisitionCost} onChange={(e) => setAcquisitionCost(e.target.value)} style={inputStyle} /></label>
+        </div>
+        <label style={fieldStyle}><span style={labelStyle}>Condition</span><input value={condition} onChange={(e) => setCondition(e.target.value)} style={inputStyle} placeholder="e.g. Good, Fair, Needs repair" /></label>
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 
