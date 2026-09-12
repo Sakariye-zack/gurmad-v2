@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { ClipboardList, Plus, X } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, FilterBar, Modal, useToast } from '../../components/ui/index.js';
 import { useProcurementRequests, useCreateProcurementRequest } from '../../hooks/useProcurement.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
+import { useZonesList } from '../../hooks/useCustomers.js';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', cancelled: 'info' };
 const PRIORITY_MAP = { low: 'info', normal: 'info', high: 'warning' };
@@ -61,10 +63,22 @@ export default function ProcurementRequestsListPage() {
 function RequestFormModal({ open, onClose }) {
   const [priority, setPriority] = useState('normal');
   const [reason, setReason] = useState('');
+  const [zoneId, setZoneId] = useState('');
   const [items, setItems] = useState([{ item_name: '', quantity: '1', estimated_unit_price: '0' }]);
   const [error, setError] = useState('');
   const create = useCreateProcurementRequest();
   const toast = useToast();
+  // User-reported gap-audit sweep ('sii wad'): the backend requires
+  // zone_id for an admin submitter (it's auto-derived server-side for a
+  // zone-scoped role like gudoomiye, exactly like every other CLOSED
+  // module's own resolveUserZoneId() pattern) — this form never asked
+  // for it at all, so an admin could NEVER submit a request; every
+  // attempt failed with 'zone_id is required for Admin.' Found live
+  // while testing an unrelated feature (Receive into Inventory).
+  const { user } = useAuth();
+  const isZoneScoped = ['gudoomiye', 'zone_accountant'].includes((user?.role || '').toLowerCase());
+  const { data: zonesData } = useZonesList();
+  const zones = zonesData?.data || [];
 
   if (!open) return null;
 
@@ -78,6 +92,7 @@ function RequestFormModal({ open, onClose }) {
     e.preventDefault();
     setError('');
     if (!reason.trim()) { setError('Reason is required.'); return; }
+    if (!isZoneScoped && !zoneId) { setError('Select a zone.'); return; }
     if (items.length === 0) { setError('At least one item is required.'); return; }
     for (const it of items) {
       if (!it.item_name.trim()) { setError('Every item needs a name.'); return; }
@@ -86,10 +101,16 @@ function RequestFormModal({ open, onClose }) {
     try {
       await create.mutateAsync({
         priority, reason: reason.trim(),
+        // zone_id: only sent for a non-zone-scoped submitter (admin) —
+        // a zone-scoped role's own zone is always server-derived and
+        // silently ignores/overrides a client-supplied value anyway
+        // (resolveUserZoneId, same pattern every other closed module
+        // uses), so sending it there would just be dead weight.
+        zone_id: isZoneScoped ? undefined : parseInt(zoneId, 10),
         items: items.map((it) => ({ item_name: it.item_name.trim(), quantity: parseInt(it.quantity, 10), estimated_unit_price: parseFloat(it.estimated_unit_price) || 0 })),
       });
       toast.success('Procurement request submitted.');
-      setPriority('normal'); setReason(''); setItems([{ item_name: '', quantity: '1', estimated_unit_price: '0' }]);
+      setPriority('normal'); setReason(''); setZoneId(''); setItems([{ item_name: '', quantity: '1', estimated_unit_price: '0' }]);
       onClose();
     } catch (err) {
       setError(err.message || 'Something went wrong.');
@@ -116,6 +137,15 @@ function RequestFormModal({ open, onClose }) {
           </select>
         </label>
         <label style={fieldStyle}><span style={labelStyle}>Reason</span><input value={reason} onChange={(e) => setReason(e.target.value)} style={inputStyle} /></label>
+        {!isZoneScoped && (
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Zone</span>
+            <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
+              <option value="">Select a zone…</option>
+              {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+            </select>
+          </label>
+        )}
         <span style={labelStyle}>Items</span>
         {items.map((it, i) => (
           <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
