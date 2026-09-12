@@ -4,6 +4,10 @@ import { ArrowLeft, Users2, Pencil, Archive, RotateCcw } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useEmployee, useUpdateEmployeeStatus } from '../../hooks/useEmployees.js';
+import { useAttendance } from '../../hooks/useAttendance.js';
+import { useLeaveRequests } from '../../hooks/useLeave.js';
+import { usePayrollHistory } from '../../hooks/useHrReports.js';
+import { useTrucks } from '../../hooks/useTrucks.js';
 import EmployeeFormModal from './EmployeeFormModal.jsx';
 
 // Clear separation between general information and sensitive HR information
@@ -110,12 +114,13 @@ export default function EmployeeDetailPage() {
         </Card>
       )}
 
-      <Card style={{ ...cardPad, marginTop: '16px' }}>
-        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
-          Attendance, payroll, leave, and truck assignment for this employee will appear here
-          once their respective modules are implemented, per the approved one-module-at-a-time sequence.
-        </p>
-      </Card>
+      {/* User-reported gap-audit sweep ('sii wad qaybaha kale'): this
+          placeholder said 'will appear here once their respective modules
+          are implemented' — Attendance, Leave, and Payroll are now all
+          implemented and their own hooks (useAttendance, useLeaveRequests,
+          usePayrollHistory) already existed, but nobody ever came back to
+          replace this stale placeholder with the real sections. */}
+      <EmployeeActivitySections employeeId={employee.id} employeeType={employee.employee_type} />
 
       <EmployeeFormModal open={editOpen} onClose={() => setEditOpen(false)} employee={employee} />
       <ConfirmDialog
@@ -136,6 +141,72 @@ export default function EmployeeDetailPage() {
 
 function Label({ children }) {
   return <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{children}</span>;
+}
+
+function EmployeeActivitySections({ employeeId, employeeType }) {
+  const { data: attendanceData } = useAttendance({ employee_id: employeeId });
+  const { data: leaveData } = useLeaveRequests({ employee_id: employeeId });
+  const { data: payrollData } = usePayrollHistory(employeeId, { limit: 10 });
+  // A truck can reference this employee as either its driver or its
+  // collector — both queried, only whichever actually matches renders.
+  const { data: asDriverData } = useTrucks({ driver_id: employeeId });
+  const { data: asCollectorData } = useTrucks({ collector_id: employeeId });
+
+  const attendance = (attendanceData?.data || []).slice(0, 5);
+  const leave = (leaveData?.data || []).slice(0, 5);
+  const payroll = (payrollData?.data || []).slice(0, 5);
+  const trucks = [...(asDriverData?.data || []), ...(asCollectorData?.data || [])];
+
+  return (
+    <>
+      <Card style={{ ...cardPad, marginTop: '16px' }}>
+        <Label>Recent Attendance</Label>
+        {attendance.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>No attendance records yet.</p>}
+        {attendance.map((a) => (
+          <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+            <span>{new Date(a.attendance_date).toLocaleDateString()}</span>
+            <StatusBadge status={a.status} map={{ present: 'success', absent: 'danger', late: 'warning', on_leave: 'info', half_day: 'warning' }} />
+          </div>
+        ))}
+      </Card>
+
+      <Card style={{ ...cardPad, marginTop: '16px' }}>
+        <Label>Leave Requests</Label>
+        {leave.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>No leave requests yet.</p>}
+        {leave.map((l) => (
+          <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+            <span>{l.leave_type_label} — {new Date(l.start_date).toLocaleDateString()} to {new Date(l.end_date).toLocaleDateString()}</span>
+            <StatusBadge status={l.status} map={{ pending: 'warning', approved: 'success', rejected: 'danger', cancelled: 'info' }} />
+          </div>
+        ))}
+      </Card>
+
+      <Card style={{ ...cardPad, marginTop: '16px' }}>
+        <Label>Payroll History</Label>
+        {payroll.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>No payroll records yet.</p>}
+        {payroll.map((p) => (
+          <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+            <span>{p.period_label || p.payroll_period_id}</span>
+            <span className="tabular-nums" style={{ fontWeight: 700 }}>{parseFloat(p.net_salary).toFixed(2)}</span>
+            <StatusBadge status={p.status} map={{ open: 'info', processing: 'warning', finalized: 'success', paid: 'success', reversed: 'danger' }} />
+          </div>
+        ))}
+      </Card>
+
+      {(employeeType === 'driver' || employeeType === 'collector') && (
+        <Card style={{ ...cardPad, marginTop: '16px' }}>
+          <Label>Truck Assignment</Label>
+          {trucks.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>Not currently assigned to a truck.</p>}
+          {trucks.map((t) => (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+              <span>{t.plate_number}</span>
+              <StatusBadge status={t.status} />
+            </div>
+          ))}
+        </Card>
+      )}
+    </>
+  );
 }
 
 const cardPad = { padding: '16px' };
