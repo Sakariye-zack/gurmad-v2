@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ShoppingCart, PackageCheck } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, PackageCheck, Warehouse } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast } from '../../components/ui/index.js';
 import { usePurchaseOrder, useOrderPurchaseOrder, useCancelPurchaseOrder, usePurchaseOrderReceipts, useCreateReceipt } from '../../hooks/useProcurement.js';
+import { useInventoryStores, useReceiveFromProcurement } from '../../hooks/useInventory.js';
 
 const STATUS_MAP = { draft: 'info', ordered: 'warning', partially_received: 'warning', received: 'success', cancelled: 'danger' };
 
@@ -16,6 +17,12 @@ export default function PurchaseOrderDetailPage() {
   const cancelMutation = useCancelPurchaseOrder();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [receiveOpen, setReceiveOpen] = useState(false);
+  // User-requested gap-audit sweep ('sii wad'): useReceiveFromProcurement()
+  // already existed in useInventory.js, fully wired to the backend, but no
+  // UI anywhere ever called it — recording that a PO's items physically
+  // arrived (Record Receipt, above) never actually moved anything into
+  // Inventory stock; that was a completely separate, unreachable step.
+  const [inventoryReceiveTarget, setInventoryReceiveTarget] = useState(null);
   const po = data?.data;
   const receipts = receiptsData?.data || [];
 
@@ -76,8 +83,19 @@ export default function PurchaseOrderDetailPage() {
           <div key={r.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
             <div>{new Date(r.received_at).toLocaleString()}</div>
             {r.items.map((it) => (
-              <div key={it.id} style={{ color: 'var(--text-muted)', paddingLeft: '12px' }}>
-                {it.item_name}: {it.quantity_received}{it.needs_review && <span style={{ marginLeft: '6px' }}><StatusBadge status="Review" map={{ review: 'warning' }} /></span>}
+              <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-muted)', paddingLeft: '12px' }}>
+                <span>
+                  {it.item_name}: {it.quantity_received}{it.needs_review && <span style={{ marginLeft: '6px' }}><StatusBadge status="Review" map={{ review: 'warning' }} /></span>}
+                </span>
+                {it.inventory_item_id && (
+                  it.already_in_inventory ? (
+                    <span style={{ fontSize: '11px' }}><StatusBadge status="In inventory" map={{ 'in inventory': 'success' }} /></span>
+                  ) : (
+                    <Button variant="secondary" icon={Warehouse} style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => setInventoryReceiveTarget(it)}>
+                      Receive into Inventory
+                    </Button>
+                  )
+                )}
               </div>
             ))}
           </div>
@@ -96,7 +114,63 @@ export default function PurchaseOrderDetailPage() {
       />
 
       <ReceiveModal open={receiveOpen} onClose={() => setReceiveOpen(false)} po={po} onDone={() => { refetch(); refetchReceipts(); }} />
+      <ReceiveIntoInventoryModal
+        item={inventoryReceiveTarget}
+        onClose={() => setInventoryReceiveTarget(null)}
+        onDone={() => { refetchReceipts(); setInventoryReceiveTarget(null); }}
+      />
     </div>
+  );
+}
+
+function ReceiveIntoInventoryModal({ item, onClose, onDone }) {
+  const [storeId, setStoreId] = useState('');
+  const [error, setError] = useState('');
+  const { data: storesData } = useInventoryStores({ status: 'active' });
+  const receive = useReceiveFromProcurement();
+  const toast = useToast();
+  const stores = storesData?.data || [];
+
+  if (!item) return null;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!storeId) { setError('Select a store.'); return; }
+    try {
+      await receive.mutateAsync({ purchase_order_receipt_item_id: item.id, store_id: parseInt(storeId, 10) });
+      toast.success(`${item.item_name} received into inventory.`);
+      setStoreId('');
+      onDone?.();
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={receive.isPending ? () => {} : onClose}
+      title="Receive into Inventory"
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={receive.isPending}>Cancel</Button>
+        <Button type="submit" form="receive-into-inventory-form" disabled={receive.isPending}>{receive.isPending ? 'Receiving…' : 'Receive'}</Button>
+      </>}
+    >
+      <form id="receive-into-inventory-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+          Adds <strong>{item.quantity_received} {item.item_name}</strong> to the inventory store you choose. This can only be done once per receipt line.
+        </p>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>Store</span>
+          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} style={inputStyle}>
+            <option value="">Select a store…</option>
+            {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 

@@ -720,9 +720,24 @@ router.get('/purchase-orders/:id/receipts', authenticateToken, requireRole(...VI
     const receipts = await pool.query('SELECT * FROM purchase_order_receipts WHERE purchase_order_id = $1 ORDER BY received_at ASC', [id]);
     const result = [];
     for (const receipt of receipts.rows) {
+      // inventory_item_id / already_in_inventory added (Phase 10 gap-audit
+      // sweep, 'sii wad') — useReceiveFromProcurement() already existed in
+      // useInventory.js, fully wired to the backend (POST
+      // /v2/inventory/movements/receive-from-procurement), but no UI
+      // anywhere ever called it: a received PO line had no path into
+      // actual Inventory stock. The frontend needs both fields to know
+      // whether a 'Receive into Inventory' action is even eligible here
+      // (line must be inventory-mapped) and whether it's already been
+      // done (the unique index on inventory_movements.
+      // source_purchase_order_receipt_item_id is the real guard; this is
+      // just the read side of the same fact, purely additive).
       const items = await pool.query(
-        `SELECT ri.*, poi.item_name, poi.quantity AS ordered_quantity FROM purchase_order_receipt_items ri
-         JOIN purchase_order_items poi ON ri.purchase_order_item_id = poi.id WHERE ri.purchase_order_receipt_id = $1`,
+        `SELECT ri.*, poi.item_name, poi.quantity AS ordered_quantity, poi.inventory_item_id,
+                (im.id IS NOT NULL) AS already_in_inventory
+         FROM purchase_order_receipt_items ri
+         JOIN purchase_order_items poi ON ri.purchase_order_item_id = poi.id
+         LEFT JOIN inventory_movements im ON im.source_purchase_order_receipt_item_id = ri.id
+         WHERE ri.purchase_order_receipt_id = $1`,
         [receipt.id]
       );
       const annotated = [];
