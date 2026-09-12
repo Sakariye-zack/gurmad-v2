@@ -28,7 +28,14 @@ export function useGeneratePayroll() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (periodId) => apiClient.post(`/v2/payroll-periods/${periodId}/generate`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'payroll-records'] }),
+    // 'hr-reports' invalidation added (Phase 10 gap-audit sweep) —
+    // usePayrollSummary()'s own query key wasn't invalidated here, so
+    // PayrollPeriodDetailPage.jsx's new summary stat cards (the first UI
+    // ever to render this data) showed stale zeros right after
+    // Generate Payroll until a manual refresh. Records themselves were
+    // always correct — only this second, previously-unconsumed query
+    // was left out.
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['v2', 'payroll-records'] }); qc.invalidateQueries({ queryKey: ['v2', 'hr-reports'] }); },
   });
 }
 

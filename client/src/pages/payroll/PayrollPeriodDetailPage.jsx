@@ -1,9 +1,15 @@
 import React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Wallet, PlayCircle, CheckCircle2 } from 'lucide-react';
-import { PageHeader, Button, DataTable, StatusBadge, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
+import { PageHeader, Button, DataTable, StatusBadge, StatCard, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { usePayrollPeriod, useSetPayrollPeriodStatus, useGeneratePayroll, usePayrollRecords } from '../../hooks/usePayroll.js';
+// User-requested gap-audit sweep ('sii wad qaybaha kale'): usePayrollSummary()
+// already existed in useHrReports.js, fully wired to the backend (zone-
+// scoped for gudoomiye/zone_accountant, company-wide for admin), but
+// nothing here ever called it — this page listed every individual
+// record with no company/zone-wide total anywhere.
+import { usePayrollSummary } from '../../hooks/useHrReports.js';
 
 const PERIOD_STATUS_MAP = { open: 'info', processing: 'warning', finalized: 'success', paid: 'success' };
 const RECORD_STATUS_MAP = { open: 'info', processing: 'warning', finalized: 'success', paid: 'success', reversed: 'danger' };
@@ -14,10 +20,12 @@ export default function PayrollPeriodDetailPage() {
   const toast = useToast();
   const { data, isLoading, error, refetch } = usePayrollPeriod(id);
   const { data: recordsData, refetch: refetchRecords } = usePayrollRecords({ payroll_period_id: id });
+  const { data: summaryData } = usePayrollSummary(id);
   const setStatus = useSetPayrollPeriodStatus();
   const generate = useGeneratePayroll();
   const period = data?.data;
   const records = recordsData?.data || [];
+  const summary = summaryData?.data;
 
   if (isLoading) return <LoadingState label="Loading payroll period…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
@@ -67,6 +75,16 @@ export default function PayrollPeriodDetailPage() {
       />
 
       <div style={{ marginBottom: '16px' }}><StatusBadge status={period.status} map={PERIOD_STATUS_MAP} /></div>
+
+      {summary && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+          <StatCard label="Employees" value={summary.employee_count} />
+          <StatCard label="Total Salary" value={`$${parseFloat(summary.total_salary).toFixed(2)}`} />
+          <StatCard label="Total Earnings" value={`$${parseFloat(summary.total_earnings).toFixed(2)}`} accent="var(--success)" />
+          <StatCard label="Total Deductions" value={`$${parseFloat(summary.total_deductions).toFixed(2)}`} accent="var(--danger)" />
+          <StatCard label="Total Net" value={`$${parseFloat(summary.total_net).toFixed(2)}`} accent="var(--brand)" />
+        </div>
+      )}
 
       <DataTable
         isEmpty={records.length === 0}
