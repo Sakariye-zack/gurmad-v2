@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Boxes, Pencil, Plus } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, StatCard, LoadingState, ErrorState, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute } from '../../hooks/useGroups.js';
+import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute, useUpdateRoute } from '../../hooks/useGroups.js';
 import GroupFormModal from './GroupFormModal.jsx';
 
 // Group Detail — Group & Group-Based Collection CR, Spec §8. Group
@@ -18,6 +18,11 @@ export default function GroupDetailPage() {
   const { data: perfData } = useGroupCollectorPerformance(id);
   const [editOpen, setEditOpen] = useState(false);
   const [routeFormOpen, setRouteFormOpen] = useState(false);
+  // User-requested gap-audit sweep ('sii wad qaybaha kale'): useUpdateRoute()
+  // already existed in useGroups.js, fully wired to the backend (PUT
+  // /v2/routes/:id), but nothing here ever called it — Add Route existed,
+  // a typo'd code or a status change on an existing route did not.
+  const [editRouteTarget, setEditRouteTarget] = useState(null);
   const group = data?.data;
   const summary = summaryData?.data;
   const performance = perfData?.data || [];
@@ -80,6 +85,11 @@ export default function GroupDetailPage() {
                   <td style={{ padding: '8px 4px' }}><strong>{r.code}</strong>{r.name && r.name !== r.code ? ` — ${r.name}` : ''}</td>
                   <td style={{ padding: '8px 4px' }} className="tabular-nums">{r.customer_count} customers</td>
                   <td style={{ padding: '8px 4px' }}><StatusBadge status={r.status} /></td>
+                  <td style={{ padding: '8px 4px', textAlign: 'right' }}>
+                    <RoleGate roles={['admin', 'gudoomiye']}>
+                      <Button variant="ghost" icon={Pencil} style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => setEditRouteTarget(r)}>Edit</Button>
+                    </RoleGate>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -111,7 +121,68 @@ export default function GroupDetailPage() {
 
       <GroupFormModal open={editOpen} onClose={() => setEditOpen(false)} group={group} />
       <RouteFormModal open={routeFormOpen} onClose={() => setRouteFormOpen(false)} groupId={group.id} />
+      <EditRouteModal route={editRouteTarget} onClose={() => setEditRouteTarget(null)} onDone={refetch} />
     </div>
+  );
+}
+
+function EditRouteModal({ route, onClose, onDone }) {
+  const [code, setCode] = useState(route?.code || '');
+  const [name, setName] = useState(route?.name || '');
+  const [status, setStatus] = useState(route?.status || 'active');
+  const [error, setError] = useState('');
+  const update = useUpdateRoute(route?.id);
+  const toast = useToast();
+
+  React.useEffect(() => {
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setError(''); }
+  }, [route]);
+
+  if (!route) return null;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!code.trim()) { setError('Route code is required.'); return; }
+    try {
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status });
+      toast.success('Route updated.');
+      onDone?.();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={update.isPending ? () => {} : onClose}
+      title="Edit Route"
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={update.isPending}>Cancel</Button>
+        <Button type="submit" form="edit-route-form" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save Changes'}</Button>
+      </>}
+    >
+      <form id="edit-route-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Route code</span>
+          <input value={code} onChange={(e) => setCode(e.target.value)} style={inputStyle} />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Name (optional)</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Status</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </label>
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 
