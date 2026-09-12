@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Wallet2, Printer, Upload, CheckCircle2, XCircle, Ban, FileDown, Eye, List } from 'lucide-react';
+import { ArrowLeft, Wallet2, Printer, Upload, CheckCircle2, XCircle, Ban, FileDown, Eye, List, Trash2 } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 import {
-  useCashout, useApproveCashout, useRejectCashout, useVoidCashout, useUploadAttachment, useResolveShortage,
+  useCashout, useApproveCashout, useRejectCashout, useVoidCashout, useUploadAttachment, useResolveShortage, useVoidAttachment,
   useCashoutTransactions,
 } from '../../hooks/useCashouts.js';
 
@@ -540,9 +540,19 @@ function ShortagePanel({ cashoutId, shortage, cashierName }) {
   );
 }
 
+// User-requested gap-audit sweep ('gabis kale... iga baadh iyo wax iga
+// dhiman'): useVoidAttachment() already existed in useCashouts.js, fully
+// wired to the backend (DELETE .../attachments/:attachmentId, admin-only
+// — it VOIDS, never hard-deletes: voided_at/voided_by/voided_reason set,
+// the row and its file are preserved), but nothing here ever called it —
+// a wrongly-uploaded or duplicate attachment had no way to be removed
+// from view at all.
 function AttachmentRow({ attachment, cashoutId }) {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
+  const voidMut = useVoidAttachment(cashoutId);
+
   async function handleView() {
     setLoading(true);
     try {
@@ -554,14 +564,46 @@ function AttachmentRow({ attachment, cashoutId }) {
       setLoading(false);
     }
   }
+  async function handleVoid(reason) {
+    try {
+      await voidMut.mutateAsync({ attachmentId: attachment.id, reason });
+      toast.success('Attachment removed.');
+      setVoidOpen(false);
+    } catch (err) {
+      toast.error(err.message || 'Something went wrong.');
+    }
+  }
+
   return (
-    <Card style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <div>
-        <strong>{DOC_TYPE_LABELS[attachment.document_type] || attachment.document_type}</strong>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{attachment.original_filename} · {new Date(attachment.uploaded_at).toLocaleString()}</div>
-      </div>
-      <Button variant="secondary" onClick={handleView} disabled={loading}>{loading ? 'Loading…' : 'View'}</Button>
-    </Card>
+    <>
+      <Card style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <strong>{DOC_TYPE_LABELS[attachment.document_type] || attachment.document_type}</strong>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{attachment.original_filename} · {new Date(attachment.uploaded_at).toLocaleString()}</div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <Button variant="secondary" onClick={handleView} disabled={loading}>{loading ? 'Loading…' : 'View'}</Button>
+          <RoleGate roles={['admin']}>
+            <Button variant="danger" icon={Trash2} onClick={() => setVoidOpen(true)}>Remove</Button>
+          </RoleGate>
+        </div>
+      </Card>
+      <ConfirmDialog
+        open={voidOpen}
+        onClose={() => setVoidOpen(false)}
+        onConfirm={() => handleVoid(document.getElementById(`void-attachment-reason-${attachment.id}`)?.value || '')}
+        title="Remove this attachment?"
+        message={<div>
+          <p style={{ margin: '0 0 8px' }}>
+            The file itself is preserved (voided, not deleted) — it stops showing here and in the document count. A reason is required.
+          </p>
+          <input id={`void-attachment-reason-${attachment.id}`} placeholder="Reason for removal" style={inputStyle} />
+        </div>}
+        confirmLabel="Remove"
+        danger
+        isLoading={voidMut.isPending}
+      />
+    </>
   );
 }
 
