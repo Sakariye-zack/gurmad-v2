@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Boxes, Pencil, Plus } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, StatCard, LoadingState, ErrorState, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute, useUpdateRoute } from '../../hooks/useGroups.js';
+import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute, useUpdateRoute, useGroupCustomers } from '../../hooks/useGroups.js';
 import GroupFormModal from './GroupFormModal.jsx';
 
 // Group Detail — Group & Group-Based Collection CR, Spec §8. Group
@@ -16,6 +16,13 @@ export default function GroupDetailPage() {
   const { data, isLoading, error, refetch } = useGroup(id);
   const { data: summaryData } = useGroupSummary(id);
   const { data: perfData } = useGroupCollectorPerformance(id);
+  // User-requested gap-audit sweep ('sii wad qaybaha kale'): useGroupCustomers()
+  // already existed in useGroups.js, fully wired to the backend (GET
+  // /v2/groups/:id/customers, paginated), but nothing here ever called it —
+  // this page only ever showed a bare customer COUNT (DetailGrid above),
+  // never the actual list, and CustomersListPage.jsx has no group filter
+  // either, so there was no path anywhere from a Group to its customers.
+  const { data: customersData } = useGroupCustomers(id);
   const [editOpen, setEditOpen] = useState(false);
   const [routeFormOpen, setRouteFormOpen] = useState(false);
   // User-requested gap-audit sweep ('sii wad qaybaha kale'): useUpdateRoute()
@@ -26,6 +33,8 @@ export default function GroupDetailPage() {
   const group = data?.data;
   const summary = summaryData?.data;
   const performance = perfData?.data || [];
+  const customers = customersData?.data || [];
+  const customersMeta = customersData?.meta;
 
   if (isLoading) return <LoadingState label="Loading group…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
@@ -94,6 +103,31 @@ export default function GroupDetailPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </Card>
+
+      <Card style={{ padding: '16px', marginTop: '16px' }}>
+        <strong style={{ fontSize: '13px' }}>
+          Customers {customersMeta ? `(${customersMeta.total})` : ''}
+        </strong>
+        {customers.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>No customers in this Group yet.</p>}
+        {customers.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginTop: '8px' }}>
+            <tbody>
+              {customers.map((c) => (
+                <tr key={c.id} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => navigate(`/customers/${c.id}`)}>
+                  <td style={{ padding: '8px 4px' }}>{c.business_name || c.name} <span style={{ color: 'var(--text-muted)' }}>({c.customer_number})</span></td>
+                  <td style={{ padding: '8px 4px', textTransform: 'capitalize' }}>{c.customer_type}</td>
+                  <td style={{ padding: '8px 4px' }}><StatusBadge status={c.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {customersMeta && customersMeta.total > customers.length && (
+          <p style={{ margin: '10px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+            Showing {customers.length} of {customersMeta.total} — narrow with the full Customers list to see the rest.
+          </p>
         )}
       </Card>
 
