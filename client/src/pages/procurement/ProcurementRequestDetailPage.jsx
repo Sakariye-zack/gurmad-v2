@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ClipboardList, ShoppingCart } from 'lucide-react';
+import { ArrowLeft, ClipboardList, ShoppingCart, Pencil, X } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast } from '../../components/ui/index.js';
-import { useProcurementRequest, useSetRequestStatus, useCancelRequest } from '../../hooks/useProcurement.js';
+import { useProcurementRequest, useSetRequestStatus, useCancelRequest, useUpdateProcurementRequest } from '../../hooks/useProcurement.js';
 import { useSuppliers, useCreatePurchaseOrder } from '../../hooks/useProcurement.js';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', cancelled: 'info' };
@@ -16,6 +16,14 @@ export default function ProcurementRequestDetailPage() {
   const cancelMutation = useCancelRequest();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [poFormOpen, setPoFormOpen] = useState(false);
+  // User-requested gap-audit sweep ('sii wad'): useUpdateProcurementRequest()
+  // already existed in useProcurement.js, fully wired to the backend (PUT
+  // /v2/procurement/requests/:id — editable while pending only, by the
+  // original requester or an authorized zone approver, matching this
+  // page's own Approve/Reject/Cancel gate), but nothing here ever called
+  // it — a typo in the reason or a wrong quantity/price had no fix short
+  // of cancelling and resubmitting the whole request.
+  const [editOpen, setEditOpen] = useState(false);
   const request = data?.data;
 
   if (isLoading) return <LoadingState label="Loading procurement request…" />;
@@ -49,6 +57,7 @@ export default function ProcurementRequestDetailPage() {
           <div style={{ display: 'flex', gap: '8px' }}>
             {request.status === 'pending' && (
               <>
+                <Button variant="secondary" icon={Pencil} onClick={() => setEditOpen(true)}>Edit</Button>
                 <Button onClick={() => handleDecision('approved')} disabled={setStatus.isPending}>Approve</Button>
                 <Button variant="danger" onClick={() => handleDecision('rejected')} disabled={setStatus.isPending}>Reject</Button>
                 <Button variant="secondary" onClick={() => setCancelOpen(true)}>Cancel</Button>
@@ -89,7 +98,84 @@ export default function ProcurementRequestDetailPage() {
       />
 
       <CreatePoModal open={poFormOpen} onClose={() => setPoFormOpen(false)} request={request} />
+      <EditRequestModal open={editOpen} onClose={() => setEditOpen(false)} request={request} onDone={refetch} />
     </div>
+  );
+}
+
+function EditRequestModal({ open, onClose, request, onDone }) {
+  const [priority, setPriority] = useState(request.priority);
+  const [reason, setReason] = useState(request.reason);
+  const [items, setItems] = useState(() => request.items.map((it) => ({
+    item_name: it.item_name, quantity: String(it.quantity), estimated_unit_price: String(it.estimated_unit_price),
+  })));
+  const [error, setError] = useState('');
+  const update = useUpdateProcurementRequest();
+  const toast = useToast();
+
+  if (!open) return null;
+
+  function updateItem(i, field, value) {
+    setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
+  }
+  function addItem() { setItems((prev) => [...prev, { item_name: '', quantity: '1', estimated_unit_price: '0' }]); }
+  function removeItem(i) { setItems((prev) => prev.filter((_, idx) => idx !== i)); }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!reason.trim()) { setError('Reason is required.'); return; }
+    if (items.length === 0) { setError('At least one item is required.'); return; }
+    for (const it of items) {
+      if (!it.item_name.trim()) { setError('Every item needs a name.'); return; }
+      if (!(parseInt(it.quantity, 10) > 0)) { setError('Every item quantity must be greater than 0.'); return; }
+    }
+    try {
+      await update.mutateAsync({
+        id: request.id, priority, reason: reason.trim(),
+        items: items.map((it) => ({ item_name: it.item_name.trim(), quantity: parseInt(it.quantity, 10), estimated_unit_price: parseFloat(it.estimated_unit_price) || 0 })),
+      });
+      toast.success('Request updated.');
+      onDone?.();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={update.isPending ? () => {} : onClose}
+      title="Edit Procurement Request"
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={update.isPending}>Cancel</Button>
+        <Button type="submit" form="edit-procurement-request-form" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save Changes'}</Button>
+      </>}
+    >
+      <form id="edit-procurement-request-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>Priority</span>
+          <select value={priority} onChange={(e) => setPriority(e.target.value)} style={inputStyle}>
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label style={fieldStyle}><span style={labelStyle}>Reason</span><input value={reason} onChange={(e) => setReason(e.target.value)} style={inputStyle} /></label>
+        <span style={labelStyle}>Items</span>
+        {items.map((it, i) => (
+          <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input placeholder="Item name" value={it.item_name} onChange={(e) => updateItem(i, 'item_name', e.target.value)} style={{ ...inputStyle, flex: 2 }} />
+            <input type="number" min="1" placeholder="Qty" value={it.quantity} onChange={(e) => updateItem(i, 'quantity', e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+            <input type="number" min="0" step="0.01" placeholder="Est. price" value={it.estimated_unit_price} onChange={(e) => updateItem(i, 'estimated_unit_price', e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+            {items.length > 1 && <button type="button" onClick={() => removeItem(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={16} /></button>}
+          </div>
+        ))}
+        <Button type="button" variant="secondary" onClick={addItem}>Add Item</Button>
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 
