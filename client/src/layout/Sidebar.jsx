@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut,
-  CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed,
+  CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
@@ -98,6 +98,13 @@ export const NAV = [
   // which only require authenticateToken, never requireRole. Kept
   // ungrouped, same as Dashboard — always visible, never collapsed away.
   { to: '/account/security', label: 'Account Security', icon: ShieldAlert, group: null },
+  // My HR — new self-service page (Phase 10 gap-audit sweep). Same
+  // ungated pattern as Account Security above: the backend's own
+  // GET/POST /v2/attendance/me and /v2/leave-requests/me self-scope by
+  // the caller's own linked employee record, no role restriction at
+  // all — every staff login should be able to reach this, not just
+  // admin/gudoomiye.
+  { to: '/account/my-hr', label: 'My HR', icon: UserCircle2, group: null },
 ];
 
 const GROUP_ICONS = {

@@ -75,6 +75,7 @@ import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
 import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
 import UsersListPage from '../pages/users/UsersListPage.jsx';
 import AccountSecurity from '../pages/account/AccountSecurity.jsx';
+import MyHrPage from '../pages/account/MyHrPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
 import RequirePortalAuth from '../portal/RequirePortalAuth.jsx';
 import PortalShell from '../portal/PortalShell.jsx';
@@ -156,6 +157,7 @@ export const router = createBrowserRouter([
       { path: 'audit', element: <AuditCenterListPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'account/security', element: <AccountSecurity /> },
+      { path: 'account/my-hr', element: <MyHrPage /> },
       { path: 'notifications', element: <NotificationsListPage /> },
       { path: 'calendar', element: <CalendarPage /> },
       { path: 'map', element: <MapPage /> },
