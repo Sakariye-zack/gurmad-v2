@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Receipt, Plus, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Receipt, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, Modal, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { usePayrollRecord, useAddPayrollItem, useSettlePayrollRecord, useReversePayrollRecord } from '../../hooks/usePayroll.js';
+import { usePayrollRecord, useAddPayrollItem, useSettlePayrollRecord, useReversePayrollRecord, useDeletePayrollItem } from '../../hooks/usePayroll.js';
 
 const STATUS_MAP = { open: 'info', processing: 'warning', finalized: 'success', paid: 'success', reversed: 'danger' };
 
@@ -16,6 +16,13 @@ export default function PayrollRecordDetailPage() {
   const [settleOpen, setSettleOpen] = useState(false);
   const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
   const reverseMutation = useReversePayrollRecord();
+  // User-requested gap-audit sweep ('sii wad'): useDeletePayrollItem()
+  // already existed in usePayroll.js, fully wired to the backend
+  // (DELETE .../items/:itemId, admin-only, open/processing only —
+  // matches this page's own isEditable gate), but 'Add Item' had no
+  // counterpart — a mistakenly-added earning/deduction had no way to
+  // be removed short of an admin editing the database directly.
+  const deleteItem = useDeletePayrollItem();
   const record = data?.data;
 
   if (isLoading) return <LoadingState label="Loading payroll record…" />;
@@ -30,6 +37,13 @@ export default function PayrollRecordDetailPage() {
       await reverseMutation.mutateAsync({ id: record.id, reason });
       toast.success('Payroll record reversed. A new open record was created.');
       setReverseConfirmOpen(false);
+      refetch();
+    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+  }
+  async function handleDeleteItem(itemId) {
+    try {
+      await deleteItem.mutateAsync({ id: record.id, itemId });
+      toast.success('Line item removed.');
       refetch();
     } catch (err) { toast.error(err.message || 'Something went wrong.'); }
   }
@@ -67,11 +81,25 @@ export default function PayrollRecordDetailPage() {
         <Label>Line Items</Label>
         {record.items.length === 0 && <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>No line items.</p>}
         {record.items.map((item) => (
-          <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+          <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
             <span>{item.description} {item.source_type === 'cashout_shortage' && <span style={{ color: 'var(--text-muted)' }}>(cashout shortage #{item.source_id})</span>}</span>
-            <span className="tabular-nums" style={{ color: item.item_type === 'earning' ? 'var(--success)' : 'var(--danger)' }}>
-              {item.item_type === 'earning' ? '+' : '-'}{parseFloat(item.amount).toFixed(2)}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="tabular-nums" style={{ color: item.item_type === 'earning' ? 'var(--success)' : 'var(--danger)' }}>
+                {item.item_type === 'earning' ? '+' : '-'}{parseFloat(item.amount).toFixed(2)}
+              </span>
+              {isEditable && (
+                <RoleGate roles={['admin']}>
+                  <button
+                    onClick={() => handleDeleteItem(item.id)}
+                    disabled={deleteItem.isPending}
+                    aria-label={`Remove ${item.description}`}
+                    style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '2px' }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </RoleGate>
+              )}
+            </div>
           </div>
         ))}
       </Card>
