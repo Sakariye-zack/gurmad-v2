@@ -84,7 +84,7 @@ export default function ReportsPage() {
       {tab === 'collector' && <CollectorTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('collector-performance')} isCollector={isCollector} />}
       {tab === 'zone' && <ZoneTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('zone-performance')} />}
       {tab === 'truck' && <TruckTab period={period} customStart={customStart} customEnd={customEnd} />}
-      {tab === 'history' && <HistoryTab period={period} customStart={customStart} customEnd={customEnd} />}
+      {tab === 'history' && <HistoryTab period={period} customStart={customStart} customEnd={customEnd} onExport={(extra) => handleExport('collection-history', extra)} />}
       {tab === 'revenue' && (
         <RoleGate roles={['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier']}>
           <RevenueTab period={period} customStart={customStart} customEnd={customEnd} />
@@ -231,27 +231,63 @@ function TruckTab({ period, customStart, customEnd }) {
   );
 }
 
-function HistoryTab({ period, customStart, customEnd }) {
-  const { data, isLoading, error, refetch } = useCollectionHistory(period, customStart, customEnd);
+// User-reported gap ('customers kii loo shaqeeyay sidaan ku ogaan
+// karaa... kuwii loo shaqeeyay iyo kuwii aan loshaqayn iyo kuwii laga
+// tagay... si isla xisaabtanku u hagaago' — how do I know which
+// customers were worked, which weren't, and which were left behind,
+// so the accounting itself reconciles): this was the one report tab
+// with no status breakdown, no status filter, and no Export CSV — a
+// flat unfiltered list only. The backend's own GET /collection-history
+// already accepted a ?status= filter; nothing in the UI ever exposed
+// it, and the export endpoint didn't exist for this category at all.
+function HistoryTab({ period, customStart, customEnd, onExport }) {
+  const [statusFilter, setStatusFilter] = useState('');
+  const { data, isLoading, error, refetch } = useCollectionHistory(period, customStart, customEnd, { status: statusFilter || undefined });
   if (isLoading) return <LoadingState label="Loading collection history…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   const rows = data?.data || [];
+  // Counts reflect the CURRENT filter — client-side tally of the same
+  // already-fetched rows, never a second backend call (same precedent
+  // as the Collector Mobile App's own daily-progress chips).
+  const counts = { serviced: 0, missed: 0, skipped: 0, pending: 0, rescheduled: 0 };
+  for (const r of rows) { if (counts[r.status] !== undefined) counts[r.status] += 1; }
+
   return (
-    <DataTable
-      isEmpty={rows.length === 0}
-      emptyTitle="No collection events in this period"
-      columns={[{ label: 'Customer' }, { label: 'Batch' }, { label: 'Zone' }, { label: 'Status' }, { label: 'Date' }]}
-    >
-      {rows.map((r) => (
-        <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
-          <td style={cellStyle}>{r.customer_name} ({r.customer_number})</td>
-          <td style={cellStyle}>{r.batch_code}</td>
-          <td style={cellStyle}>{r.zone_name || '—'}</td>
-          <td style={cellStyle}><StatusBadge status={r.status} /></td>
-          <td style={cellStyle}>{r.status_at ? new Date(r.status_at).toLocaleString() : '—'}</td>
-        </tr>
-      ))}
-    </DataTable>
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px', marginBottom: '16px' }} className="no-print">
+        <StatCard label="Serviced" value={counts.serviced} accent="var(--success)" />
+        <StatCard label="Missed" value={counts.missed} accent="var(--danger)" />
+        <StatCard label="Skipped" value={counts.skipped} accent="var(--info)" />
+        <StatCard label="Pending" value={counts.pending} accent="var(--warning)" />
+        <StatCard label="Rescheduled" value={counts.rescheduled} />
+      </div>
+      <div className="no-print" style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap' }}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
+          <option value="">All statuses</option>
+          <option value="serviced">Serviced</option>
+          <option value="missed">Missed</option>
+          <option value="skipped">Skipped</option>
+          <option value="pending">Pending</option>
+          <option value="rescheduled">Rescheduled</option>
+        </select>
+        <Button variant="secondary" icon={Download} onClick={() => onExport({ status: statusFilter || undefined })}>Export CSV</Button>
+      </div>
+      <DataTable
+        isEmpty={rows.length === 0}
+        emptyTitle="No collection events in this period"
+        columns={[{ label: 'Customer' }, { label: 'Batch' }, { label: 'Zone' }, { label: 'Status' }, { label: 'Date' }]}
+      >
+        {rows.map((r) => (
+          <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+            <td style={cellStyle}>{r.customer_name} ({r.customer_number})</td>
+            <td style={cellStyle}>{r.batch_code}</td>
+            <td style={cellStyle}>{r.zone_name || '—'}</td>
+            <td style={cellStyle}><StatusBadge status={r.status} /></td>
+            <td style={cellStyle}>{r.status_at ? new Date(r.status_at).toLocaleString() : '—'}</td>
+          </tr>
+        ))}
+      </DataTable>
+    </div>
   );
 }
 

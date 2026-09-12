@@ -244,6 +244,17 @@ const EXPORTABLE = {
   'debts-summary': { roles: FINANCIAL_ROLES, fn: 'debts', columns: [
     { key: 'customer_name', label: 'Customer' }, { key: 'amount', label: 'Amount' }, { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
   ] },
+  // Added (Phase 10 — user-reported: 'si isla xisaabtanku u hagaago' —
+  // so the accounting itself reconciles): the Collection History tab
+  // was the one report with no Export CSV at all, and GET
+  // /collection-history's own existing ?status= filter was never
+  // exposed anywhere in the UI. A cashier/gudoomiye trying to
+  // reconcile who was actually serviced vs missed/skipped over a
+  // period had to read a live on-screen table, not a keepable record.
+  'collection-history': { roles: OPERATIONAL_ROLES, fn: 'history', columns: [
+    { key: 'customer_name', label: 'Customer' }, { key: 'customer_number', label: 'Customer #' }, { key: 'batch_code', label: 'Batch' },
+    { key: 'zone_name', label: 'Zone' }, { key: 'status', label: 'Status' }, { key: 'status_at', label: 'Date' },
+  ] },
 };
 
 // Manual per-category role check (not requireRole middleware, since the
@@ -276,6 +287,8 @@ router.get('/:category/export.csv', authenticateToken, async (req, res) => {
       rows = await getPaymentsSummary({ zoneId: myZoneId, cashierId, periodStart: p.start, periodEnd: p.end, limit: 1000, offset: 0 });
     } else if (def.fn === 'debts') {
       rows = await getDebtsSummary({ zoneId: myZoneId, status: req.query.status || null, periodStart: p.start, periodEnd: p.end, limit: 1000, offset: 0 });
+    } else if (def.fn === 'history') {
+      rows = await getCollectionHistory({ zoneId: myZoneId, status: req.query.status || null, periodStart: p.start, periodEnd: p.end, limit: 1000, offset: 0 });
     }
     const csv = toCsv(rows, def.columns);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'report.export', entityType: 'report', entityId: null, before: null, after: { category, rowCount: rows.length, period: req.query.period } });
