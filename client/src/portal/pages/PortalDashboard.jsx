@@ -54,12 +54,15 @@ export default function PortalDashboard() {
       <PortalPageHeader title="My Dashboard" subtitle="An overview of your account" />
 
       {hasBalance ? (
-        <PortalCard style={{ borderLeft: '3px solid #DC2626', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <PortalCard
+          onClick={() => navigate('/portal/balance')}
+          style={{ borderLeft: '3px solid #DC2626', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}
+        >
           <AlertTriangle size={22} color="#DC2626" />
           <div>
             <div style={{ fontWeight: 800, fontSize: '14px' }}>You have an outstanding balance</div>
             <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              ${(data.outstandingInvoiceBalance + data.outstandingDebt).toFixed(2)} due — view your invoices for details.
+              ${(data.outstandingInvoiceBalance + data.outstandingDebt).toFixed(2)} due — view the breakdown.
             </div>
           </div>
         </PortalCard>
@@ -70,8 +73,12 @@ export default function PortalDashboard() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-        <StatCard label="Outstanding Invoice Balance" value={`$${data.outstandingInvoiceBalance.toFixed(2)}`} icon={Wallet} accent="#2563EB" />
-        <StatCard label="Outstanding Debt" value={`$${data.outstandingDebt.toFixed(2)}`} icon={AlertTriangle} accent="#DC2626" />
+        <div onClick={() => navigate('/portal/balance')} style={{ cursor: 'pointer' }}>
+          <StatCard label="Outstanding Invoice Balance" value={`$${data.outstandingInvoiceBalance.toFixed(2)}`} icon={Wallet} accent="#2563EB" />
+        </div>
+        <div onClick={() => navigate('/portal/balance')} style={{ cursor: 'pointer' }}>
+          <StatCard label="Outstanding Debt" value={`$${data.outstandingDebt.toFixed(2)}`} icon={AlertTriangle} accent="#DC2626" />
+        </div>
         <StatCard
           label="Last Payment"
           value={data.lastPayment ? `$${parseFloat(data.lastPayment.amount).toFixed(2)}` : '—'}

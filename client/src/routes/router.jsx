@@ -88,6 +88,7 @@ import PortalCollectionDetail from '../portal/pages/collections/PortalCollection
 import PortalInvoices from '../portal/pages/PortalInvoices.jsx';
 import PortalInvoiceDetail from '../portal/pages/PortalInvoiceDetail.jsx';
 import PortalPayments from '../portal/pages/PortalPayments.jsx';
+import PortalBalance from '../portal/pages/PortalBalance.jsx';
 import PortalAccountProfile from '../portal/pages/account/PortalAccountProfile.jsx';
 import PortalAccountSecurity from '../portal/pages/account/PortalAccountSecurity.jsx';
 import PortalNotifications from '../portal/pages/notifications/PortalNotifications.jsx';
@@ -213,6 +214,7 @@ export const router = createBrowserRouter([
       { path: 'invoices', element: <PortalInvoices /> },
       { path: 'invoices/:id', element: <PortalInvoiceDetail /> },
       { path: 'payments', element: <PortalPayments /> },
+      { path: 'balance', element: <PortalBalance /> },
       // 'profile' kept as a redirect — the original single page split into
       // account/profile + account/security (Rebuild Spec §3/§21), so any
       // previously-bookmarked/linked '/portal/profile' still resolves.
