@@ -4,6 +4,7 @@ import { ArrowLeft, Truck, Pencil } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useTruck, useUpdateTruckStatus } from '../../hooks/useTrucks.js';
+import { useFuelRecords, useMaintenanceRecords } from '../../hooks/useFleet.js';
 import TruckFormModal from './TruckFormModal.jsx';
 import { complianceState, COMPLIANCE_LABELS, COMPLIANCE_BADGE_MAP } from './complianceState.js';
 
@@ -29,6 +30,10 @@ export default function TruckDetailPage() {
   const updateStatus = useUpdateTruckStatus(id);
   const toast = useToast();
   const truck = data?.data;
+  const { data: fuelData } = useFuelRecords({ truck_id: id });
+  const { data: maintenanceData } = useMaintenanceRecords({ truck_id: id });
+  const fuelRecords = fuelData?.data || [];
+  const maintenanceRecords = maintenanceData?.data || [];
 
   if (isLoading) return <LoadingState label="Loading truck…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
@@ -113,10 +118,40 @@ export default function TruckDetailPage() {
         </Card>
       )}
 
+      {/* User-requested gap-audit ('maxaa ka dhiman imika mashruucaygan'):
+          this placeholder claimed fuel/maintenance modules weren't
+          implemented yet — both have existed (with truck_id filtering)
+          since Fleet Management shipped; nobody ever came back to
+          replace this stale text with the real history. Collection task
+          assignment genuinely has no dedicated module yet — that part of
+          the original sentence stays honest. */}
+      <Card style={{ ...cardPad, marginTop: '16px' }}>
+        <Label>Fuel Log ({fuelRecords.length})</Label>
+        {fuelRecords.length === 0 && <p style={emptyStyle}>No fuel records for this truck yet.</p>}
+        {fuelRecords.slice(0, 6).map((f) => (
+          <div key={f.id} style={rowStyle}>
+            <span>{new Date(f.record_date).toLocaleDateString()} — {parseFloat(f.liters).toFixed(2)}L</span>
+            <span style={{ color: 'var(--text-muted)' }}>${parseFloat(f.cost).toFixed(2)}{f.needs_review && ' · Review'}</span>
+          </div>
+        ))}
+        {fuelRecords.length > 6 && <p style={moreStyle}>+ {fuelRecords.length - 6} more — see Fleet Fuel.</p>}
+      </Card>
+
+      <Card style={{ ...cardPad, marginTop: '16px' }}>
+        <Label>Maintenance History ({maintenanceRecords.length})</Label>
+        {maintenanceRecords.length === 0 && <p style={emptyStyle}>No maintenance records for this truck yet.</p>}
+        {maintenanceRecords.slice(0, 6).map((m) => (
+          <div key={m.id} style={rowStyle}>
+            <span>{m.description}</span>
+            <span style={{ color: 'var(--text-muted)' }}>${parseFloat(m.cost).toFixed(2)}</span>
+          </div>
+        ))}
+        {maintenanceRecords.length > 6 && <p style={moreStyle}>+ {maintenanceRecords.length - 6} more — see Fleet Maintenance.</p>}
+      </Card>
+
       <Card style={{ ...cardPad, marginTop: '16px' }}>
         <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
-          Fuel logs, maintenance history, and collection task assignment for this truck will appear here
-          once their respective modules are implemented, per the approved one-module-at-a-time sequence.
+          Collection task assignment for this truck will appear here once that module is implemented.
         </p>
       </Card>
 
@@ -142,6 +177,9 @@ function Label({ children }) {
 }
 
 const cardPad = { padding: '16px' };
+const emptyStyle = { margin: '6px 0 0', fontSize: '13px', color: 'var(--text-muted)' };
+const moreStyle = { margin: '8px 0 0', fontSize: '12px', color: 'var(--text-muted)' };
+const rowStyle = { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' };
 const sectionLabelStyle = {
   display: 'block', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em',
   color: 'var(--text-muted)', margin: '20px 0 10px',
