@@ -10,6 +10,17 @@
          manifest's scope) — no separate manifest file needed per app. -->
     <link rel="manifest" id="v2-manifest-link" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#2F7D3E" />
+    <!-- Gap-audit fix (Phase 10, user-requested: staff/customer mobile
+         apps should feel like real mobile apps): both manifests above had
+         "icons": [] — most browsers refuse the install prompt entirely
+         without at least a 192x192 and a 512x512 icon, so neither app was
+         actually installable to begin with, PWA infrastructure (manifest
+         swap, service worker registration) notwithstanding. iOS Safari
+         additionally ignores manifest icons for the home-screen icon and
+         needs its own apple-touch-icon link. favicon.png doubles as the
+         browser-tab icon for the plain (non-installed) staff app too. -->
+    <link rel="icon" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <!-- Fleet-manifest login redesign (user-requested "not AI-generated,
          fits waste collection"). Scoped to the 3 login screens only via
          inline fontFamily there — the app-wide --font-display/--font-body
