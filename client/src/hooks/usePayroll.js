@@ -64,7 +64,13 @@ export function useDeletePayrollItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId }) => apiClient.del(`/v2/payroll-records/${id}/items/${itemId}`),
-    onSuccess: (_r, vars) => { qc.invalidateQueries({ queryKey: ['v2', 'payroll-records', vars.id] }); },
+    // Hardening fix (Phase 10 deep review): only the single record's own
+    // detail cache was invalidated — unlike useAddPayrollItem right above
+    // it, which invalidates both. Removing an item changes net_salary,
+    // which PayrollPeriodDetailPage.jsx's records list also displays;
+    // navigating back there showed the pre-deletion amount until a
+    // manual reload.
+    onSuccess: (_r, vars) => { qc.invalidateQueries({ queryKey: ['v2', 'payroll-records', vars.id] }); qc.invalidateQueries({ queryKey: ['v2', 'payroll-records'] }); },
   });
 }
 export function useSettlePayrollRecord() {
@@ -78,6 +84,13 @@ export function useReversePayrollRecord() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, reason }) => apiClient.post(`/v2/payroll-records/${id}/reverse`, { reason }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'payroll-records'] }),
+    // Hardening fix (Phase 10 deep review): only the list was invalidated
+    // — reverse marks THIS record 'reversed' and creates a new open one,
+    // so the old record's own detail cache also needed invalidating (same
+    // gap as useReplaceDocument, fixed just before this). The current
+    // detail page happens to call refetch() itself after this mutation,
+    // masking the bug there, but anyone reopening this exact record's URL
+    // from a stale cache (another tab, browser back) still saw 'finalized'.
+    onSuccess: (_r, vars) => { qc.invalidateQueries({ queryKey: ['v2', 'payroll-records'] }); qc.invalidateQueries({ queryKey: ['v2', 'payroll-records', vars.id] }); },
   });
 }
