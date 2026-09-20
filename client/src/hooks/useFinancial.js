@@ -49,6 +49,22 @@ export function useRecordPayment() {
     },
   });
 }
+// ZAAD push payment — user-requested (Phase 10, ported from the user's
+// own previous system): sends a real WAAFI/ZAAD payment request to the
+// customer's phone; the request only resolves once the customer has
+// approved or the gateway has declined it (POST /v2/payments/zaad-request
+// itself is synchronous — see server/lib/zaadService.js).
+export function useRequestZaadPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiClient.post('/v2/payments/zaad-request', data),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: ['v2', 'invoices'] });
+      qc.invalidateQueries({ queryKey: ['v2', 'invoices', vars.invoice_id] });
+      qc.invalidateQueries({ queryKey: ['v2', 'payments', vars.invoice_id] });
+    },
+  });
+}
 export function useReversePayment(invoiceId) {
   const qc = useQueryClient();
   return useMutation({

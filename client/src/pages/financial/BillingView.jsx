@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, Search, Receipt } from 'lucide-react';
-import { PageHeader, Button, Card, StatusBadge, LoadingState, useToast, StatCard } from '../../components/ui/index.js';
+import { Wallet, Search, Receipt, Smartphone } from 'lucide-react';
+import { PageHeader, Button, Card, StatusBadge, LoadingState, useToast, StatCard, Modal } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useInvoices, useInvoice, useRecordPayment } from '../../hooks/useFinancial.js';
+import { useInvoices, useInvoice, useRecordPayment, useRequestZaadPayment } from '../../hooks/useFinancial.js';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -107,6 +107,13 @@ function PaymentPanel({ invoiceId, onRecorded }) {
   const navigate = useNavigate();
   const { data, isLoading, refetch } = useInvoice(invoiceId);
   const recordPayment = useRecordPayment();
+  // ZAAD push payment — user-requested ('customerka numberkiisa galiyo
+  // si loogu diro'): a dedicated flow, not just another payment method
+  // in the existing form, since it needs the customer's phone number and
+  // a distinct "Send Request" action/pending state (the request can take
+  // several seconds while the customer approves on their own phone).
+  const requestZaad = useRequestZaadPayment();
+  const [zaadOpen, setZaadOpen] = useState(false);
   const toast = useToast();
   // User-requested ('hlkan debtga iyo partialkaba iigu soo dar intanan
   // lacagta record garayn') — split into two amount fields recorded
@@ -176,6 +183,12 @@ function PaymentPanel({ invoiceId, onRecorded }) {
         <p style={{ margin: 0, color: 'var(--success)', fontSize: '13px', fontWeight: 700 }}>This invoice is fully paid.</p>
       ) : (
         <RoleGate roles={['admin', 'cashier']} fallback={<p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>View-only — your role cannot record payments.</p>}>
+          {/* ZAAD push payment — user-requested: send a real payment
+              request straight to the customer's phone instead of only
+              recording a payment someone already collected in person. */}
+          <Button variant="secondary" icon={Smartphone} onClick={() => setZaadOpen(true)} style={{ marginBottom: '14px' }}>
+            Send ZAAD Payment Request
+          </Button>
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', gap: '10px' }}>
               <label style={fieldStyle}>
@@ -225,7 +238,93 @@ function PaymentPanel({ invoiceId, onRecorded }) {
           </div>
         ))}
       </div>
+
+      <ZaadRequestModal
+        open={zaadOpen}
+        onClose={() => setZaadOpen(false)}
+        invoice={invoice}
+        requestZaad={requestZaad}
+        onDone={() => { refetch(); onRecorded?.(); }}
+      />
     </Card>
+  );
+}
+
+// ZAAD push payment modal — user-requested ('customerka numberkiisa
+// galiyo si loogu diro'): enter the customer's phone (prefilled from the
+// customer's own record), send the request, wait for the customer to
+// approve on their own phone (synchronous — see zaadService.js's own
+// comment), then reflect the resulting payment/invoice state immediately.
+function ZaadRequestModal({ open, onClose, invoice, requestZaad, onDone }) {
+  const [phone, setPhone] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState('USD');
+  const [error, setError] = useState('');
+  const toast = useToast();
+
+  React.useEffect(() => {
+    if (open && invoice) {
+      setPhone(invoice.customer_phone || '');
+      setAmount(invoice.balance?.outstanding ? String(invoice.balance.outstanding.toFixed?.(2) ?? invoice.balance.outstanding) : '');
+      setCurrency('USD');
+      setError('');
+    }
+  }, [open, invoice]);
+
+  if (!open) return null;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (!phone.trim()) { setError('A phone number is required.'); return; }
+    const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) { setError('Amount must be a positive number.'); return; }
+    try {
+      await requestZaad.mutateAsync({ invoice_id: invoice.id, phone: phone.trim(), amount: amt, currency });
+      toast.success('ZAAD payment received and recorded.');
+      onClose();
+      onDone?.();
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={requestZaad.isPending ? () => {} : onClose}
+      title="Send ZAAD Payment Request"
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={requestZaad.isPending}>Cancel</Button>
+        <Button type="submit" form="zaad-request-form" disabled={requestZaad.isPending}>
+          {requestZaad.isPending ? 'Waiting for customer…' : 'Send Request'}
+        </Button>
+      </>}
+    >
+      <form id="zaad-request-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+          A payment confirmation prompt is sent straight to this phone number. This screen waits until the customer approves it — that can take a few seconds.
+        </p>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>Customer's ZAAD phone number</span>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} placeholder="e.g. 0634259981" disabled={requestZaad.isPending} />
+        </label>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Amount ({currency})</span>
+            <input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} style={inputStyle} disabled={requestZaad.isPending} />
+          </label>
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Currency</span>
+            <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={inputStyle} disabled={requestZaad.isPending}>
+              <option value="USD">USD</option>
+              <option value="SLSH">SLSH</option>
+            </select>
+          </label>
+        </div>
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
   );
 }
 
