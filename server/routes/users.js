@@ -1,7 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { sniffFileType } = require('../lib/fileSniff');
 
 // User & Access Administration — Implementation Spec §16/§17. Admin-only
 // user-management surface (Preconditions §9's default, not separately
@@ -23,6 +27,74 @@ function parseStrictId(raw) {
   if (!/^\d+$/.test(String(raw))) return null;
   return parseInt(raw, 10);
 }
+
+// ---------- Personal profile photo (Phase 10, user-requested) ----------
+// 'sawir soo saaran karo' — every logged-in user (any role), not just
+// admin, can view/replace their OWN avatar. Registered before GET /:id
+// so 'me' is never parsed as a numeric user id. Mirrors
+// routes/settings.js's own company-logo upload pattern exactly (same
+// multer disk-storage shape, same fileSniff content check, same
+// delete-old-file-after-new-one-is-committed ordering) — a second,
+// parallel image-upload concept was deliberately avoided.
+const AVATAR_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'avatars');
+fs.mkdirSync(AVATAR_UPLOAD_DIR, { recursive: true });
+const AVATAR_ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/jpg'];
+const uploadAvatar = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, AVATAR_UPLOAD_DIR),
+    filename: (req, file, cb) => cb(null, `${req.user.id}-${Date.now()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, AVATAR_ALLOWED_MIME.includes(file.mimetype)),
+});
+
+router.get('/me/avatar', authenticateToken, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT avatar_storage_path, avatar_mime_type FROM v2_users WHERE id = $1', [req.user.id]);
+    const row = r.rows[0];
+    if (!row || !row.avatar_storage_path) return res.status(404).json({ error: { message: 'No avatar set.', code: 'NOT_FOUND' } });
+    const filePath = path.join(AVATAR_UPLOAD_DIR, row.avatar_storage_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Avatar file not found.', code: 'NOT_FOUND' } });
+    res.setHeader('Content-Type', row.avatar_mime_type || 'application/octet-stream');
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load avatar.', code: 'INTERNAL' } });
+  }
+});
+
+router.post('/me/avatar', authenticateToken, (req, res, next) => {
+  uploadAvatar.single('avatar')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: { message: 'Photo exceeds the maximum allowed size (2MB).', code: 'VALIDATION' } });
+      return res.status(400).json({ error: { message: 'Invalid photo upload.', code: 'VALIDATION' } });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: { message: 'A photo file is required (png or jpeg).', code: 'VALIDATION' } });
+  if (!sniffFileType(fs.readFileSync(req.file.path), req.file.mimetype)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
+  }
+  try {
+    const existing = await pool.query('SELECT avatar_storage_path FROM v2_users WHERE id = $1', [req.user.id]);
+    const oldPath = existing.rows[0]?.avatar_storage_path ? path.join(AVATAR_UPLOAD_DIR, existing.rows[0].avatar_storage_path) : null;
+
+    await pool.query(
+      `UPDATE v2_users SET avatar_storage_path = $1, avatar_original_filename = $2, avatar_mime_type = $3 WHERE id = $4`,
+      [req.file.filename, req.file.originalname, req.file.mimetype, req.user.id]
+    );
+    if (oldPath && fs.existsSync(oldPath)) fs.unlink(oldPath, () => {}); // best-effort, after the DB row already points at the new file
+
+    await logAudit({
+      actorId: req.user.id, actorUsername: req.user.username, action: 'user.avatar_update',
+      entityType: 'v2_user', entityId: req.user.id, before: null, after: { avatar_original_filename: req.file.originalname },
+    });
+    res.json({ data: { avatar_url: '/v2/users/me/avatar?' + Date.now() } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to save avatar.', code: 'INTERNAL' } });
+  }
+});
 
 router.get('/', authenticateToken, requireRole('admin'), async (req, res) => {
   try {

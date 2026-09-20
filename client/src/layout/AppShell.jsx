@@ -5,6 +5,7 @@ import Sidebar from './Sidebar.jsx';
 import MobileTabBar from './MobileTabBar.jsx';
 import MobileNavDrawer from './MobileNavDrawer.jsx';
 import FieldTopBar from './FieldTopBar.jsx';
+import TopBar from './TopBar.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 const FIELD_ROLES = ['collector', 'cashier'];
@@ -95,23 +96,33 @@ export default function AppShell() {
           this ancestor is actually allowed to shrink to the flexed width.
           Unchanged by Sidebar / Navigation UX — this property is preserved
           exactly, in every Sidebar/drawer state (Implementation Spec §16). */}
-      <main style={{
-        flex: 1, minWidth: 0,
-        // User-reported gap (Phase 10): field roles (cashier) had no
-        // header at all — see FieldTopBar.jsx. paddingTop drops to 0
-        // here (was a flat 16px) because FieldTopBar now owns that
-        // top space itself via its own padding + sticky positioning;
-        // its own bottom margin (-16px…16px) reclaims the 16px side
-        // gutters so it bleeds edge-to-edge while <Outlet/> content
-        // keeps the same 16px it always had.
-        paddingTop: showFieldTabBar ? 0 : (showToggleButton ? '56px' : '24px'),
-        paddingLeft: showFieldTabBar ? '16px' : '24px',
-        paddingRight: showFieldTabBar ? '16px' : '24px',
-        paddingBottom: showFieldTabBar ? '80px' : '24px',
-        maxWidth: '1400px',
-      }}>
-        {showFieldTabBar && <FieldTopBar />}
-        <Outlet />
+      <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Top Bar — Phase 10, user-requested (search/notifications/
+            profile/theme). Desktop, non-field roles only; field roles
+            keep their own FieldTopBar below, unchanged. Sits OUTSIDE the
+            padded content wrapper so it bleeds edge-to-edge like
+            FieldTopBar's own header already does. */}
+        {!showFieldTabBar && <TopBar />}
+        <div style={{
+          flex: 1,
+          // User-reported gap (Phase 10): field roles (cashier) had no
+          // header at all — see FieldTopBar.jsx. paddingTop drops to 0
+          // here (was a flat 16px) because FieldTopBar now owns that
+          // top space itself via its own padding + sticky positioning;
+          // its own bottom margin (-16px…16px) reclaims the 16px side
+          // gutters so it bleeds edge-to-edge while <Outlet/> content
+          // keeps the same 16px it always had. Non-field roles no longer
+          // need the old fixed-toggle-button top offset now that TopBar
+          // itself occupies that space in normal flow.
+          paddingTop: showFieldTabBar ? 0 : '24px',
+          paddingLeft: showFieldTabBar ? '16px' : '24px',
+          paddingRight: showFieldTabBar ? '16px' : '24px',
+          paddingBottom: showFieldTabBar ? '80px' : '24px',
+          maxWidth: '1400px',
+        }}>
+          {showFieldTabBar && <FieldTopBar />}
+          <Outlet />
+        </div>
       </main>
       {showFieldTabBar && <MobileTabBar />}
     </div>

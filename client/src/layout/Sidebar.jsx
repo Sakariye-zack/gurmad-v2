@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
@@ -7,11 +7,11 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
-// Staff Notifications — additive-only import, does not touch NAV or any
-// existing nav-item logic below.
-import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
-import ThemeToggle from '../components/ThemeToggle.jsx';
+import { useCompanyName } from '../hooks/useSettings.js';
+// ThemeToggle/NotificationBell moved to layout/TopBar.jsx (Phase 10,
+// user-requested top bar redesign) — no longer rendered here, avoiding
+// the same two controls appearing twice on screen.
 
 // Information_Architecture.md §2: office-role navigation. Groups mirror the
 // approved V2 IA; only foundation-relevant routes are wired to real pages —
@@ -209,6 +209,18 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const { ungrouped, byGroup } = groupNavItems();
+  // System name — user-requested ('systemka magaciisa waan badalay...
+  // meel kasta oo magaca system ku ka soo muuqanayo waa in aan markan
+  // update gareeyo uu is badalaaa'): was a hardcoded 'GURMAD V2' string
+  // here (and the browser tab title, set below), neither of which ever
+  // reflected a Settings > Company Information name change. Falls back
+  // to the same literal 'GURMAD V2' when no company name is set yet —
+  // never a blank header.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD V2';
+  useEffect(() => {
+    document.title = companyName;
+  }, [companyName]);
   // Dashboard first, then every group in GROUP_ORDER, then any remaining
   // ungrouped item (Account Security) pinned last — same visual position
   // it always occupied.
@@ -239,14 +251,10 @@ export default function Sidebar() {
           always shown alongside the mark, not conditionally on failure. */}
       <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
-          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '17px', color: 'var(--brand)' }}>GURMAD</span>} height={26} style={{ flexShrink: 0 }} />
-          <span style={{ fontWeight: 800, fontSize: '15px', letterSpacing: '-0.01em', color: 'var(--text)', whiteSpace: 'nowrap' }}>
-            GURMAD V2
+          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '17px', color: 'var(--brand)' }}>{companyName}</span>} height={26} style={{ flexShrink: 0 }} />
+          <span style={{ fontWeight: 800, fontSize: '15px', letterSpacing: '-0.01em', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {companyName}
           </span>
-          <div style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto', flexShrink: 0 }}>
-            <ThemeToggle />
-            <NotificationBell />
-          </div>
         </div>
       </div>
 

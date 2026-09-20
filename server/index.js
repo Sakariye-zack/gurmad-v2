@@ -61,6 +61,7 @@ const inventoryRouter = require('./routes/inventory');
 const documentsRouter = require('./routes/documents');
 // Master Functional Completion Program — Phase 6: Import/Export + Master Data Governance.
 const masterDataImportExportRouter = require('./routes/masterDataImportExport');
+const searchRouter = require('./routes/search');
 
 const app = express();
 
@@ -163,6 +164,7 @@ app.use('/api/v2/procurement', procurementRouter);
 app.use('/api/v2/inventory', inventoryRouter);
 app.use('/api/v2/documents', documentsRouter);
 app.use('/api/v2/master-data', masterDataImportExportRouter);
+app.use('/api/v2/search', searchRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {

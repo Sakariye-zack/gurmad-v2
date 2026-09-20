@@ -9,6 +9,20 @@ export function useCompanySettings() {
   });
 }
 
+// Company name — Phase 10, user-requested ('meel kasta oo magaca system
+// ku ka soo muuqanayo waa in aan markan update gareeyo uu is badalaaa').
+// Any authenticated role (unlike useCompanySettings() above, which is
+// admin-only) — matches GET /v2/settings/company/name's own public-to-
+// any-role exception, same rationale as the company logo. Used wherever
+// the system's name is displayed, not just Settings itself.
+export function useCompanyName() {
+  return useQuery({
+    queryKey: ['v2', 'settings', 'company-name'],
+    queryFn: () => apiClient.get('/v2/settings/company/name'),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useUpdateCompanySettings() {
   const qc = useQueryClient();
   return useMutation({

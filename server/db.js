@@ -921,6 +921,18 @@ async function runMigrations() {
   // (e.g. a future manual INSERT) get the correct 0 baseline.
   await pool.query(`ALTER TABLE v2_users ALTER COLUMN token_version SET DEFAULT 0;`);
 
+  // Personal profile photo — Phase 10, user-requested ('sawir soo saaran
+  // karo' — every user should be able to upload their own picture, not
+  // just the one company-wide logo Settings already supports). Same
+  // storage-path/original-filename/mime-type shape as
+  // company_settings.logo_* below, reusing the identical multer +
+  // fileSniff + disk-storage pattern (routes/users.js's own POST
+  // /me/avatar) — a second, parallel image-upload concept was
+  // deliberately avoided.
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS avatar_storage_path VARCHAR(255);`);
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS avatar_original_filename VARCHAR(255);`);
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS avatar_mime_type VARCHAR(100);`);
+
   // Password reset — same shape as customer_portal_password_resets
   // (token-hash lookup, single-use via used_at, TTL via expires_at), per
   // Implementation Spec §16 (POST /api/v2/auth/password/reset/*).

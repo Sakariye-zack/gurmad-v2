@@ -40,6 +40,25 @@ router.get('/company/logo', async (req, res) => {
   }
 });
 
+// GET /company/name — Phase 10, user-requested ('systemka magaciisa waan
+// badalay... meel kasta oo magaca system ku ka soo muuqanayo waa in aan
+// markan update gareeyo uu is badalaaa' — every place the system's name
+// appears must reflect a Settings change immediately). Same public
+// exception and rationale as GET /company/logo just above — a company
+// name is branding, not sensitive data, and needs to render for every
+// authenticated role (Sidebar.jsx's own header, login screens, browser
+// tab title), not just admin. Deliberately a separate, minimal endpoint
+// rather than widening GET /company itself, which also returns
+// address/phone/email — fields with no such "every role" justification.
+router.get('/company/name', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT company_name FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
+    res.json({ data: { company_name: result.rows[0]?.company_name || null } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load company name.', code: 'INTERNAL' } });
+  }
+});
+
 router.use(authenticateToken, requireRole('admin'));
 
 const SETTINGS_ROW_ID = 1; // single-row convention, enforced here only
