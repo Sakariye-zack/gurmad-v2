@@ -59,6 +59,12 @@ export const NAV = [
   { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, roles: ['admin'], group: 'HR & Payroll' },
   { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
   { to: '/payroll/history', label: 'Payroll History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
+  // HR Reports — gap-audit sweep (Phase 10, continuation): GET
+  // /v2/hr-reports/headcount, /attendance-summary, /leave-summary were
+  // fully built server-side, zone-scoped for gudoomiye/zone_accountant,
+  // but had zero UI callers — same OPERATIONAL_ROLES set the backend
+  // routes themselves require (server/routes/hrReports.js).
+  { to: '/hr/reports', label: 'HR Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
 
   // ---- Fleet ----
   { to: '/trucks', label: 'Trucks', icon: Truck, group: 'Fleet' },

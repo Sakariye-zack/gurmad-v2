@@ -23,6 +23,7 @@ import MapPage from '../pages/map/MapPage.jsx';
 // routes only — no Sidebar/MobileNavDrawer/AppShell/MobileTabBar change
 // (CLOSED/FROZEN); nav entries are a documented future CR (Spec §18).
 import AttendanceListPage from '../pages/hr/AttendanceListPage.jsx';
+import HrReportsPage from '../pages/hr/HrReportsPage.jsx';
 import LeaveTypesPage from '../pages/hr/LeaveTypesPage.jsx';
 import LeaveRequestsListPage from '../pages/hr/LeaveRequestsListPage.jsx';
 import PayrollPeriodsListPage from '../pages/payroll/PayrollPeriodsListPage.jsx';
@@ -164,6 +165,7 @@ export const router = createBrowserRouter([
       { path: 'map', element: <MapPage /> },
       // Phase 1 HR & Payroll — nav entry added in Sidebar.jsx (Phase 8 audit).
       { path: 'hr/attendance', element: <AttendanceListPage /> },
+      { path: 'hr/reports', element: <HrReportsPage /> },
       { path: 'hr/leave-types', element: <LeaveTypesPage /> },
       { path: 'hr/leave-requests', element: <LeaveRequestsListPage /> },
       { path: 'payroll/periods', element: <PayrollPeriodsListPage /> },
