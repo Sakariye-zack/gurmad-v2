@@ -28,35 +28,45 @@ const HOUSE_ICON_SVG = `
   <path d="M15 8.5l7 6.2v8.3h-4.6v-5.2h-4.8v5.2H8V14.7z" fill="#fff"/>
 </svg>`;
 
-// Truck marker — a distinct glyph/color from the customer house pin so
-// the two are never confused at a glance. Live position only (last 10
-// minutes, enforced server-side — see routes/map.js's own comment), so
-// this always reads as "roughly where this collector is right now",
-// never a route history.
-// User-reported ('gaadhigu truck caadi ah ha u eekaado' — the truck
-// should look like an actual, ordinary truck): the first version was too
-// abstract a glyph. Redrawn as a recognizable side-profile delivery/
-// waste truck — cab with a windshield, a cargo box behind it, sitting on
-// two wheels — rather than a symbolic mark.
+// Truck marker — user-reported, second pass ('sidaaso kale gaadhigu
+// wadada ha u maro... oo gaadhi khashiish ha noqdo waliba': it should sit
+// flat on the road like a real vehicle, not stand up like a location
+// pin, and should specifically read as a WASTE/garbage truck). Dropped
+// the teardrop-pin mount entirely (that shape means "a place", not "a
+// moving vehicle") in favor of a flat side-profile truck badge with a
+// soft ground shadow, anchored at its own wheels so it looks planted on
+// the street rather than hovering above it. Waste-truck cues specifically
+// (not a generic delivery box): an orange rear compactor body with a
+// hopper lip and a rear loading edge, a white cab, dark wheels with hubs.
 const TRUCK_ICON_SVG = `
-<svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">
-  <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 23 15 23s15-12.5 15-23C30 6.716 23.284 0 15 0z" fill="var(--info)"/>
-  <circle cx="15" cy="15" r="10.5" fill="var(--info-dark, #1d4e89)"/>
-  <g transform="translate(4.2, 9.5)">
-    <!-- Cargo box (behind the cab) -->
-    <rect x="0" y="0.5" width="8.4" height="6.3" rx="0.6" fill="#fff"/>
-    <!-- Cab (front) -->
-    <path d="M8.4 2.6h4.4c.5 0 .9.25 1.15.65l1.55 2.45c.15.25.25.55.25.85v1.2h-7.35V2.6z" fill="#fff"/>
-    <!-- Windshield -->
-    <path d="M9.5 3.6h2.75l1.35 2.1H9.5V3.6z" fill="var(--info-dark, #1d4e89)"/>
-    <!-- Chassis line -->
-    <rect x="0" y="6.6" width="15.65" height="1" fill="#fff"/>
-    <!-- Wheels -->
-    <circle cx="3.3" cy="8.3" r="1.65" fill="#fff"/>
-    <circle cx="3.3" cy="8.3" r="0.7" fill="var(--info-dark, #1d4e89)"/>
-    <circle cx="12" cy="8.3" r="1.65" fill="#fff"/>
-    <circle cx="12" cy="8.3" r="0.7" fill="var(--info-dark, #1d4e89)"/>
-  </g>
+<svg width="44" height="26" viewBox="0 0 44 26" xmlns="http://www.w3.org/2000/svg">
+  <!-- Ground shadow — reads as "sitting on the road", not floating -->
+  <ellipse cx="22" cy="23.5" rx="17" ry="2" fill="rgba(0,0,0,0.3)"/>
+
+  <!-- Rear compactor body -->
+  <rect x="2" y="6" width="23" height="13" rx="1.3" fill="#e2531d"/>
+  <!-- Hopper lip along the top edge -->
+  <rect x="2" y="6" width="23" height="2.6" rx="1" fill="#b8410f"/>
+  <!-- Rear loading edge -->
+  <rect x="1" y="7.5" width="2.2" height="11.5" rx="0.6" fill="#8f3208"/>
+  <!-- Panel line / body seam -->
+  <line x1="14" y1="9" x2="14" y2="19" stroke="#b8410f" stroke-width="1"/>
+
+  <!-- Cab -->
+  <path d="M25 9.5h6.4c.55 0 1.05.28 1.35.75l2.55 4v4.75H25V9.5z" fill="#f4f6f5"/>
+  <!-- Windshield -->
+  <path d="M26.3 10.9h4.6l2.05 3.15h-6.65v-3.15z" fill="#2f6fa8"/>
+  <!-- Bumper -->
+  <rect x="35" y="16.8" width="2.4" height="2.4" rx="0.5" fill="#2b2f2e"/>
+
+  <!-- Chassis -->
+  <rect x="2" y="19" width="34.5" height="1.4" fill="#2b2f2e"/>
+
+  <!-- Wheels -->
+  <circle cx="9" cy="21.3" r="3" fill="#1c1f1e"/>
+  <circle cx="9" cy="21.3" r="1.25" fill="#9aa0a0"/>
+  <circle cx="30.5" cy="21.3" r="3" fill="#1c1f1e"/>
+  <circle cx="30.5" cy="21.3" r="1.25" fill="#9aa0a0"/>
 </svg>`;
 
 export default function MapCanvas({ points, trucks }) {
