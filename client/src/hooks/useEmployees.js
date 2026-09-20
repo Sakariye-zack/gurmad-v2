@@ -23,6 +23,17 @@ export function useEmployee(id) {
   });
 }
 
+// Self-service — Phase 10 gap-audit sweep: resolves the caller's own
+// numeric employee_id (GET /v2/employees/me), needed to then call
+// useEmployeeEffectiveStatus() (useLeave.js) for a self-service page.
+export function useMyEmployeeId() {
+  return useQuery({
+    queryKey: ['v2', 'employees', 'me'],
+    queryFn: () => apiClient.get('/v2/employees/me'),
+    retry: false,
+  });
+}
+
 export function useCreateEmployee() {
   const qc = useQueryClient();
   return useMutation({

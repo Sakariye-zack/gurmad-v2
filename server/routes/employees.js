@@ -254,6 +254,25 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
   }
 });
 
+// GET /me — Phase 10 gap-audit sweep, user-approved second additive
+// change to this CLOSED/FROZEN file (the first was :id/effective-status
+// below). Self-scoped only, via the same resolveEmployeeIdForRequestUser()
+// helper /attendance/me and /leave-requests/me already use — no new
+// authorization logic. Exists purely so a self-service page (My HR) can
+// discover its own numeric employee_id, which none of those /me endpoints
+// return when the caller has no attendance/leave rows yet, then pass it to
+// the existing GET /:id/effective-status. Registered before /:id so 'me'
+// is never parsed as a numeric employee id.
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    const myEmployeeId = await resolveEmployeeIdForRequestUser(req.user);
+    if (myEmployeeId === null) return res.status(403).json({ error: { message: 'No employee record is linked to your account.', code: 'FORBIDDEN' } });
+    res.json({ data: { employee_id: myEmployeeId } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load your employee record.', code: 'INTERNAL' } });
+  }
+});
+
 router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });

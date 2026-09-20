@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { UserCircle2, Plus } from 'lucide-react';
 import { PageHeader, Card, Button, StatusBadge, LoadingState, Modal, useToast } from '../../components/ui/index.js';
 import { useMyAttendance } from '../../hooks/useAttendance.js';
-import { useMyLeaveRequests, useFileMyLeaveRequest, useLeaveTypes } from '../../hooks/useLeave.js';
+import { useMyLeaveRequests, useFileMyLeaveRequest, useLeaveTypes, useEmployeeEffectiveStatus } from '../../hooks/useLeave.js';
+import { useMyEmployeeId } from '../../hooks/useEmployees.js';
 
 const ATTENDANCE_STATUS_MAP = { present: 'success', absent: 'danger', late: 'warning', on_leave: 'info', half_day: 'warning' };
 const LEAVE_STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', cancelled: 'info' };
+const EFFECTIVE_STATUS_MAP = { active: 'success', on_leave: 'info', suspended: 'warning', archived: 'danger' };
 
 // New self-service page — user-requested gap-audit sweep ('sii wad
 // qaybaha kale'). useMyAttendance() / useMyLeaveRequests() /
@@ -19,15 +21,23 @@ const LEAVE_STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'd
 export default function MyHrPage() {
   const { data: attendanceData, isLoading: attendanceLoading, error: attendanceError } = useMyAttendance();
   const { data: leaveData, isLoading: leaveLoading, error: leaveError } = useMyLeaveRequests();
+  // Gap-audit sweep, continuation: useEmployeeEffectiveStatus() existed
+  // but needed a numeric employee_id no /me endpoint returned. GET
+  // /v2/employees/me (new, user-approved additive route) resolves that
+  // id first; effective-status is then fetched only once it's known.
+  const { data: myIdData, error: myIdError } = useMyEmployeeId();
+  const myEmployeeId = myIdData?.data?.employee_id;
+  const { data: effectiveStatusData } = useEmployeeEffectiveStatus(myEmployeeId);
   const [fileOpen, setFileOpen] = useState(false);
   const attendance = attendanceData?.data || [];
   const leave = leaveData?.data || [];
+  const effectiveStatus = effectiveStatusData?.data?.effective_status;
   // Both /me endpoints return the identical 403 when no employee record
   // is linked to this login (e.g. a pure office/admin account that was
   // never linked to an Employees entry) — shown as a plain explanatory
   // state, never a raw error screen, since this is an expected outcome
   // for some accounts, not a failure.
-  const notLinked = attendanceError?.status === 403 || leaveError?.status === 403;
+  const notLinked = attendanceError?.status === 403 || leaveError?.status === 403 || myIdError?.status === 403;
 
   return (
     <div>
@@ -42,6 +52,12 @@ export default function MyHrPage() {
         </Card>
       ) : (
         <>
+          {effectiveStatus && (
+            <Card style={{ padding: '16px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Label>Current Status</Label>
+              <StatusBadge status={effectiveStatus} map={EFFECTIVE_STATUS_MAP} />
+            </Card>
+          )}
           <Card style={{ padding: '16px', marginBottom: '16px' }}>
             <Label>My Attendance</Label>
             {attendanceLoading && <LoadingState label="Loading…" />}
