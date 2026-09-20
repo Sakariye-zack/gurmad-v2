@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2 } from 'lucide-react';
+import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2, RefreshCw, Clock, Receipt } from 'lucide-react';
 import { PageHeader, StatCard, Button, DataTable, LoadingState, ErrorState } from '../components/ui/index.js';
 import RoleGate from '../components/RoleGate.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -49,10 +49,18 @@ function CollectorDashboard({ summary }) {
   const mine = rows[0];
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <StatCard label="Assigned Today" value={mine?.assigned ?? 0} icon={ClipboardList} />
         <StatCard label="Serviced" value={mine?.serviced ?? 0} accent="var(--success)" />
         <StatCard label="Missed" value={mine?.missed ?? 0} accent="var(--danger)" />
+        {/* Skipped/Rescheduled — user-reported gap-audit ('dashboardka
+            maxaa iga dhiman features'): getCollectorPerformance() already
+            computes both (same function Reports -> Collector tab uses),
+            but this personal view only ever showed Assigned/Serviced/
+            Missed/Completion — a collector had no way to see their own
+            skipped/rescheduled counts without leaving the Dashboard. */}
+        <StatCard label="Skipped" value={mine?.skipped ?? 0} accent="var(--warning)" />
+        <StatCard label="Rescheduled" value={mine?.rescheduled ?? 0} accent="var(--info)" />
         <StatCard label="Completion Rate" value={mine?.completionRate != null ? `${mine.completionRate}%` : '—'} accent="var(--info)" />
       </div>
       <div style={{ padding: '16px', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)', color: 'var(--text-muted)', fontSize: '13px' }}>
@@ -69,13 +77,22 @@ function FinancialOnlyDashboard({ summary }) {
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <StatCard label="Revenue Collected" value={`$${(r.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" />
-        <StatCard label="Payments" value={r.paymentCount || 0} />
+        <StatCard label="Payments" value={r.paymentCount || 0} icon={Receipt} />
         <StatCard label="Outstanding" value={`$${(r.outstanding || 0).toFixed(2)}`} accent="var(--warning)" />
+        {/* Debt — user-reported gap-audit ('dashboardka maxaa iga dhiman
+            features'): getRevenueForPeriod() already returns r.debt (the
+            same field the Admin FullDashboard's own Cashout Snapshot
+            shows), but this cashier/head-of-cashiers view never did. */}
+        <StatCard label="Debt" value={`$${(r.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
         <StatCard label="Cashout Expected" value={`$${(c.expected || 0).toFixed(2)}`} icon={Wallet2} />
         <StatCard label="Cashout Actual" value={`$${(c.actual || 0).toFixed(2)}`} />
         <StatCard label="Shortage" value={`$${(c.shortage || 0).toFixed(2)}`} accent="var(--danger)" />
+        {/* Surplus — same gap: getCashoutSummary() already computes
+            c.totals.surplus (Reports -> Cashout tab shows it), this view
+            only ever showed Shortage. */}
+        <StatCard label="Surplus" value={`$${(c.surplus || 0).toFixed(2)}`} accent="var(--info)" />
       </div>
     </div>
   );
@@ -89,6 +106,14 @@ function FullDashboard({ summary }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '20px' }}>
         <StatCard label="Active Batches" value={e.activeBatches ?? '—'} icon={ClipboardList} />
         <StatCard label="Customers" value={e.totalCustomers ?? '—'} icon={Users} accent="var(--info)" />
+        {/* Active Collection Cycles / Payments — user-reported gap-audit
+            ('dashboardka maxaa iga dhiman features'): getExecutiveSummary()
+            already returns activeCollectionCycles (Reports -> Overview
+            shows it) and getRevenueForPeriod() already returns
+            paymentCount (the Financial-only dashboard above already
+            shows it) — this view never surfaced either. */}
+        <StatCard label="Active Cycles" value={e.activeCollectionCycles ?? '—'} icon={RefreshCw} />
+        <StatCard label="Payments" value={rev.paymentCount ?? 0} icon={Receipt} />
         <StatCard label="Completion Rate" value={e.completionRate != null ? `${e.completionRate}%` : '—'} accent="var(--success)" />
         <StatCard label="Revenue Today" value={`$${(rev.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" />
       </div>
@@ -98,6 +123,11 @@ function FullDashboard({ summary }) {
         <StatCard label="Missed" value={e.missed ?? 0} accent="var(--danger)" />
         <StatCard label="Skipped" value={e.skipped ?? 0} accent="var(--warning)" />
         <StatCard label="Rescheduled" value={e.rescheduled ?? 0} accent="var(--info)" />
+        {/* Pending — same gap: getExecutiveSummary() already returns
+            e.pending (collection events not yet resolved today), a
+            different, equally useful metric from the $ Outstanding
+            Balance already shown next to it. */}
+        <StatCard label="Pending" value={e.pending ?? 0} icon={Clock} />
         <StatCard label="Outstanding Balance" value={`$${(rev.outstanding || 0).toFixed(2)}`} accent="var(--warning)" />
       </div>
 
@@ -106,13 +136,23 @@ function FullDashboard({ summary }) {
         <DataTable
           isEmpty={(summary.zonePerformance || []).length === 0}
           emptyTitle="No zone activity today"
-          columns={[{ label: 'Zone' }, { label: 'Batches' }, { label: 'Serviced' }, { label: 'Completion %' }, { label: 'Revenue' }]}
+          columns={[
+            { label: 'Zone' }, { label: 'Batches' }, { label: 'Serviced' },
+            // Missed/Skipped/Rescheduled — same gap: getZonePerformance()
+            // already computes all three per zone (Reports -> Zone tab
+            // shows them), this table only ever showed Serviced.
+            { label: 'Missed' }, { label: 'Skipped' }, { label: 'Rescheduled' },
+            { label: 'Completion %' }, { label: 'Revenue' },
+          ]}
         >
           {(summary.zonePerformance || []).map((z) => (
             <tr key={z.zone_id} style={{ borderBottom: '1px solid var(--border)' }}>
               <td style={cellStyle}><strong>{z.zone_name}</strong></td>
               <td style={cellStyle} className="tabular-nums">{z.batches}</td>
               <td style={cellStyle} className="tabular-nums">{z.serviced}</td>
+              <td style={cellStyle} className="tabular-nums">{z.missed}</td>
+              <td style={cellStyle} className="tabular-nums">{z.skipped}</td>
+              <td style={cellStyle} className="tabular-nums">{z.rescheduled}</td>
               <td style={cellStyle} className="tabular-nums">{z.completionRate != null ? `${z.completionRate}%` : '—'}</td>
               <td style={cellStyle} className="tabular-nums">${(z.revenue?.collected || 0).toFixed(2)}</td>
             </tr>
@@ -143,6 +183,10 @@ function FullDashboard({ summary }) {
         <StatCard label="Expected" value={`$${(summary.cashout?.totals?.expected || 0).toFixed(2)}`} icon={Wallet2} />
         <StatCard label="Actual" value={`$${(summary.cashout?.totals?.actual || 0).toFixed(2)}`} />
         <StatCard label="Shortage" value={`$${(summary.cashout?.totals?.shortage || 0).toFixed(2)}`} accent="var(--danger)" />
+        {/* Surplus — same gap: getCashoutSummary() already computes
+            totals.surplus (Reports -> Cashout tab shows it alongside
+            Shortage), this snapshot only ever showed Shortage. */}
+        <StatCard label="Surplus" value={`$${(summary.cashout?.totals?.surplus || 0).toFixed(2)}`} accent="var(--info)" />
         <StatCard label="Debt" value={`$${(rev.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} />
       </div>
     </div>
