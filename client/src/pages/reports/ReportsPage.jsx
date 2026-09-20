@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { BarChart3, Printer, Download } from 'lucide-react';
 import { PageHeader, Button, Card, DataTable, StatusBadge, StatCard, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
@@ -38,7 +39,15 @@ const TABS = [
 export default function ReportsPage() {
   const { user } = useAuth();
   const isCollector = (user?.role || '').toLowerCase() === 'collector';
-  const [tab, setTab] = useState(isCollector ? 'collector' : 'overview');
+  // Deep-linkable tab/status — user-requested ('dashboardka... hadan ku
+  // dhufto waa in details ku ii soo baxaan'): Dashboard stat cards now
+  // navigate here with ?tab=&status= so clicking e.g. "Skipped" lands
+  // directly on the History tab pre-filtered to skipped, instead of just
+  // opening Reports at its default Overview tab.
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const initialStatus = searchParams.get('status') || '';
+  const [tab, setTab] = useState(initialTab || (isCollector ? 'collector' : 'overview'));
   const [period, setPeriod] = useState('today');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -84,7 +93,7 @@ export default function ReportsPage() {
       {tab === 'collector' && <CollectorTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('collector-performance')} isCollector={isCollector} />}
       {tab === 'zone' && <ZoneTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('zone-performance')} />}
       {tab === 'truck' && <TruckTab period={period} customStart={customStart} customEnd={customEnd} />}
-      {tab === 'history' && <HistoryTab period={period} customStart={customStart} customEnd={customEnd} onExport={(extra) => handleExport('collection-history', extra)} />}
+      {tab === 'history' && <HistoryTab period={period} customStart={customStart} customEnd={customEnd} initialStatus={initialStatus} onExport={(extra) => handleExport('collection-history', extra)} />}
       {tab === 'revenue' && (
         <RoleGate roles={['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier']}>
           <RevenueTab period={period} customStart={customStart} customEnd={customEnd} />
@@ -240,8 +249,8 @@ function TruckTab({ period, customStart, customEnd }) {
 // flat unfiltered list only. The backend's own GET /collection-history
 // already accepted a ?status= filter; nothing in the UI ever exposed
 // it, and the export endpoint didn't exist for this category at all.
-function HistoryTab({ period, customStart, customEnd, onExport }) {
-  const [statusFilter, setStatusFilter] = useState('');
+function HistoryTab({ period, customStart, customEnd, onExport, initialStatus }) {
+  const [statusFilter, setStatusFilter] = useState(initialStatus || '');
   const { data, isLoading, error, refetch } = useCollectionHistory(period, customStart, customEnd, { status: statusFilter || undefined });
   if (isLoading) return <LoadingState label="Loading collection history…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;

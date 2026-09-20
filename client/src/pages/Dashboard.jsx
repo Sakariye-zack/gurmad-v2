@@ -33,15 +33,15 @@ export default function Dashboard() {
 
       {isLoading && <LoadingState label="Loading dashboard…" />}
       {error && <ErrorState message={error.message} onRetry={refetch} />}
-      {data?.data && <DashboardContent summary={data.data} role={role} />}
+      {data?.data && <DashboardContent summary={data.data} role={role} navigate={navigate} />}
     </div>
   );
 }
 
-function DashboardContent({ summary, role }) {
+function DashboardContent({ summary, role, navigate }) {
   if (role === 'collector') return <CollectorDashboard summary={summary} />;
-  if (role === 'head_of_cashiers' || role === 'cashier') return <FinancialOnlyDashboard summary={summary} />;
-  return <FullDashboard summary={summary} />;
+  if (role === 'head_of_cashiers' || role === 'cashier') return <FinancialOnlyDashboard summary={summary} navigate={navigate} />;
+  return <FullDashboard summary={summary} navigate={navigate} />;
 }
 
 function CollectorDashboard({ summary }) {
@@ -70,65 +70,70 @@ function CollectorDashboard({ summary }) {
   );
 }
 
-function FinancialOnlyDashboard({ summary }) {
+function FinancialOnlyDashboard({ summary, navigate }) {
   const r = summary.revenue || {};
   const c = summary.cashout?.totals || {};
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Revenue Collected" value={`$${(r.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" />
-        <StatCard label="Payments" value={r.paymentCount || 0} icon={Receipt} />
-        <StatCard label="Outstanding" value={`$${(r.outstanding || 0).toFixed(2)}`} accent="var(--warning)" />
+        <StatCard label="Revenue Collected" value={`$${(r.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" onClick={() => navigate('/reports?tab=revenue')} />
+        <StatCard label="Payments" value={r.paymentCount || 0} icon={Receipt} onClick={() => navigate('/reports?tab=payments')} />
+        <StatCard label="Outstanding" value={`$${(r.outstanding || 0).toFixed(2)}`} accent="var(--warning)" onClick={() => navigate('/financial/invoices?status=unpaid')} />
         {/* Debt — user-reported gap-audit ('dashboardka maxaa iga dhiman
             features'): getRevenueForPeriod() already returns r.debt (the
             same field the Admin FullDashboard's own Cashout Snapshot
             shows), but this cashier/head-of-cashiers view never did. */}
-        <StatCard label="Debt" value={`$${(r.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} />
+        <StatCard label="Debt" value={`$${(r.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} onClick={() => navigate('/financial/debts')} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
-        <StatCard label="Cashout Expected" value={`$${(c.expected || 0).toFixed(2)}`} icon={Wallet2} />
-        <StatCard label="Cashout Actual" value={`$${(c.actual || 0).toFixed(2)}`} />
-        <StatCard label="Shortage" value={`$${(c.shortage || 0).toFixed(2)}`} accent="var(--danger)" />
+        <StatCard label="Cashout Expected" value={`$${(c.expected || 0).toFixed(2)}`} icon={Wallet2} onClick={() => navigate('/financial/cashouts')} />
+        <StatCard label="Cashout Actual" value={`$${(c.actual || 0).toFixed(2)}`} onClick={() => navigate('/financial/cashouts')} />
+        <StatCard label="Shortage" value={`$${(c.shortage || 0).toFixed(2)}`} accent="var(--danger)" onClick={() => navigate('/reports?tab=cashout')} />
         {/* Surplus — same gap: getCashoutSummary() already computes
             c.totals.surplus (Reports -> Cashout tab shows it), this view
             only ever showed Shortage. */}
-        <StatCard label="Surplus" value={`$${(c.surplus || 0).toFixed(2)}`} accent="var(--info)" />
+        <StatCard label="Surplus" value={`$${(c.surplus || 0).toFixed(2)}`} accent="var(--info)" onClick={() => navigate('/reports?tab=cashout')} />
       </div>
     </div>
   );
 }
 
-function FullDashboard({ summary }) {
+function FullDashboard({ summary, navigate }) {
   const e = summary.executive || {};
   const rev = e.revenue || {};
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-        <StatCard label="Active Batches" value={e.activeBatches ?? '—'} icon={ClipboardList} />
-        <StatCard label="Customers" value={e.totalCustomers ?? '—'} icon={Users} accent="var(--info)" />
+        <StatCard label="Active Batches" value={e.activeBatches ?? '—'} icon={ClipboardList} onClick={() => navigate('/collection-cycles/batches')} />
+        <StatCard label="Customers" value={e.totalCustomers ?? '—'} icon={Users} accent="var(--info)" onClick={() => navigate('/customers')} />
         {/* Active Collection Cycles / Payments — user-reported gap-audit
             ('dashboardka maxaa iga dhiman features'): getExecutiveSummary()
             already returns activeCollectionCycles (Reports -> Overview
             shows it) and getRevenueForPeriod() already returns
             paymentCount (the Financial-only dashboard above already
             shows it) — this view never surfaced either. */}
-        <StatCard label="Active Cycles" value={e.activeCollectionCycles ?? '—'} icon={RefreshCw} />
-        <StatCard label="Payments" value={rev.paymentCount ?? 0} icon={Receipt} />
-        <StatCard label="Completion Rate" value={e.completionRate != null ? `${e.completionRate}%` : '—'} accent="var(--success)" />
-        <StatCard label="Revenue Today" value={`$${(rev.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" />
+        <StatCard label="Active Cycles" value={e.activeCollectionCycles ?? '—'} icon={RefreshCw} onClick={() => navigate('/collection-cycles')} />
+        <StatCard label="Payments" value={rev.paymentCount ?? 0} icon={Receipt} onClick={() => navigate('/reports?tab=payments')} />
+        <StatCard label="Completion Rate" value={e.completionRate != null ? `${e.completionRate}%` : '—'} accent="var(--success)" onClick={() => navigate('/reports?tab=overview')} />
+        <StatCard label="Revenue Today" value={`$${(rev.collected || 0).toFixed(2)}`} icon={Wallet} accent="var(--success)" onClick={() => navigate('/reports?tab=revenue')} />
       </div>
 
+      {/* Every card below — user-requested ('dashboardka adminka mid
+          kasta hadan ku dhufto waa in details ku ii soo baxaan'): each
+          stat now navigates to the Reports page/tab that shows its full
+          detail, most landing on the History tab pre-filtered to that
+          exact status via the ?status= deep link added to ReportsPage.jsx. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Serviced" value={e.serviced ?? 0} accent="var(--success)" />
-        <StatCard label="Missed" value={e.missed ?? 0} accent="var(--danger)" />
-        <StatCard label="Skipped" value={e.skipped ?? 0} accent="var(--warning)" />
-        <StatCard label="Rescheduled" value={e.rescheduled ?? 0} accent="var(--info)" />
+        <StatCard label="Serviced" value={e.serviced ?? 0} accent="var(--success)" onClick={() => navigate('/reports?tab=history&status=serviced')} />
+        <StatCard label="Missed" value={e.missed ?? 0} accent="var(--danger)" onClick={() => navigate('/reports?tab=history&status=missed')} />
+        <StatCard label="Skipped" value={e.skipped ?? 0} accent="var(--warning)" onClick={() => navigate('/reports?tab=history&status=skipped')} />
+        <StatCard label="Rescheduled" value={e.rescheduled ?? 0} accent="var(--info)" onClick={() => navigate('/reports?tab=history&status=rescheduled')} />
         {/* Pending — same gap: getExecutiveSummary() already returns
             e.pending (collection events not yet resolved today), a
             different, equally useful metric from the $ Outstanding
             Balance already shown next to it. */}
-        <StatCard label="Pending" value={e.pending ?? 0} icon={Clock} />
-        <StatCard label="Outstanding Balance" value={`$${(rev.outstanding || 0).toFixed(2)}`} accent="var(--warning)" />
+        <StatCard label="Pending" value={e.pending ?? 0} icon={Clock} onClick={() => navigate('/reports?tab=history&status=pending')} />
+        <StatCard label="Outstanding Balance" value={`$${(rev.outstanding || 0).toFixed(2)}`} accent="var(--warning)" onClick={() => navigate('/financial/invoices?status=unpaid')} />
       </div>
 
       <span style={sectionLabelStyle}>Zone Performance</span>
@@ -146,7 +151,7 @@ function FullDashboard({ summary }) {
           ]}
         >
           {(summary.zonePerformance || []).map((z) => (
-            <tr key={z.zone_id} style={{ borderBottom: '1px solid var(--border)' }}>
+            <tr key={z.zone_id} onClick={() => navigate(`/zones/${z.zone_id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
               <td style={cellStyle}><strong>{z.zone_name}</strong></td>
               <td style={cellStyle} className="tabular-nums">{z.batches}</td>
               <td style={cellStyle} className="tabular-nums">{z.serviced}</td>
@@ -168,7 +173,7 @@ function FullDashboard({ summary }) {
           columns={[{ label: 'Collector' }, { label: 'Zone' }, { label: 'Serviced' }, { label: 'Completion %' }]}
         >
           {(summary.collectorPerformance || []).map((c) => (
-            <tr key={c.employee_id} style={{ borderBottom: '1px solid var(--border)' }}>
+            <tr key={c.employee_id} onClick={() => navigate(`/employees/${c.employee_id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
               <td style={cellStyle}>{c.collector_name || `#${c.employee_id}`}</td>
               <td style={cellStyle}>{c.zone_name || '—'}</td>
               <td style={cellStyle} className="tabular-nums">{c.serviced}</td>
@@ -180,14 +185,14 @@ function FullDashboard({ summary }) {
 
       <span style={sectionLabelStyle}>Cashout Snapshot</span>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px' }}>
-        <StatCard label="Expected" value={`$${(summary.cashout?.totals?.expected || 0).toFixed(2)}`} icon={Wallet2} />
-        <StatCard label="Actual" value={`$${(summary.cashout?.totals?.actual || 0).toFixed(2)}`} />
-        <StatCard label="Shortage" value={`$${(summary.cashout?.totals?.shortage || 0).toFixed(2)}`} accent="var(--danger)" />
+        <StatCard label="Expected" value={`$${(summary.cashout?.totals?.expected || 0).toFixed(2)}`} icon={Wallet2} onClick={() => navigate('/financial/cashouts')} />
+        <StatCard label="Actual" value={`$${(summary.cashout?.totals?.actual || 0).toFixed(2)}`} onClick={() => navigate('/financial/cashouts')} />
+        <StatCard label="Shortage" value={`$${(summary.cashout?.totals?.shortage || 0).toFixed(2)}`} accent="var(--danger)" onClick={() => navigate('/reports?tab=cashout')} />
         {/* Surplus — same gap: getCashoutSummary() already computes
             totals.surplus (Reports -> Cashout tab shows it alongside
             Shortage), this snapshot only ever showed Shortage. */}
-        <StatCard label="Surplus" value={`$${(summary.cashout?.totals?.surplus || 0).toFixed(2)}`} accent="var(--info)" />
-        <StatCard label="Debt" value={`$${(rev.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} />
+        <StatCard label="Surplus" value={`$${(summary.cashout?.totals?.surplus || 0).toFixed(2)}`} accent="var(--info)" onClick={() => navigate('/reports?tab=cashout')} />
+        <StatCard label="Debt" value={`$${(rev.debt || 0).toFixed(2)}`} accent="var(--danger)" icon={TrendingUp} onClick={() => navigate('/financial/debts')} />
       </div>
     </div>
   );

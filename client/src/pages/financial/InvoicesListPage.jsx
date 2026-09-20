@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Receipt, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
@@ -9,7 +9,12 @@ import { useCustomers } from '../../hooks/useCustomers.js';
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
 export default function InvoicesListPage() {
-  const [statusFilter, setStatusFilter] = useState('');
+  // Deep-linkable status — user-requested ('dashboardka adminka mid
+  // kasta hadan ku dhufto waa in details ku ii soo baxaan'): the
+  // Dashboard's Outstanding Balance/Debt cards now navigate here with
+  // ?status=unpaid.
+  const [searchParams] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();

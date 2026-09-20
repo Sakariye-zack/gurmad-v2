@@ -86,6 +86,14 @@ export const NAV = [
 
   // ---- Reports & Complaints ----
   { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'], group: 'Reports & Complaints' },
+  // Collection History — user-requested ('customers kii loo shaqeeyay
+  // history-goodi... waa in aan sidebar-ka ka heli karaa'): the report
+  // itself already existed as one tab buried inside Reports (with its
+  // own status breakdown/filter/CSV export, added earlier this phase),
+  // but reaching it meant Reports -> click the History tab every time —
+  // no direct path from the sidebar. Deep-links straight to that tab via
+  // the ?tab= param ReportsPage.jsx now reads.
+  { to: '/reports?tab=history', label: 'Collection History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'], group: 'Reports & Complaints' },
   { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Reports & Complaints' },
 
   // ---- Documents & Data ----
