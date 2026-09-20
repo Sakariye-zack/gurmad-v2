@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Outlet } from 'react-router-dom';
-import { PanelLeftClose, PanelLeftOpen, Menu } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import MobileTabBar from './MobileTabBar.jsx';
 import MobileNavDrawer from './MobileNavDrawer.jsx';
@@ -59,31 +58,6 @@ export default function AppShell() {
     <div style={{ display: 'flex', minHeight: '100vh', overflowX: isTransitioning ? 'hidden' : 'visible' }}>
       {showDesktopSidebar && <Sidebar />}
 
-      {showToggleButton && (
-        <button
-          ref={toggleButtonRef}
-          onClick={handleToggleClick}
-          aria-label={isMobile ? 'Open menu' : (sidebarOpen ? 'Hide navigation' : 'Show navigation')}
-          aria-expanded={isMobile ? drawerOpen : sidebarOpen}
-          aria-controls={isMobile ? 'mobile-nav-drawer' : 'app-sidebar'}
-          style={{
-            // When the desktop Sidebar is visible, the button sits just past
-            // its 240px width so it never overlaps the Sidebar's own header
-            // (its "GURMAD V2" wordmark occupies the same top-left corner
-            // this control would otherwise sit on top of). Hidden/mobile:
-            // top-left of the viewport, matching Spec §11. 44x44 — Hardening
-            // touch-target check: meets the standard WCAG minimum, the
-            // original 36x36 did not.
-            position: 'fixed', top: '16px', left: showDesktopSidebar ? '252px' : '16px', zIndex: 92,
-            width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface)',
-            color: 'var(--text)', cursor: 'pointer',
-          }}
-        >
-          {isMobile ? <Menu size={17} /> : (sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />)}
-        </button>
-      )}
-
       {!isFieldRole && isMobile && (
         <MobileNavDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} triggerRef={toggleButtonRef} />
       )}
@@ -101,8 +75,23 @@ export default function AppShell() {
             profile/theme). Desktop, non-field roles only; field roles
             keep their own FieldTopBar below, unchanged. Sits OUTSIDE the
             padded content wrapper so it bleeds edge-to-edge like
-            FieldTopBar's own header already does. */}
-        {!showFieldTabBar && <TopBar />}
+            FieldTopBar's own header already does.
+            User-reported ('meel ku haboon dhig, meel cidlo ah bay iska
+            taalaye'): the sidebar-collapse toggle used to float as its
+            own fixed-position button in an empty stretch of page above
+            the content — now rendered as TopBar's own leading element
+            instead, in normal flow right next to the search box, not a
+            separate floating control with dead space around it. */}
+        {!showFieldTabBar && (
+          <TopBar
+            showToggleButton={showToggleButton}
+            onToggle={handleToggleClick}
+            isMobile={isMobile}
+            sidebarOpen={sidebarOpen}
+            drawerOpen={drawerOpen}
+            toggleButtonRef={toggleButtonRef}
+          />
+        )}
         <div style={{
           flex: 1,
           // User-reported gap (Phase 10): field roles (cashier) had no

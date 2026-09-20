@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ChevronDown, Camera, ShieldCheck, UserCircle2, LogOut, Users, Receipt, Users2 } from 'lucide-react';
+import { Search, ChevronDown, Camera, ShieldCheck, UserCircle2, LogOut, Users, Receipt, Users2, PanelLeftClose, PanelLeftOpen, Menu } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useGlobalSearch } from '../hooks/useSearch.js';
 import { useUploadAvatar } from '../hooks/useAvatar.js';
@@ -18,7 +18,7 @@ import ThemeToggle from '../components/ThemeToggle.jsx';
 // roles only — field roles (cashier/collector) already have their own
 // dedicated FieldTopBar.jsx/CollectorShell.jsx headers, which this does
 // not replace.
-export default function TopBar() {
+export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOpen, drawerOpen, toggleButtonRef }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
@@ -68,14 +68,32 @@ export default function TopBar() {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 80, display: 'flex', alignItems: 'center', gap: '16px',
-      // paddingLeft wider than the others — clears AppShell.jsx's own
-      // fixed-position sidebar-toggle button (44px wide, floating at
-      // left:16 or left:252 depending on sidebar state), which would
-      // otherwise sit visually on top of the search box's left edge in
-      // both sidebar states.
-      padding: '10px 20px 10px 64px', background: 'var(--surface)', borderBottom: '1px solid var(--border)',
+      padding: '10px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)',
       minHeight: '60px',
     }}>
+      {/* Sidebar collapse/menu toggle — user-reported ('meel ku haboon
+          dhig, meel cidlo ah bay iska taalaye'): moved here from its own
+          floating fixed-position button (AppShell.jsx), which sat above
+          the page content with empty space around it. Lives in normal
+          flow now, right beside the search box it was always meant to
+          sit next to. */}
+      {showToggleButton && (
+        <button
+          ref={toggleButtonRef}
+          onClick={onToggle}
+          aria-label={isMobile ? 'Open menu' : (sidebarOpen ? 'Hide navigation' : 'Show navigation')}
+          aria-expanded={isMobile ? drawerOpen : sidebarOpen}
+          aria-controls={isMobile ? 'mobile-nav-drawer' : 'app-sidebar'}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: '38px', height: '38px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+            background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer',
+          }}
+        >
+          {isMobile ? <Menu size={17} /> : (sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />)}
+        </button>
+      )}
+
       {/* Global Search */}
       <div ref={searchRef} style={{ position: 'relative', flex: '0 1 380px', minWidth: 0 }}>
         <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
