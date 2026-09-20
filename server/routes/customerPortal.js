@@ -555,7 +555,7 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const html = buildInvoiceHtml({ ...invoice, balance, payments: payments.rows });
+    const html = await buildInvoiceHtml({ ...invoice, balance, payments: payments.rows });
     return res.json({ data: { html } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to generate preview.', code: 'INTERNAL' } });

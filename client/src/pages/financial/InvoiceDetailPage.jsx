@@ -5,6 +5,7 @@ import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorS
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 import { useInvoice, useVoidInvoice, useReversePayment } from '../../hooks/useFinancial.js';
+import { useCompanyName } from '../../hooks/useSettings.js';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -18,6 +19,12 @@ export default function InvoiceDetailPage() {
   const toast = useToast();
   const [downloading, setDownloading] = useState(false);
   const invoice = data?.data;
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'). The printed/PDF
+  // letterhead is exactly the kind of surface a hardcoded name matters
+  // most on — a customer-facing document.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
 
   if (isLoading) return <LoadingState label="Loading invoice…" />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
@@ -94,7 +101,7 @@ export default function InvoiceDetailPage() {
       <Card className="invoice-print-document" style={{ padding: '24px', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--brand)', paddingBottom: '16px', marginBottom: '16px' }}>
           <div>
-            <div style={{ fontSize: '20px', fontWeight: 900, color: 'var(--brand)' }}>GURMAD</div>
+            <div style={{ fontSize: '20px', fontWeight: 900, color: 'var(--brand)' }}>{companyName}</div>
             <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px' }}>Invoice</div>
           </div>
           <div style={{ textAlign: 'right', fontSize: '12px' }}>

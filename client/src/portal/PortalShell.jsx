@@ -4,6 +4,7 @@ import { LayoutDashboard, Truck, FileText, Wallet, ShieldCheck, LogOut, Bell, Me
 import { usePortalAuth } from './PortalAuthContext.jsx';
 import { portalApiClient } from './apiClient.js';
 import PortalMobileTabBar from './PortalMobileTabBar.jsx';
+import { useCompanyName } from '../hooks/useSettings.js';
 
 // Customer Portal Rebuild — Implementation Spec §3/§18/§20: a real
 // navigation structure (primary tabs + an Account area + a notification
@@ -34,6 +35,13 @@ export default function PortalShell() {
   const navigate = useNavigate();
   const [unreadCount, setUnreadCount] = useState(0);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < MOBILE_BREAKPOINT);
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'). GET /v2/settings/company/name
+  // is now fully public (no auth) specifically so this portal session —
+  // a completely separate customer_portal_accounts JWT the staff-only
+  // authenticateToken middleware can't verify — can still read it.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -60,7 +68,7 @@ export default function PortalShell() {
         minWidth: 0,
       }}>
         <div style={{ fontWeight: 800, fontSize: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {isMobile ? 'GURMAD' : 'GURMAD — My Account'}
+          {isMobile ? companyName : `${companyName} — My Account`}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '14px', flexShrink: 0 }}>
           <button

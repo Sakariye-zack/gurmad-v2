@@ -2,6 +2,7 @@ const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType,
   ShadingType, BorderStyle, HeadingLevel, AlignmentType,
 } = require('docx');
+const { pool } = require('../db');
 
 // Generates real, downloadable .docx files for the two document-like V2
 // outputs (Cashout, Invoice) — per explicit user request, additive to
@@ -52,10 +53,26 @@ function money(n) {
   return `$${parseFloat(n || 0).toFixed(2)}`;
 }
 
-function header(title, docNumber, meta) {
+// Company name — user-requested ('meel kasta oo magaca system ku ka soo
+// muuqanayo waa in aan markan update gareeyo'): every generated document
+// (Invoice .docx, Cashout .docx, the Customer Portal's own invoice HTML
+// preview) had 'GURMAD' baked in as a literal string — a customer-facing
+// letterhead is exactly the surface a stale hardcoded name matters most
+// on. Queried once per document build, defaulting to 'GURMAD' only if no
+// company_name was ever set — same fallback every other surface uses.
+async function getCompanyNameForDocument() {
+  try {
+    const r = await pool.query('SELECT company_name FROM company_settings WHERE id = 1');
+    return r.rows[0]?.company_name || 'GURMAD';
+  } catch {
+    return 'GURMAD'; // never block document generation on this lookup failing
+  }
+}
+
+function header(title, docNumber, meta, companyName) {
   return [
     new Paragraph({
-      children: [new TextRun({ text: 'GURMAD', bold: true, size: 40, color: BRAND_GREEN })],
+      children: [new TextRun({ text: companyName, bold: true, size: 40, color: BRAND_GREEN })],
     }),
     new Paragraph({
       children: [new TextRun({ text: title, bold: true, size: 24 })],
@@ -83,11 +100,13 @@ function footer(text) {
 }
 
 async function buildCashoutDocx(cashout, recon, shortage = null) {
+  const companyName = await getCompanyNameForDocument();
   const children = [
     ...header(
       'Cashout & Cash Reconciliation',
       cashout.cashout_number,
-      `${cashout.zone_name} · ${new Date(cashout.period_start).toLocaleDateString()} – ${new Date(cashout.period_end).toLocaleDateString()} · Prepared ${new Date(cashout.created_at).toLocaleString()}`
+      `${cashout.zone_name} · ${new Date(cashout.period_start).toLocaleDateString()} – ${new Date(cashout.period_end).toLocaleDateString()} · Prepared ${new Date(cashout.created_at).toLocaleString()}`,
+      companyName
     ),
     sectionTitle('Collection Summary'),
     kvTable([
@@ -144,7 +163,7 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
         signatureCell('Cashier Signature'), signatureCell('Head of Cashiers Signature'), signatureCell('Collector Acknowledgement'),
       ] })],
     }),
-    footer(`GURMAD Waste Management — System-generated Cashout document — ${cashout.cashout_number}`),
+    footer(`${companyName} — System-generated Cashout document — ${cashout.cashout_number}`),
   ];
   const doc = new Document({ sections: [{ children }] });
   return Packer.toBuffer(doc);
@@ -163,11 +182,13 @@ function signatureCell(label) {
 
 async function buildInvoiceDocx(invoice) {
   const balance = invoice.balance || {};
+  const companyName = await getCompanyNameForDocument();
   const children = [
     ...header(
       'Invoice',
       invoice.invoice_number,
-      `${invoice.customer_name} (${invoice.customer_number}) · Issued ${new Date(invoice.created_at).toLocaleString()}`
+      `${invoice.customer_name} (${invoice.customer_number}) · Issued ${new Date(invoice.created_at).toLocaleString()}`,
+      companyName
     ),
     sectionTitle('Invoice Summary'),
     kvTable([
@@ -192,7 +213,7 @@ async function buildInvoiceDocx(invoice) {
       new Paragraph({ children: [new TextRun({ text: 'Voided reason: ', bold: true }), new TextRun({ text: invoice.voided_reason || '—' })] }),
       new Paragraph({ children: [new TextRun({ text: 'Voided at: ', bold: true }), new TextRun({ text: new Date(invoice.voided_at).toLocaleString() })] }),
     ] : []),
-    footer(`GURMAD Waste Management — Invoice — ${invoice.invoice_number}`),
+    footer(`${companyName} — Invoice — ${invoice.invoice_number}`),
   ];
   const doc = new Document({ sections: [{ children }] });
   return Packer.toBuffer(doc);
@@ -213,8 +234,9 @@ function escapeHtml(value) {
   }[c]));
 }
 
-function buildInvoiceHtml(invoice) {
+async function buildInvoiceHtml(invoice) {
   const balance = invoice.balance || {};
+  const companyName = await getCompanyNameForDocument();
   const rows = (invoice.payments || []).map((p) => `
     <tr>
       <td>${escapeHtml(p.currency)} ${escapeHtml(parseFloat(p.amount).toFixed(2))}</td>
@@ -249,7 +271,7 @@ function buildInvoiceHtml(invoice) {
   .kv div span:first-child { color: #6B7280; display: block; font-size: 11px; text-transform: uppercase; }
 </style></head>
 <body>
-  <h1>GURMAD</h1>
+  <h1>${escapeHtml(companyName)}</h1>
   <div class="meta">${escapeHtml(invoice.customer_name)} (${escapeHtml(invoice.customer_number)}) &middot; Issued ${escapeHtml(new Date(invoice.created_at).toLocaleString())}</div>
   <div class="doc-number">${escapeHtml(invoice.invoice_number)}</div>
   <hr>

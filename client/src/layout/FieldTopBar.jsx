@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import { ConfirmDialog } from '../components/ui/index.js';
+import { useCompanyName } from '../hooks/useSettings.js';
 
 // User-reported gap (Phase 10): AppShell's field-role branch (cashier —
 // see FIELD_ROLES in AppShell.jsx; collector uses its own separate
@@ -23,6 +24,11 @@ export default function FieldTopBar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'): same fix as
+  // Sidebar.jsx's own header, applied to this field-role shell too.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
 
   const doLogout = () => {
     logout();
@@ -36,7 +42,7 @@ export default function FieldTopBar() {
         padding: '12px 16px', background: 'var(--surface)', borderBottom: '1px solid var(--border)',
         margin: '-16px -16px 16px',
       }}>
-        <CompanyLogo height={26} fallback={<span style={{ fontWeight: 900, fontSize: '15px', color: 'var(--brand)' }}>GURMAD</span>} />
+        <CompanyLogo height={26} fallback={<span style={{ fontWeight: 900, fontSize: '15px', color: 'var(--brand)' }}>{companyName}</span>} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {user?.full_name || user?.username}
@@ -62,7 +68,7 @@ export default function FieldTopBar() {
         onClose={() => setConfirmOpen(false)}
         onConfirm={doLogout}
         title="Log out"
-        message="This will sign you out of GURMAD."
+        message={`This will sign you out of ${companyName}.`}
         confirmLabel="Log out"
         danger
       />

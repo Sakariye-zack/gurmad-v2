@@ -44,13 +44,17 @@ router.get('/company/logo', async (req, res) => {
 // badalay... meel kasta oo magaca system ku ka soo muuqanayo waa in aan
 // markan update gareeyo uu is badalaaa' — every place the system's name
 // appears must reflect a Settings change immediately). Same public
-// exception and rationale as GET /company/logo just above — a company
-// name is branding, not sensitive data, and needs to render for every
-// authenticated role (Sidebar.jsx's own header, login screens, browser
-// tab title), not just admin. Deliberately a separate, minimal endpoint
-// rather than widening GET /company itself, which also returns
-// address/phone/email — fields with no such "every role" justification.
-router.get('/company/name', authenticateToken, async (req, res) => {
+// exception and rationale as GET /company/logo just above (no auth at
+// all, not just "any authenticated role") — a company name is branding,
+// not sensitive data, and needs to render on surfaces where no staff
+// session exists: the staff/Customer Portal/Collector Mobile login
+// screens themselves, and the Customer Portal's own header (its
+// customer_portal_accounts session is a completely separate JWT this
+// staff-only authenticateToken can't verify anyway). Deliberately a
+// separate, minimal endpoint rather than widening GET /company itself,
+// which also returns address/phone/email — fields with no such
+// "every surface" justification.
+router.get('/company/name', async (req, res) => {
   try {
     const result = await pool.query('SELECT company_name FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
     res.json({ data: { company_name: result.rows[0]?.company_name || null } });

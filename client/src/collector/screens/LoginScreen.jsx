@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Truck as TruckIcon, ChevronRight, MapPin } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { apiClient } from '../../lib/apiClient.js';
+import { useCompanyName } from '../../hooks/useSettings.js';
 import { deriveKeyFromToken } from '../lib/collectorCrypto.js';
 import {
   DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
@@ -29,6 +30,11 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [focused, setFocused] = useState(null);
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'). Public endpoint (see
+  // its own comment) — reachable before login, no token needed.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
 
   const submit = async (e) => {
     e.preventDefault();
@@ -90,7 +96,7 @@ export default function LoginScreen() {
                   Collector
                 </h1>
                 <div style={{ fontFamily: MONO_FONT, fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                  GURMAD Field Unit
+                  {companyName} Field Unit
                 </div>
               </div>
             </div>

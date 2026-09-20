@@ -8,6 +8,7 @@ import {
   useCashout, useApproveCashout, useRejectCashout, useVoidCashout, useUploadAttachment, useResolveShortage, useVoidAttachment,
   useCashoutTransactions,
 } from '../../hooks/useCashouts.js';
+import { useCompanyName } from '../../hooks/useSettings.js';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
 const DOC_TYPE_LABELS = {
@@ -248,6 +249,11 @@ export default function CashoutDetailPage() {
 // modal's own comment for why that never causes a double-print).
 const STATUS_RIBBON_COLOR = { pending: 'var(--warning)', approved: 'var(--success)', rejected: 'var(--danger)', voided: 'var(--text-muted)' };
 function CashoutDocument({ cashout, recon, className, onViewTransactions, paperMode }) {
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'): this printed/PDF
+  // document's own letterhead + footer previously hardcoded 'GURMAD'.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
   const diff = Math.abs(parseFloat(cashout.expected_amount) - parseFloat(cashout.actual_amount));
   const sourceTotal = (recon.sourceBreakdown || []).reduce((s, r) => s + r.total, 0) || 1;
   const methodTotal = (recon.methodBreakdown || []).reduce((s, r) => s + r.total, 0) || 1;
@@ -289,7 +295,7 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
       {/* 1. Document Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--brand)', paddingBottom: '16px', marginBottom: '20px' }} className="doc-hairline">
         <div>
-          <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--brand)', letterSpacing: '-0.01em' }}>GURMAD</div>
+          <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--brand)', letterSpacing: '-0.01em' }}>{companyName}</div>
           <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px', color: paperMode ? '#444' : 'var(--text-muted)' }}>Cashout &amp; Cash Reconciliation</div>
         </div>
         <div style={{ textAlign: 'right', fontSize: '12px', lineHeight: 1.7 }}>
@@ -382,7 +388,7 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
       </DocSection>
 
       <div style={{ marginTop: '24px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center' }} className="doc-hairline">
-        GURMAD Waste Management — System-generated Cashout document — {cashout.cashout_number}
+        {companyName} — System-generated Cashout document — {cashout.cashout_number}
       </div>
     </Card>
   );

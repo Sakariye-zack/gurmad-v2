@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { NAV } from './Sidebar.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
+import { useCompanyName } from '../hooks/useSettings.js';
 
 // Sidebar / Navigation UX — Implementation Spec §7/§9/§13/§15. The mobile
 // drawer for non-field roles. Imports the exact same NAV array and RoleGate
@@ -18,6 +19,11 @@ import CompanyLogo from '../components/CompanyLogo.jsx';
 export default function MobileNavDrawer({ open, onClose, triggerRef }) {
   const closeButtonRef = useRef(null);
   const drawerRef = useRef(null);
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo'): same fix as
+  // Sidebar.jsx's own header, applied here too.
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD V2';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -93,7 +99,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
         }}
       >
         <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>GURMAD V2</span>} height={28} />
+          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>{companyName}</span>} height={28} />
           {/* QA Defect #1 fix: 44x44 clickable/touchable area (was 28x28,
               20px icon + 4px padding). Icon itself stays 20px — only the
               interactive hit area grows, via fixed width/height + flex

@@ -9,6 +9,7 @@ import { ConfirmDialog } from '../components/ui/index.js';
 import { purgeAllLocalData } from './lib/collectorStore.js';
 import { discardKey } from './lib/collectorCrypto.js';
 import { apiClient } from '../lib/apiClient.js';
+import { useCompanyName } from '../hooks/useSettings.js';
 
 // Live truck location — Phase 10, user-requested ('ilaa gawaadhidii ay ka
 // soo muuqato': trucks should appear on the Map). Every 2 minutes while
@@ -63,6 +64,10 @@ export default function CollectorShell() {
   const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  // System name — user-requested ('meel kasta oo magaca system ku ka soo
+  // muuqanayo waa in aan markan update gareeyo').
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'GURMAD';
   useLocationPing();
 
   // Identical sequence to AccountScreen.jsx's own doLogout() (purge local
@@ -92,7 +97,7 @@ export default function CollectorShell() {
         position: 'sticky', top: 0, zIndex: 40, display: 'flex', alignItems: 'center', gap: '10px',
         padding: '12px 16px', background: 'var(--surface)', borderBottom: '1px solid var(--border)',
       }}>
-        <CompanyLogo height={26} fallback={<span style={{ fontWeight: 900, fontSize: '15px', color: 'var(--brand)' }}>GURMAD</span>} />
+        <CompanyLogo height={26} fallback={<span style={{ fontWeight: 900, fontSize: '15px', color: 'var(--brand)' }}>{companyName}</span>} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {user?.full_name || user?.username}
