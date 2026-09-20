@@ -192,8 +192,11 @@ function ReceiveModal({ open, onClose, po, onDone }) {
     if (items.length === 0) { setError('Enter at least one received quantity.'); return; }
     try {
       const result = await create.mutateAsync({ id: po.id, notes: notes || undefined, items });
-      const anyReview = result.data.items.some((i) => i.needs_review !== undefined);
-      toast.success('Receipt recorded.');
+      // Hardening fix — this response never carried needs_review before,
+      // so this check silently always resolved false; the backend now
+      // computes it per item (same over-delivery flag GET already shows).
+      const anyReview = result.data.items.some((i) => i.needs_review);
+      toast.success(anyReview ? 'Receipt recorded — one or more items exceed the ordered quantity, flagged for review.' : 'Receipt recorded.');
       setQuantities({}); setNotes('');
       onDone();
       onClose();

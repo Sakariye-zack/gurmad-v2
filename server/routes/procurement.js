@@ -685,14 +685,26 @@ router.post('/purchase-orders/:id/receipts', authenticateToken, requireRole(...P
       [id, req.user.id, notes || null]
     );
     const receipt = receiptRes.rows[0];
+    const poItemsById = new Map(poItems.map((i) => [i.id, i]));
     const insertedItems = [];
     for (const line of items) {
+      const poItemId = parseStrictId(line.purchase_order_item_id);
       const itemRes = await client.query(
         `INSERT INTO purchase_order_receipt_items (purchase_order_receipt_id, purchase_order_item_id, quantity_received)
          VALUES ($1,$2,$3) RETURNING *`,
-        [receipt.id, parseStrictId(line.purchase_order_item_id), parseInt(line.quantity_received, 10)]
+        [receipt.id, poItemId, parseInt(line.quantity_received, 10)]
       );
-      insertedItems.push(itemRes.rows[0]);
+      // needs_review (over-delivery flag) — Hardening fix: GET
+      // /purchase-orders/:id and GET .../receipts both already compute
+      // and return this per-item, but this POST response never did,
+      // leaving the frontend's own over-delivery toast permanently
+      // silent (it checked a field this response never sent). Computed
+      // the same way both GET routes do: cumulative received quantity
+      // vs. this PO item's ordered quantity, via the same
+      // calculateOverDeliveryFlag() helper.
+      const cumulativeReceived = await calculateReceivedQuantity(poItemId, client);
+      const orderedQuantity = poItemsById.get(poItemId)?.quantity;
+      insertedItems.push({ ...itemRes.rows[0], needs_review: calculateOverDeliveryFlag(cumulativeReceived, orderedQuantity) });
     }
 
     const newStatus = await calculateReceiptStatus(id, client);
