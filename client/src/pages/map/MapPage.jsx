@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { MapPin, ListFilter, Route as RouteIcon } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState } from '../../components/ui/index.js';
-import { useMapCustomers } from '../../hooks/useMap.js';
+import { useMapCustomers, useMapTrucks } from '../../hooks/useMap.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
@@ -41,6 +41,12 @@ export default function MapPage() {
     routeId: routeId || undefined,
   });
   const points = data?.data || [];
+
+  // Trucks — user-requested ('ilaa gawaadhidii ay ka soo muuqato').
+  // Same zone-forcing rule as customers above: never trust a scoped
+  // role's own zoneId client-side, the server enforces it regardless.
+  const { data: trucksData } = useMapTrucks({ zoneId: isZoneScoped ? undefined : (zoneId || undefined) });
+  const trucks = trucksData?.data || [];
 
   function handleGroupChange(value) {
     setGroupId(value);
@@ -84,8 +90,8 @@ export default function MapPage() {
           broken" to someone who has never seen it render before. */}
       {!isLoading && !error && (
         <div style={{ flex: 1, minHeight: '60vh', position: 'relative' }}>
-          <MapCanvas points={points} />
-          {points.length === 0 && (
+          <MapCanvas points={points} trucks={trucks} />
+          {points.length === 0 && trucks.length === 0 && (
             <div style={{
               position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', zIndex: 1,
               display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px',

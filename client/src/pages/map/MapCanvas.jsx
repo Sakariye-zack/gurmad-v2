@@ -28,7 +28,19 @@ const HOUSE_ICON_SVG = `
   <path d="M15 8.5l7 6.2v8.3h-4.6v-5.2h-4.8v5.2H8V14.7z" fill="#fff"/>
 </svg>`;
 
-export default function MapCanvas({ points }) {
+// Truck marker — a distinct glyph/color from the customer house pin so
+// the two are never confused at a glance. Live position only (last 10
+// minutes, enforced server-side — see routes/map.js's own comment), so
+// this always reads as "roughly where this collector is right now",
+// never a route history.
+const TRUCK_ICON_SVG = `
+<svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">
+  <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 23 15 23s15-12.5 15-23C30 6.716 23.284 0 15 0z" fill="var(--info)"/>
+  <circle cx="15" cy="15" r="10.5" fill="var(--info-dark, #1d4e89)"/>
+  <path d="M7 12.5h9v3h2.3l2.7 3.1v2.4h-1.4a2.1 2.1 0 1 1-4.2 0h-4.8a2.1 2.1 0 1 1-4.2 0H6v-8.5z" fill="#fff"/>
+</svg>`;
+
+export default function MapCanvas({ points, trucks }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -140,10 +152,42 @@ export default function MapCanvas({ points }) {
       plotted += 1;
     });
 
+    // Trucks — user-requested ('ilaa gawaadhidii ay ka soo muuqato').
+    // Rendered in the same effect/marker lifecycle as customer pins
+    // (cleared and re-added together each time either list changes), so
+    // there is only ever one place that owns markersRef's contents.
+    (trucks || []).forEach((t) => {
+      const lat = Number(t.lat);
+      const lng = Number(t.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const popupHtml = `
+        <div style="font-size:13px;line-height:1.6;color:#1c231d;">
+          <strong>${escapeHtml(t.plate_number || 'Truck')}</strong><br/>
+          Collector: ${escapeHtml(t.collector_name || '—')}<br/>
+          Zone: ${escapeHtml(t.zone_name || '—')}<br/>
+          Updated: ${new Date(t.recorded_at).toLocaleTimeString()}
+        </div>
+      `;
+      const popup = new mapboxgl.Popup({ offset: 18 }).setHTML(popupHtml);
+      const el = document.createElement('div');
+      el.innerHTML = TRUCK_ICON_SVG;
+      el.style.cursor = 'pointer';
+      el.style.filter = 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))';
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([lng, lat])
+        .setPopup(popup)
+        .addTo(map);
+
+      markersRef.current.push(marker);
+      bounds.extend([lng, lat]);
+      plotted += 1;
+    });
+
     if (plotted > 0) {
       map.fitBounds(bounds, { padding: 48, maxZoom: 14, duration: 0 });
     }
-  }, [points, status]);
+  }, [points, trucks, status]);
 
   if (status === 'unsupported') {
     return <ConfigNotice text="Your browser does not support this map." />;

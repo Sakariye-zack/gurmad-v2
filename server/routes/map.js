@@ -129,4 +129,56 @@ router.get('/customers', async (req, res) => {
   }
 });
 
+// GET /api/v2/map/trucks — Phase 10, user-requested ('ilaa gawaadhidii ay
+// ka soo muuqato'). Reads collector_locations (last-known-position only,
+// written by POST /v2/collection-sync/location — see that route's own
+// comment for the full write-side eligibility gate). Only rows recorded
+// within the last 10 minutes are returned — an idle/offline collector's
+// stale last position silently disappears from the map rather than
+// showing a truck as "live" when it may have been parked for hours.
+// Same zone-forcing pattern as GET /customers above (non-Admin roles
+// cannot widen their own scope via zone_id).
+const TRUCK_LOCATION_FRESHNESS_MINUTES = 10;
+router.get('/trucks', async (req, res) => {
+  const { zone_id } = req.query;
+  let requestedZoneId = null;
+  if (zone_id !== undefined) {
+    requestedZoneId = parseStrictId(zone_id);
+    if (requestedZoneId === null) return res.status(400).json({ error: { message: 'Invalid zone id.', code: 'VALIDATION' } });
+  }
+  try {
+    let effectiveZoneId = requestedZoneId;
+    const role = (req.user.role || '').toLowerCase();
+    if (ZONE_SCOPED_ROLES.includes(role)) {
+      const myZoneId = await resolveUserZoneId(req.user);
+      effectiveZoneId = myZoneId;
+      if (effectiveZoneId === null) return res.json({ data: [] });
+    }
+
+    const params = [];
+    let where = `cl.recorded_at >= NOW() - INTERVAL '${TRUCK_LOCATION_FRESHNESS_MINUTES} minutes'`;
+    if (effectiveZoneId !== null) {
+      params.push(effectiveZoneId);
+      where += ` AND e.zone_id = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT cl.employee_id, cl.lat, cl.lng, cl.recorded_at,
+              e.name AS collector_name, e.zone_id, z.name AS zone_name,
+              t.id AS truck_id, t.plate_number
+       FROM collector_locations cl
+       JOIN employees e ON e.id = cl.employee_id
+       LEFT JOIN zones z ON z.id = e.zone_id
+       LEFT JOIN trucks t ON (t.driver_id = e.id OR t.collector_id = e.id) AND t.status = 'active'
+       WHERE ${where}
+       ORDER BY cl.employee_id ASC`,
+      params
+    );
+
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load truck locations.', code: 'INTERNAL' } });
+  }
+});
+
 module.exports = router;

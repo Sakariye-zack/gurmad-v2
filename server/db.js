@@ -1615,6 +1615,33 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_document_attachments_document_id ON document_attachments(document_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_document_attachments_entity ON document_attachments(entity_type, entity_id);`);
+
+  // ============================================================
+  // Map / GIS — truck locations (Phase 10, user-requested: 'ilaa
+  // gawaadhidii ay ka soo muuqato' — trucks should appear on the Map).
+  // Last-known-position ONLY, one row per collector employee (upserted,
+  // never a history table) — a deliberate, minimal privacy footprint:
+  // this table can only ever answer "where is this collector right
+  // now", never "where has this collector been". Read side (GET
+  // /v2/map/trucks) additionally only surfaces rows recorded_at within
+  // the last 10 minutes and only while that collector has an
+  // active/in-progress batch today — see routes/map.js and
+  // routes/collectionSync.js's own comments for the full boundary.
+  // Distinct from batch_customers.status_lat/status_lng (a specific
+  // visited customer's door GPS, captured once per visit) which the Map
+  // module's original design explicitly keeps out-of-band (Spec §8/§29,
+  // routes/map.js's own header comment) — this table never reads from
+  // or writes to that column; it is the collector's own device position
+  // while on shift, a different (and lower-sensitivity) signal than a
+  // specific household's location.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collector_locations (
+      employee_id INTEGER PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+      lat NUMERIC(10,6) NOT NULL,
+      lng NUMERIC(10,6) NOT NULL,
+      recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

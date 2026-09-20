@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Home, ClipboardList, RefreshCw, ShieldAlert, LogOut } from 'lucide-react';
 import { useSyncQueueContext } from './SyncQueueContext.jsx';
@@ -8,6 +8,41 @@ import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import { ConfirmDialog } from '../components/ui/index.js';
 import { purgeAllLocalData } from './lib/collectorStore.js';
 import { discardKey } from './lib/collectorCrypto.js';
+import { apiClient } from '../lib/apiClient.js';
+
+// Live truck location — Phase 10, user-requested ('ilaa gawaadhidii ay ka
+// soo muuqato': trucks should appear on the Map). Every 2 minutes while
+// this shell is mounted (i.e. the collector is logged in and the app is
+// open — the shell wraps every screen), take one current position reading
+// and POST it. Mirrors CollectionActionScreen.jsx's own captureGps()
+// exactly: bounded 5s timeout, missing/denied permission resolves to
+// nothing rather than blocking or erroring, and the request itself is
+// fire-and-forget from the UI's perspective — a failed or ineligible ping
+// (POST /v2/collection-sync/location silently no-ops when this collector
+// has no active batch today, per that route's own comment) never
+// surfaces to the collector, who has no action to take about it either
+// way. getCurrentPosition, not watchPosition — a single fresh fix every
+// interval is enough for "roughly where is this truck right now" and
+// avoids holding a continuous GPS lock (battery) for a use case that only
+// needs a periodic snapshot.
+const LOCATION_PING_INTERVAL_MS = 2 * 60 * 1000;
+function useLocationPing() {
+  useEffect(() => {
+    if (!navigator.geolocation) return undefined;
+    function ping() {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          apiClient.post('/v2/collection-sync/location', { lat: pos.coords.latitude, lng: pos.coords.longitude }).catch(() => {});
+        },
+        () => {}, // denied/unavailable — silently skip this cycle, try again next interval
+        { timeout: 5000 }
+      );
+    }
+    ping(); // first ping immediately on mount, not after waiting a full interval
+    const id = setInterval(ping, LOCATION_PING_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+}
 
 // Field Collector Mobile — Implementation Spec §6/§24. A lightweight,
 // mobile-first shell distinct from the desktop staff AppShell (large touch
@@ -28,6 +63,7 @@ export default function CollectorShell() {
   const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  useLocationPing();
 
   // Identical sequence to AccountScreen.jsx's own doLogout() (purge local
   // data -> discard the in-memory encryption key -> AuthContext logout()

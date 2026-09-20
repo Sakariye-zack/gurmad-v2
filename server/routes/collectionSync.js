@@ -118,6 +118,53 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
   }
 });
 
+// ---------- POST /location — live truck position (Phase 10) ----------
+//
+// User-requested ('ilaa gawaadhidii ay ka soo muuqato' — trucks should
+// appear on the Map): the phone the collector is already carrying is the
+// GPS source, sent periodically by CollectorShell.jsx while the app is
+// open (see its own comment for the interval/foreground rule). Upserts
+// ONE row per collector into collector_locations — last-known-position
+// only, no history — and ONLY while this collector currently owns an
+// active/in-progress batch, the identical eligibility test GET
+// /my-assignments already uses above. This is the privacy gate: a
+// collector between shifts, or one who has logged in but has no batch
+// assigned today, is silently accepted (200, no-op) rather than tracked
+// — the client never needs to know its own eligibility to decide whether
+// to send a ping.
+router.post('/location', requireRole('collector', 'admin'), async (req, res) => {
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return res.status(400).json({ error: { message: 'lat and lng must be valid coordinates.', code: 'VALIDATION' } });
+  }
+  try {
+    const employeeId = await resolveEmployeeIdForUser(req.user);
+    if (employeeId === null) return res.json({ data: { recorded: false } });
+
+    const eligible = await pool.query(
+      `SELECT 1 FROM task_resources tr
+       JOIN tasks t ON t.id = tr.task_id
+       JOIN batches b ON b.id = t.batch_id
+       WHERE tr.resource_type = 'collector' AND tr.resource_id = $1
+         AND b.status IN ('assigned', 'in_progress')
+       LIMIT 1`,
+      [employeeId]
+    );
+    if (eligible.rows.length === 0) return res.json({ data: { recorded: false } });
+
+    await pool.query(
+      `INSERT INTO collector_locations (employee_id, lat, lng, recorded_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (employee_id) DO UPDATE SET lat = $2, lng = $3, recorded_at = CURRENT_TIMESTAMP`,
+      [employeeId, lat, lng]
+    );
+    res.json({ data: { recorded: true } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to record location.', code: 'INTERNAL' } });
+  }
+});
+
 // ---------- POST /replay — sync-submission endpoint ----------
 //
 // Accepts a batch of offline-captured actions, processes EACH ONE
