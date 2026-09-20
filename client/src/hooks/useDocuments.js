@@ -40,7 +40,14 @@ export function useReplaceDocument() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, formData }) => apiClient.uploadFile(`/v2/documents/${id}/replace`, formData),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'documents'] }),
+    // Hardening fix (Phase 10 deep review): this only invalidated the
+    // list, never the OLD document's own detail cache — unlike every
+    // other lifecycle action here (useUpdateDocument, useArchiveDocument,
+    // etc). Replace voids the old document and creates a new one; the UI
+    // navigates to the new id, but the old id's cached detail (still
+    // showing 'active', not 'voided') stayed stale for anyone who
+    // navigated back to it or had it open in another tab.
+    onSuccess: (_r, vars) => { qc.invalidateQueries({ queryKey: ['v2', 'documents'] }); qc.invalidateQueries({ queryKey: ['v2', 'documents', vars.id] }); },
   });
 }
 
