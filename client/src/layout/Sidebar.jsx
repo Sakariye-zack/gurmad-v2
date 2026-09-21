@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
+  ListChecks,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
@@ -125,6 +126,12 @@ export const NAV = [
   // all — every staff login should be able to reach this, not just
   // admin/gudoomiye.
   { to: '/account/my-hr', label: 'My HR', icon: UserCircle2, group: null },
+  // General Todo/Task tracker (user-requested) — ungated at the nav
+  // level, same self-service pattern as Account Security/My HR above:
+  // TasksPage.jsx's own "My Tasks" half is for every staff member, and
+  // the page internally RoleGates its "Manage Tasks" half behind the new
+  // staff_tasks.view permission (managers only).
+  { to: '/tasks', label: 'Tasks', icon: ListChecks, group: null },
 ];
 
 const GROUP_ICONS = {

@@ -76,6 +76,7 @@ import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
 import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
 import UsersListPage from '../pages/users/UsersListPage.jsx';
 import RolesPermissionsPage from '../pages/roles/RolesPermissionsPage.jsx';
+import TasksPage from '../pages/tasks/TasksPage.jsx';
 import AccountSecurity from '../pages/account/AccountSecurity.jsx';
 import MyHrPage from '../pages/account/MyHrPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
@@ -162,6 +163,7 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <SettingsPage /> },
       { path: 'account/security', element: <AccountSecurity /> },
       { path: 'account/my-hr', element: <MyHrPage /> },
+      { path: 'tasks', element: <TasksPage /> },
       { path: 'notifications', element: <NotificationsListPage /> },
       { path: 'calendar', element: <CalendarPage /> },
       { path: 'map', element: <MapPage /> },

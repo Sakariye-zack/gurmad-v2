@@ -24,6 +24,9 @@ const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
 // Dynamic Roles & Permissions — user-requested. Admin-only.
 const rolesRouter = require('./routes/roles');
+// General staff Todo/Task tracker — user-requested, distinct from the
+// Collection Cycles/Batches 'tasks' table (routes/batches.js).
+const staffTasksRouter = require('./routes/staffTasks');
 // Group & Group-Based Collection — Change Request. Additive routers only —
 // zero change to any existing router's mount line below.
 const groupsRouter = require('./routes/groups');
@@ -148,6 +151,7 @@ app.use('/api/v2/complaints', complaintsRouter);
 app.use('/api/v2/auth', authRouter);
 app.use('/api/v2/users', usersRouter);
 app.use('/api/v2/roles', rolesRouter);
+app.use('/api/v2/staff-tasks', staffTasksRouter);
 app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);

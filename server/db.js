@@ -1655,6 +1655,28 @@ async function runMigrations() {
     );
   `);
 
+  // General staff Todo/Task tracker (user-requested, disambiguated from
+  // the Collection Cycles/Batches 'tasks' table above, which is a
+  // completely different concept — a scheduled collection-route stop, not
+  // a to-do item). Deliberately named staff_tasks to avoid any collision
+  // with that existing, unrelated `tasks` table.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_tasks (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(200) NOT NULL,
+      description TEXT,
+      assigned_to_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      created_by_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'done')),
+      priority VARCHAR(10) NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
+      due_date DATE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_staff_tasks_assigned_to ON staff_tasks(assigned_to_employee_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_staff_tasks_status ON staff_tasks(status);`);
+
   // ------------------------------------------------------------------
   // Dynamic Roles & Permissions (user-requested: 'Dynamic Roles &
   // Permissions'). Additive only — v2_users.role (string) stays the
@@ -1752,6 +1774,11 @@ async function runMigrations() {
     { module: 'audit', roles: ['admin'] },
     { module: 'settings', roles: ['admin'] },
     { module: 'roles', roles: ['admin'] },
+    // General Todo/Task tracker (user-requested) — the manager view (see
+    // all tasks, assign to anyone) is gated; every staff member's own
+    // "My Tasks" list is self-service/ungated, matching Account
+    // Security/My HR's own precedent.
+    { module: 'staff_tasks', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
   ];
 
   // A handful of extra action-level permissions mirroring in-page
