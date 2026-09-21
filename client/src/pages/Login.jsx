@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, ChevronRight, MapPin, Radio, Recycle } from 'lucide-react';
+import { Shield, ChevronRight, MapPin } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/ui/index.js';
 import {
   DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
-  IsoTruck, RouteMotif, DispatchStatChip, DispatchMedallion,
+  IsoTruck, DustbinIcon, RouteMotif, DispatchStatChip, DispatchMedallion,
 } from '../components/dispatchAuthKit.jsx';
 
 // "Fleet dispatch manifest" design — refactored to share its visual kit
@@ -75,14 +75,12 @@ export default function Login() {
           <RouteMotif style={{ position: 'absolute', top: '20px', right: '20px', opacity: 0.35 }} />
           <RouteMotif style={{ position: 'absolute', bottom: '-20px', left: '-40px', transform: 'rotate(150deg)', opacity: 0.2 }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Radio size={13} color="var(--accent)" />
-            <span style={{ fontFamily: MONO_FONT, fontSize: '10px', letterSpacing: '0.16em', color: 'rgba(255,255,255,0.6)' }}>
-              LIVE FLEET NETWORK
-            </span>
-          </div>
+          {/* User-requested cleanup: dropped the "LIVE FLEET NETWORK" /
+              "UNIT-07 // EN ROUTE" dispatch-jargon tags — decorative
+              filler that didn't earn its place next to the real message
+              below. The headline/subtitle/stats are the whole pitch now. */}
 
-          <div style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ position: 'relative', zIndex: 1, marginTop: '40px' }}>
             <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '42px', fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.05, color: '#fff', maxWidth: '380px' }}>
               Keeping the routes running, zone by zone.
             </h1>
@@ -100,10 +98,10 @@ export default function Login() {
 
           <div style={{ position: 'relative', height: '190px', marginTop: '20px' }}>
             <IsoTruck style={{ position: 'absolute', bottom: '-10px', left: '0', filter: 'drop-shadow(0 18px 20px rgba(0,0,0,0.45))' }} />
-            <div style={{ position: 'absolute', top: '6px', right: '0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Recycle size={13} color="var(--brand)" />
-              <span style={{ fontFamily: MONO_FONT, fontSize: '9px', letterSpacing: '0.12em', color: 'rgba(255,255,255,0.5)' }}>UNIT-07 // EN ROUTE</span>
-            </div>
+            {/* User-requested second waste motif — a curbside bin the
+                truck has just serviced, tucked bottom-right so it reads
+                as part of the same route scene rather than a floating icon. */}
+            <DustbinIcon style={{ position: 'absolute', bottom: '-8px', right: '10px', width: '92px', height: '104px', opacity: 0.95, filter: 'drop-shadow(0 12px 14px rgba(0,0,0,0.4))' }} />
           </div>
         </div>
 
