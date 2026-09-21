@@ -3,19 +3,22 @@ import { ShieldCheck, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, useToast } from '../../components/ui/index.js';
 import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser } from '../../hooks/useUsers.js';
 import { useEmployees } from '../../hooks/useEmployees.js';
+import { useRoles } from '../../hooks/useRoles.js';
 import UserEditModal from './UserEditModal.jsx';
 
-// User & Access Administration — admin-only. Role assignment is
-// restricted to the 7 approved static roles (OD-2) — this page never
-// offers a way to type a free-text role or create a new one.
-const APPROVED_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'];
+// User & Access Administration — admin-only. Role assignment used to be
+// restricted to 6 hardcoded strings; Dynamic Roles & Permissions
+// (user-requested) now populates this dropdown from GET /v2/roles, so any
+// custom role created on the new Roles & Permissions page shows up here too.
 
 export default function UsersListPage() {
   const { data, isLoading, error, refetch } = useUsers();
+  const { data: rolesData } = useRoles();
+  const roles = rolesData?.data || [];
   const users = data?.data || [];
   const toast = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState({ username: '', password: '', full_name: '', role: 'cashier', employee_id: '' });
+  const [form, setForm] = useState({ username: '', password: '', full_name: '', role_id: '', employee_id: '' });
   const [editingUser, setEditingUser] = useState(null);
 
   const createUser = useCreateUser();
@@ -38,12 +41,12 @@ export default function UsersListPage() {
         username: form.username.trim(),
         password: form.password,
         full_name: form.full_name.trim() || undefined,
-        role: form.role,
+        role_id: form.role_id ? Number(form.role_id) : undefined,
         employee_id: form.employee_id ? Number(form.employee_id) : undefined,
       });
       toast.success('User created.');
       setFormOpen(false);
-      setForm({ username: '', password: '', full_name: '', role: 'cashier', employee_id: '' });
+      setForm({ username: '', password: '', full_name: '', role_id: '', employee_id: '' });
     } catch (err) {
       toast.error(err.message || 'Failed to create user.');
     }
@@ -87,8 +90,9 @@ export default function UsersListPage() {
           </div>
           <div>
             <label style={labelStyle}>Role</label>
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={inputStyle}>
-              {APPROVED_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+            <select required value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })} style={inputStyle}>
+              <option value="">Select a role…</option>
+              {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
           </div>
           <div>

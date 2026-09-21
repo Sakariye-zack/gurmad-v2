@@ -1654,6 +1654,153 @@ async function runMigrations() {
       recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // ------------------------------------------------------------------
+  // Dynamic Roles & Permissions (user-requested: 'Dynamic Roles &
+  // Permissions'). Additive only — v2_users.role (string) stays the
+  // authoritative field every existing requireRole() check reads;
+  // role_id is a new, optional FK alongside it, never a replacement.
+  //
+  // role_permissions for the 6 system roles is seeded to mirror EXACTLY
+  // what client/src/layout/Sidebar.jsx's own NAV array's `roles:` arrays
+  // already grant today (one row per (role, nav item's module)), which is
+  // what guarantees zero visible change for any existing login once
+  // Sidebar.jsx switches those items from `roles:` to `permission:`. Do
+  // not edit this seed without also checking it against Sidebar.jsx's NAV.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roles (
+      id SERIAL PRIMARY KEY,
+      key VARCHAR(50) UNIQUE NOT NULL,
+      label VARCHAR(100) NOT NULL,
+      is_system BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS permissions (
+      id SERIAL PRIMARY KEY,
+      key VARCHAR(80) UNIQUE NOT NULL,
+      module VARCHAR(50) NOT NULL,
+      action VARCHAR(20) NOT NULL,
+      label VARCHAR(150) NOT NULL
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role_id INTEGER REFERENCES roles(id) ON DELETE CASCADE,
+      permission_id INTEGER REFERENCES permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_id)
+    );
+  `);
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS role_id INTEGER REFERENCES roles(id);`);
+
+  const SYSTEM_ROLES = [
+    { key: 'admin', label: 'Admin' },
+    { key: 'gudoomiye', label: 'Gudoomiye' },
+    { key: 'zone_accountant', label: 'Zone Accountant' },
+    { key: 'head_of_cashiers', label: 'Head of Cashiers' },
+    { key: 'cashier', label: 'Cashier' },
+    { key: 'collector', label: 'Collector' },
+  ];
+  for (const r of SYSTEM_ROLES) {
+    await pool.query(
+      `INSERT INTO roles (key, label, is_system) VALUES ($1, $2, TRUE) ON CONFLICT (key) DO NOTHING`,
+      [r.key, r.label]
+    );
+  }
+
+  // One `<module>.view` permission per gated Sidebar.jsx NAV item, with the
+  // exact role set that item's own `roles:` array grants today. Items with
+  // no `roles:` at all (Dashboard, Customers, Zones, Groups, Trucks,
+  // Account Security, My HR) are intentionally excluded — they stay
+  // ungated in the frontend, same as today.
+  const NAV_MODULES = [
+    { module: 'collection_cycles', roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
+    { module: 'batches', roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'] },
+    { module: 'calendar', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'map', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'billing', roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
+    { module: 'invoices', roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'] },
+    { module: 'debts', roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'cashouts', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'exchange_rate', roles: ['admin', 'cashier'] },
+    { module: 'employees', roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+    { module: 'attendance', roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+    { module: 'leave_requests', roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+    { module: 'leave_types', roles: ['admin'] },
+    { module: 'payroll', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'payroll_history', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'hr_reports', roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+    { module: 'fleet_maintenance', roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+    { module: 'fleet_fuel', roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+    { module: 'fleet_expiry', roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'] },
+    { module: 'procurement_suppliers', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'procurement_requests', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'purchase_orders', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'inventory_items', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'inventory_stores', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'inventory_movements', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'inventory_adjustments', roles: ['admin'] },
+    { module: 'inventory_assets', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'reports', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'] },
+    { module: 'collection_history', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'] },
+    { module: 'complaints', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'] },
+    { module: 'documents', roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'] },
+    { module: 'master_data_import', roles: ['admin', 'gudoomiye'] },
+    { module: 'master_data_export', roles: ['admin', 'gudoomiye', 'zone_accountant'] },
+    { module: 'users', roles: ['admin'] },
+    { module: 'audit', roles: ['admin'] },
+    { module: 'settings', roles: ['admin'] },
+    { module: 'roles', roles: ['admin'] },
+  ];
+
+  // A handful of extra action-level permissions mirroring in-page
+  // RoleGate action gates that already exist today (BillingView.jsx's
+  // Record Payment, CashoutDetailPage.jsx's approve/reject) — enough for
+  // the new admin Roles & Permissions grid to cover real module x action
+  // pairs, not just nav visibility.
+  const ACTION_PERMISSIONS = [
+    { key: 'billing.record_payment', module: 'billing', action: 'record_payment', label: 'Record a payment', roles: ['admin', 'cashier'] },
+    { key: 'cashout.approve', module: 'cashouts', action: 'approve', label: 'Approve / reject a cashout', roles: ['admin', 'gudoomiye', 'head_of_cashiers'] },
+    { key: 'users.manage', module: 'users', action: 'manage', label: 'Create / edit user accounts', roles: ['admin'] },
+    { key: 'settings.manage', module: 'settings', action: 'manage', label: 'Edit system settings', roles: ['admin'] },
+  ];
+
+  const roleIdByKey = {};
+  for (const r of SYSTEM_ROLES) {
+    const res = await pool.query('SELECT id FROM roles WHERE key = $1', [r.key]);
+    roleIdByKey[r.key] = res.rows[0].id;
+  }
+
+  async function seedPermission(key, module, action, label, roles) {
+    await pool.query(
+      `INSERT INTO permissions (key, module, action, label) VALUES ($1, $2, $3, $4) ON CONFLICT (key) DO NOTHING`,
+      [key, module, action, label]
+    );
+    const permRes = await pool.query('SELECT id FROM permissions WHERE key = $1', [key]);
+    const permissionId = permRes.rows[0].id;
+    for (const roleKey of roles) {
+      await pool.query(
+        `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [roleIdByKey[roleKey], permissionId]
+      );
+    }
+  }
+
+  for (const nm of NAV_MODULES) {
+    await seedPermission(`${nm.module}.view`, nm.module, 'view', `View ${nm.module.replace(/_/g, ' ')}`, nm.roles);
+  }
+  for (const ap of ACTION_PERMISSIONS) {
+    await seedPermission(ap.key, ap.module, ap.action, ap.label, ap.roles);
+  }
+
+  // Backfill role_id for every existing v2_users row from its role string —
+  // additive only, v2_users.role itself is never modified here.
+  await pool.query(`
+    UPDATE v2_users SET role_id = roles.id
+    FROM roles
+    WHERE v2_users.role = roles.key AND v2_users.role_id IS NULL
+  `);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

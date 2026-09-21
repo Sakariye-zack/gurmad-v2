@@ -70,6 +70,10 @@ async function authenticateToken(req, res, next) {
           role: ctx.role,       // live from v2_users, not the JWT claim
           zone: ctx.zoneName,   // live-resolved name string — the 12 existing consumer files keep working unchanged against this
           employeeId: ctx.employeeId,
+          // Dynamic Roles & Permissions (user-requested) — additive field,
+          // consumed only by GET /v2/auth/my-permissions today. Every
+          // existing requireRole() call site ignores this entirely.
+          permissions: ctx.permissions || [],
         };
         return next();
       }
@@ -78,6 +82,7 @@ async function authenticateToken(req, res, next) {
       // every route already behaved before this pass. No token_version
       // check is possible for an account V2 doesn't yet know about.
       req.user = decoded; // { id, username, role, zone, iat, exp }
+      req.user.permissions = [];
       return next();
     } catch (e) {
       return res.status(500).json({ error: { message: 'Authentication check failed.', code: 'INTERNAL' } });

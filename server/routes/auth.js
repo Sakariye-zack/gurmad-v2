@@ -111,6 +111,18 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ==================================================================
+// MY PERMISSIONS (Dynamic Roles & Permissions, user-requested)
+// ==================================================================
+
+// A bare JSON array, not the { data: ... } envelope every other V2 route
+// uses — matching client/src/hooks/usePermissions.js's own existing
+// `data || []` unwrapping exactly, since that hook was already written
+// against this shape before this endpoint existed.
+router.get('/my-permissions', authenticateToken, (req, res) => {
+  return res.json(req.user.permissions || []);
+});
+
+// ==================================================================
 // LOGOUT / LOGOUT-ALL
 // ==================================================================
 

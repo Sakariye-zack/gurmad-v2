@@ -22,6 +22,8 @@ const customerPortalRouter = require('./routes/customerPortal');
 const complaintsRouter = require('./routes/complaints');
 const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
+// Dynamic Roles & Permissions — user-requested. Admin-only.
+const rolesRouter = require('./routes/roles');
 // Group & Group-Based Collection — Change Request. Additive routers only —
 // zero change to any existing router's mount line below.
 const groupsRouter = require('./routes/groups');
@@ -145,6 +147,7 @@ app.use('/api/v2/customer-portal', customerPortalRouter);
 app.use('/api/v2/complaints', complaintsRouter);
 app.use('/api/v2/auth', authRouter);
 app.use('/api/v2/users', usersRouter);
+app.use('/api/v2/roles', rolesRouter);
 app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);

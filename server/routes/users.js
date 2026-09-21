@@ -28,6 +28,28 @@ function parseStrictId(raw) {
   return parseInt(raw, 10);
 }
 
+// Dynamic Roles & Permissions (user-requested) — a role_id pointing at a
+// custom (non-system) row in the new `roles` table is also accepted
+// alongside the 6 APPROVED_ROLES strings above. v2_users.role is still set
+// to the role's key string either way, so every existing requireRole()
+// call site keeps working exactly as before — a custom role's key simply
+// won't match any of those static arrays yet (disclosed limitation).
+async function resolveRoleAssignment(client, { role, role_id }) {
+  if (role_id !== undefined && role_id !== null) {
+    const idNum = parseStrictId(role_id);
+    if (idNum === null) return { error: 'role_id must be a positive integer.' };
+    const r = await client.query('SELECT id, key FROM roles WHERE id = $1', [idNum]);
+    if (r.rows.length === 0) return { error: 'role_id does not correspond to a real role.' };
+    return { role: r.rows[0].key, role_id: r.rows[0].id };
+  }
+  if (role !== undefined) {
+    if (!APPROVED_ROLES.includes(role)) return { error: `role must be one of: ${APPROVED_ROLES.join(', ')} (or pass role_id for a custom role).` };
+    const r = await client.query('SELECT id FROM roles WHERE key = $1', [role]);
+    return { role, role_id: r.rows[0]?.id ?? null };
+  }
+  return {};
+}
+
 // ---------- Personal profile photo (Phase 10, user-requested) ----------
 // 'sawir soo saaran karo' — every logged-in user (any role), not just
 // admin, can view/replace their OWN avatar. Registered before GET /:id
@@ -137,11 +159,11 @@ router.get('/:id', authenticateToken, requireRole('admin'), async (req, res) => 
 // migrated range by scripts/migrate_users.js, so this INSERT can never
 // collide with one).
 router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
-  const { username, password, full_name, role, zone, employee_id } = req.body || {};
+  const { username, password, full_name, role, role_id, zone, employee_id } = req.body || {};
   const errors = [];
   if (typeof username !== 'string' || !username.trim()) errors.push('username is required.');
   if (typeof password !== 'string' || password.length < 8) errors.push('password (min 8 characters) is required.');
-  if (!APPROVED_ROLES.includes(role)) errors.push(`role must be one of: ${APPROVED_ROLES.join(', ')}.`);
+  if (role === undefined && role_id === undefined) errors.push('role or role_id is required.');
   let employeeIdNum = null;
   if (employee_id !== undefined && employee_id !== null) {
     employeeIdNum = parseStrictId(employee_id);
@@ -152,12 +174,17 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const roleAssignment = await resolveRoleAssignment(client, { role, role_id });
+    if (roleAssignment.error) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: roleAssignment.error, code: 'VALIDATION' } });
+    }
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const ins = await client.query(
-      `INSERT INTO v2_users (username, password_hash, full_name, role, zone, is_active, auth_source)
-       VALUES ($1, $2, $3, $4, $5, TRUE, 'v2')
-       RETURNING id, username, full_name, role, zone, is_active, auth_source, created_at`,
-      [username.trim(), passwordHash, full_name || null, role, zone || null]
+      `INSERT INTO v2_users (username, password_hash, full_name, role, role_id, zone, is_active, auth_source)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'v2')
+       RETURNING id, username, full_name, role, role_id, zone, is_active, auth_source, created_at`,
+      [username.trim(), passwordHash, full_name || null, roleAssignment.role, roleAssignment.role_id, zone || null]
     );
     const user = ins.rows[0];
 
@@ -196,22 +223,24 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
 router.put('/:id', authenticateToken, requireRole('admin'), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
-  const { full_name, role, zone } = req.body || {};
+  const { full_name, role, role_id, zone } = req.body || {};
   try {
     const before = await pool.query('SELECT * FROM v2_users WHERE id = $1', [id]);
     if (before.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
     const prev = before.rows[0];
 
-    if (role !== undefined && !APPROVED_ROLES.includes(role)) {
-      return res.status(400).json({ error: { message: `role must be one of: ${APPROVED_ROLES.join(', ')}.`, code: 'VALIDATION' } });
+    const roleAssignment = await resolveRoleAssignment(pool, { role, role_id });
+    if (roleAssignment.error) {
+      return res.status(400).json({ error: { message: roleAssignment.error, code: 'VALIDATION' } });
     }
-    const nextRole = role !== undefined ? role : prev.role;
+    const nextRole = roleAssignment.role !== undefined ? roleAssignment.role : prev.role;
+    const nextRoleId = roleAssignment.role_id !== undefined ? roleAssignment.role_id : prev.role_id;
     const nextZone = zone !== undefined ? zone : prev.zone;
     const nextFullName = full_name !== undefined ? full_name : prev.full_name;
 
     const r = await pool.query(
-      'UPDATE v2_users SET full_name = $1, role = $2, zone = $3, updated_at = NOW() WHERE id = $4 RETURNING id, username, full_name, role, zone, is_active, auth_source',
-      [nextFullName, nextRole, nextZone, id]
+      'UPDATE v2_users SET full_name = $1, role = $2, role_id = $3, zone = $4, updated_at = NOW() WHERE id = $5 RETURNING id, username, full_name, role, role_id, zone, is_active, auth_source',
+      [nextFullName, nextRole, nextRoleId, nextZone, id]
     );
 
     // Role/zone change audited distinctly (Spec §12) — takes effect

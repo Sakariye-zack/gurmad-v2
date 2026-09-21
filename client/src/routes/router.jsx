@@ -75,6 +75,7 @@ import ExchangeRatesPage from '../pages/financial/ExchangeRatesPage.jsx';
 import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
 import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
 import UsersListPage from '../pages/users/UsersListPage.jsx';
+import RolesPermissionsPage from '../pages/roles/RolesPermissionsPage.jsx';
 import AccountSecurity from '../pages/account/AccountSecurity.jsx';
 import MyHrPage from '../pages/account/MyHrPage.jsx';
 import RequireAuth from './RequireAuth.jsx';
@@ -156,6 +157,7 @@ export const router = createBrowserRouter([
       { path: 'complaints', element: <ComplaintsListPage /> },
       { path: 'complaints/:id', element: <ComplaintDetailPage /> },
       { path: 'users', element: <UsersListPage /> },
+      { path: 'roles', element: <RolesPermissionsPage /> },
       { path: 'audit', element: <AuditCenterListPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'account/security', element: <AccountSecurity /> },

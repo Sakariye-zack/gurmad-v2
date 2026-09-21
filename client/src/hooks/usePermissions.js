@@ -10,7 +10,7 @@ export function usePermissions() {
   const { isAuthenticated } = useAuth();
   const { data, isLoading } = useQuery({
     queryKey: ['my-permissions'],
-    queryFn: () => apiClient.get('/auth/my-permissions'),
+    queryFn: () => apiClient.get('/v2/auth/my-permissions'),
     enabled: isAuthenticated,
     staleTime: 5 * 60_000,
   });

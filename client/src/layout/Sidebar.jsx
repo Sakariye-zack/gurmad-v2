@@ -34,58 +34,58 @@ export const NAV = [
   { to: '/customers', label: 'Customers', icon: Users, group: 'Operations' },
   { to: '/zones', label: 'Zones', icon: MapPinned, group: 'Operations' },
   { to: '/groups', label: 'Groups', icon: Boxes, group: 'Operations' },
-  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'], group: 'Operations' },
-  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'collector'], group: 'Operations' },
-  { to: '/calendar', label: 'Calendar', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Operations' },
-  { to: '/map', label: 'Map', icon: Map, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Operations' },
+  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, permission: 'collection_cycles.view', group: 'Operations' },
+  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, permission: 'batches.view', group: 'Operations' },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, permission: 'calendar.view', group: 'Operations' },
+  { to: '/map', label: 'Map', icon: Map, permission: 'map.view', group: 'Operations' },
 
   // ---- Financial ----
-  { to: '/billing', label: 'Billing', icon: Wallet, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'], group: 'Financial' },
-  { to: '/financial/invoices', label: 'Invoices', icon: Receipt, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant'], group: 'Financial' },
-  { to: '/financial/debts', label: 'Debts', icon: HandCoins, roles: ['admin', 'cashier', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
-  { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Financial' },
+  { to: '/billing', label: 'Billing', icon: Wallet, permission: 'billing.view', group: 'Financial' },
+  { to: '/financial/invoices', label: 'Invoices', icon: Receipt, permission: 'invoices.view', group: 'Financial' },
+  { to: '/financial/debts', label: 'Debts', icon: HandCoins, permission: 'debts.view', group: 'Financial' },
+  { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, permission: 'cashouts.view', group: 'Financial' },
   // Added (Phase 10 Billing audit) — the backend (GET/POST
   // /v2/exchange-rates) and frontend hooks already existed; this was the
   // one missing nav entry to actually reach the page. Same VIEW_ROLES as
   // the backend route itself (admin, cashier) — setting a new rate is
   // admin-only, enforced inside the page via RoleGate, same pattern as
   // every other Financial item here.
-  { to: '/financial/exchange-rate', label: 'Exchange Rate', icon: DollarSign, roles: ['admin', 'cashier'], group: 'Financial' },
+  { to: '/financial/exchange-rate', label: 'Exchange Rate', icon: DollarSign, permission: 'exchange_rate.view', group: 'Financial' },
 
   // ---- HR & Payroll ----
-  { to: '/employees', label: 'Employees', icon: Users2, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
-  { to: '/hr/attendance', label: 'Attendance', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
-  { to: '/hr/leave-requests', label: 'Leave Requests', icon: CalendarDays, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
-  { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, roles: ['admin'], group: 'HR & Payroll' },
-  { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
-  { to: '/payroll/history', label: 'Payroll History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'HR & Payroll' },
+  { to: '/employees', label: 'Employees', icon: Users2, permission: 'employees.view', group: 'HR & Payroll' },
+  { to: '/hr/attendance', label: 'Attendance', icon: ClipboardList, permission: 'attendance.view', group: 'HR & Payroll' },
+  { to: '/hr/leave-requests', label: 'Leave Requests', icon: CalendarDays, permission: 'leave_requests.view', group: 'HR & Payroll' },
+  { to: '/hr/leave-types', label: 'Leave Types', icon: SettingsIcon, permission: 'leave_types.view', group: 'HR & Payroll' },
+  { to: '/payroll/periods', label: 'Payroll', icon: Wallet2, permission: 'payroll.view', group: 'HR & Payroll' },
+  { to: '/payroll/history', label: 'Payroll History', icon: History, permission: 'payroll_history.view', group: 'HR & Payroll' },
   // HR Reports — gap-audit sweep (Phase 10, continuation): GET
   // /v2/hr-reports/headcount, /attendance-summary, /leave-summary were
   // fully built server-side, zone-scoped for gudoomiye/zone_accountant,
   // but had zero UI callers — same OPERATIONAL_ROLES set the backend
   // routes themselves require (server/routes/hrReports.js).
-  { to: '/hr/reports', label: 'HR Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'HR & Payroll' },
+  { to: '/hr/reports', label: 'HR Reports', icon: BarChart3, permission: 'hr_reports.view', group: 'HR & Payroll' },
 
   // ---- Fleet ----
   { to: '/trucks', label: 'Trucks', icon: Truck, group: 'Fleet' },
-  { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
-  { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
-  { to: '/fleet/expiry', label: 'Document Expiry', icon: History, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
+  { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, permission: 'fleet_maintenance.view', group: 'Fleet' },
+  { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, permission: 'fleet_fuel.view', group: 'Fleet' },
+  { to: '/fleet/expiry', label: 'Document Expiry', icon: History, permission: 'fleet_expiry.view', group: 'Fleet' },
 
   // ---- Procurement ----
-  { to: '/procurement/suppliers', label: 'Suppliers', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
-  { to: '/procurement/requests', label: 'Procurement Requests', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
-  { to: '/procurement/purchase-orders', label: 'Purchase Orders', icon: Receipt, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Procurement' },
+  { to: '/procurement/suppliers', label: 'Suppliers', icon: Boxes, permission: 'procurement_suppliers.view', group: 'Procurement' },
+  { to: '/procurement/requests', label: 'Procurement Requests', icon: ClipboardList, permission: 'procurement_requests.view', group: 'Procurement' },
+  { to: '/procurement/purchase-orders', label: 'Purchase Orders', icon: Receipt, permission: 'purchase_orders.view', group: 'Procurement' },
 
   // ---- Inventory ----
-  { to: '/inventory/items', label: 'Inventory Items', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
-  { to: '/inventory/stores', label: 'Inventory Stores', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
-  { to: '/inventory/movements', label: 'Stock Movements', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
-  { to: '/inventory/adjustments', label: 'Inventory Adjustments', icon: ShieldAlert, roles: ['admin'], group: 'Inventory' },
-  { to: '/inventory/assets', label: 'Assets', icon: Boxes, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Inventory' },
+  { to: '/inventory/items', label: 'Inventory Items', icon: Boxes, permission: 'inventory_items.view', group: 'Inventory' },
+  { to: '/inventory/stores', label: 'Inventory Stores', icon: Boxes, permission: 'inventory_stores.view', group: 'Inventory' },
+  { to: '/inventory/movements', label: 'Stock Movements', icon: Boxes, permission: 'inventory_movements.view', group: 'Inventory' },
+  { to: '/inventory/adjustments', label: 'Inventory Adjustments', icon: ShieldAlert, permission: 'inventory_adjustments.view', group: 'Inventory' },
+  { to: '/inventory/assets', label: 'Assets', icon: Boxes, permission: 'inventory_assets.view', group: 'Inventory' },
 
   // ---- Reports & Complaints ----
-  { to: '/reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'], group: 'Reports & Complaints' },
+  { to: '/reports', label: 'Reports', icon: BarChart3, permission: 'reports.view', group: 'Reports & Complaints' },
   // Collection History — user-requested ('customers kii loo shaqeeyay
   // history-goodi... waa in aan sidebar-ka ka heli karaa'): the report
   // itself already existed as one tab buried inside Reports (with its
@@ -93,18 +93,24 @@ export const NAV = [
   // but reaching it meant Reports -> click the History tab every time —
   // no direct path from the sidebar. Deep-links straight to that tab via
   // the ?tab= param ReportsPage.jsx now reads.
-  { to: '/reports?tab=history', label: 'Collection History', icon: History, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'], group: 'Reports & Complaints' },
-  { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'], group: 'Reports & Complaints' },
+  { to: '/reports?tab=history', label: 'Collection History', icon: History, permission: 'collection_history.view', group: 'Reports & Complaints' },
+  { to: '/complaints', label: 'Complaints', icon: MessageSquareWarning, permission: 'complaints.view', group: 'Reports & Complaints' },
 
   // ---- Documents & Data ----
-  { to: '/documents', label: 'Documents', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier'], group: 'Documents & Data' },
-  { to: '/master-data/import', label: 'Data Import', icon: ClipboardList, roles: ['admin', 'gudoomiye'], group: 'Documents & Data' },
-  { to: '/master-data/export', label: 'Data Export', icon: ClipboardList, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'Documents & Data' },
+  { to: '/documents', label: 'Documents', icon: ClipboardList, permission: 'documents.view', group: 'Documents & Data' },
+  { to: '/master-data/import', label: 'Data Import', icon: ClipboardList, permission: 'master_data_import.view', group: 'Documents & Data' },
+  { to: '/master-data/export', label: 'Data Export', icon: ClipboardList, permission: 'master_data_export.view', group: 'Documents & Data' },
 
   // ---- Administration ----
-  { to: '/users', label: 'Users & Access', icon: ShieldCheck, roles: ['admin'], group: 'Administration' },
-  { to: '/audit', label: 'Audit & Security', icon: History, roles: ['admin'], group: 'Administration' },
-  { to: '/settings', label: 'System Settings', icon: SettingsIcon, roles: ['admin'], group: 'Administration' },
+  { to: '/users', label: 'Users & Access', icon: ShieldCheck, permission: 'users.view', group: 'Administration' },
+  // Dynamic Roles & Permissions (user-requested) — admin-only management
+  // page for the new roles/permissions data model. roles: kept alongside
+  // permission: (unlike every other migrated item here) since this is a
+  // brand-new item with no pre-existing role array to preserve fidelity
+  // against — a plain roles:['admin'] gate is simplest and correct.
+  { to: '/roles', label: 'Roles & Permissions', icon: ShieldCheck, roles: ['admin'], group: 'Administration' },
+  { to: '/audit', label: 'Audit & Security', icon: History, permission: 'audit.view', group: 'Administration' },
+  { to: '/settings', label: 'System Settings', icon: SettingsIcon, permission: 'settings.view', group: 'Administration' },
 
   // Account Security is self-service — every authenticated staff member
   // manages their own password/sessions, so this item is intentionally

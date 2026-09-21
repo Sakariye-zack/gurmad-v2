@@ -49,9 +49,26 @@ async function resolveZoneNameById(zoneId, client = pool) {
 // during the phased transition, not an error). Callers must treat null as
 // "fall back to trusting the JWT's own claims" (middleware/auth.js does
 // exactly this), never as a hard failure.
+// Dynamic Roles & Permissions (user-requested). role_id is a nullable FK
+// resolved live here, same "never trust a cached/token value" rule this
+// whole module already enforces for role/zone — a permission grant change
+// made in the new Roles & Permissions admin page takes effect on the
+// user's very next request, no token action needed. Returns [] for a
+// user with no role_id yet (not-yet-backfilled or a raw legacy row).
+async function resolvePermissions(roleId, client = pool) {
+  if (!roleId) return [];
+  const r = await client.query(
+    `SELECT p.key FROM role_permissions rp
+     JOIN permissions p ON p.id = rp.permission_id
+     WHERE rp.role_id = $1`,
+    [roleId]
+  );
+  return r.rows.map((row) => row.key);
+}
+
 async function resolveAccessContext(userId, client = pool) {
   const userRes = await client.query(
-    `SELECT id, username, role, zone, is_active, token_version, auth_source
+    `SELECT id, username, role, role_id, zone, is_active, token_version, auth_source
      FROM v2_users WHERE id = $1`,
     [userId]
   );
@@ -80,11 +97,13 @@ async function resolveAccessContext(userId, client = pool) {
   }
 
   const employeeActive = !employee || PROTECTED_EMPLOYEE_STATUSES.includes(employee.status);
+  const permissions = await resolvePermissions(user.role_id, client);
 
   return {
     userId: user.id,
     username: user.username,
     role: user.role,
+    permissions,
     zoneId,
     zoneName,
     employeeId: employee ? employee.id : null,

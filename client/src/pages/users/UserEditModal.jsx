@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useUpdateUser } from '../../hooks/useUsers.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
+import { useRoles } from '../../hooks/useRoles.js';
 
-const APPROVED_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'];
 // Roles the app elsewhere treats as zone-scoped (Sidebar.jsx's own
 // ZONE_SCOPED_ROLES-shaped lists, RoleGate usage across the codebase) —
 // not a new rule invented here, just mirrored so the Zone field's
 // required/optional framing matches what the rest of the app already
-// assumes about these roles.
-const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'head_of_cashiers', 'cashier', 'collector'];
+// assumes about these roles. Dynamic Roles & Permissions (user-requested):
+// a custom role is treated as zone-scoped too (safer default — it can
+// always be left blank if genuinely company-wide).
+const COMPANY_WIDE_ROLES = ['admin'];
 
 // User-requested gap fix (Phase 10): the backend (routes/users.js PUT
 // /:id) and even a working mutation hook (useUpdateUser, useUsers.js)
@@ -25,12 +27,23 @@ export default function UserEditModal({ open, onClose, user }) {
 
 function Content({ onClose, user }) {
   const [fullName, setFullName] = useState(user.full_name || '');
-  const [role, setRole] = useState(user.role);
+  const [roleId, setRoleId] = useState(user.role_id ? String(user.role_id) : '');
   const toast = useToast();
   const updateUser = useUpdateUser();
   const { data: zonesData } = useZonesList();
+  const { data: rolesData } = useRoles();
+  const roles = rolesData?.data || [];
   const zones = zonesData?.data || [];
-  const isZoneScoped = ZONE_SCOPED_ROLES.includes(role);
+  const selectedRole = roles.find((r) => String(r.id) === roleId);
+  const isZoneScoped = !COMPANY_WIDE_ROLES.includes(selectedRole?.key || user.role);
+
+  // Fallback for a user row with no role_id yet (pre-migration or a raw
+  // legacy row) — resolve it from the role KEY string once roles load.
+  useEffect(() => {
+    if (roleId || roles.length === 0) return;
+    const match = roles.find((r) => r.key === user.role);
+    if (match) setRoleId(String(match.id));
+  }, [roles, roleId, user.role]);
 
   // v2_users.zone stores the zone's NAME (string), not an id (confirmed in
   // routes/users.js — no FK, just VARCHAR) — the dropdown below still
@@ -45,7 +58,7 @@ function Content({ onClose, user }) {
       await updateUser.mutateAsync({
         id: user.id,
         full_name: fullName.trim() || null,
-        role,
+        role_id: roleId ? Number(roleId) : undefined,
         zone: isZoneScoped ? (zoneName || null) : null,
       });
       toast.success(`${user.username} updated.`);
@@ -74,8 +87,8 @@ function Content({ onClose, user }) {
         </Field>
 
         <Field label="Role">
-          <select value={role} onChange={(e) => setRole(e.target.value)} style={inputStyle}>
-            {APPROVED_ROLES.map((r) => <option key={r} value={r}>{r.replace('_', ' ')}</option>)}
+          <select value={roleId} onChange={(e) => setRoleId(e.target.value)} style={inputStyle}>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
         </Field>
 
