@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
-import { NAV } from './Sidebar.jsx';
+import { NAV, NAV_LABEL_KEYS } from './Sidebar.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
 import { useCompanyName } from '../hooks/useSettings.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 // Sidebar / Navigation UX — Implementation Spec §7/§9/§13/§15. The mobile
 // drawer for non-field roles. Imports the exact same NAV array and RoleGate
@@ -24,6 +25,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
   // Sidebar.jsx's own header, applied here too.
   const { data: companyNameData } = useCompanyName();
   const companyName = companyNameData?.data?.company_name || 'GURMAD V2';
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!open) return undefined;
@@ -129,7 +131,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
                 })}
               >
                 <item.icon size={17} />
-                {item.label}
+                {NAV_LABEL_KEYS[item.label] ? t(NAV_LABEL_KEYS[item.label], item.label) : item.label}
               </NavLink>
             );
             if (item.roles || item.permission) {

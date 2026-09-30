@@ -933,6 +933,18 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS avatar_original_filename VARCHAR(255);`);
   await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS avatar_mime_type VARCHAR(100);`);
 
+  // Two-Factor Authentication (user-requested) — TOTP (authenticator-app
+  // codes), additive to the existing password flow, never a replacement.
+  // two_factor_secret is only ever set once enrollment is CONFIRMED (a
+  // correct code entered back) — a secret generated but never confirmed
+  // never flips two_factor_enabled on, so an abandoned setup can't lock
+  // the account out. Backup codes are stored bcrypt-hashed, one-time-use
+  // (removed from the array the moment one is redeemed) — the recovery
+  // path for a lost authenticator device.
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(64);`);
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS two_factor_backup_codes TEXT[] NOT NULL DEFAULT '{}';`);
+
   // Password reset — same shape as customer_portal_password_resets
   // (token-hash lookup, single-use via used_at, TTL via expires_at), per
   // Implementation Spec §16 (POST /api/v2/auth/password/reset/*).

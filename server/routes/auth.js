@@ -1,9 +1,12 @@
 const express = require('express');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const { authenticator } = require('otplib');
+const QRCode = require('qrcode');
 const { pool, logAudit } = require('../db');
-const { authenticateToken, issueStaffToken } = require('../middleware/auth');
+const { authenticateToken, issueStaffToken, JWT_SECRET } = require('../middleware/auth');
 const { resolveAccessContext } = require('../lib/accessResolution');
 
 // User & Access Administration — Implementation Spec §16 (API Route
@@ -27,6 +30,8 @@ const BCRYPT_ROUNDS = 12;
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const LOCK_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const PENDING_2FA_TTL = '5m';
+const BACKUP_CODE_COUNT = 8;
 
 const GENERIC_LOGIN_FAIL = { error: { message: 'Invalid username or password.', code: 'AUTH_INVALID' } };
 const GENERIC_RESET_RESPONSE = { data: { message: 'If an account exists for that username, password reset instructions have been generated.' } };
@@ -99,6 +104,19 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     await pool.query('UPDATE v2_users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW(), updated_at = NOW() WHERE id = $1', [user.id]);
+
+    // Two-Factor Authentication (user-requested) — password alone is not
+    // enough for an account with 2FA enabled. Rather than issuing the
+    // real staff token here, issue a short-lived pending-2FA token
+    // (distinct `purpose` claim, 5 minutes) and tell the caller a second
+    // step is required. No permanent session exists yet — a stolen
+    // password alone still cannot reach any /api/v2/* route.
+    if (user.two_factor_enabled) {
+      await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_2fa_pending', entityType: 'v2_user', entityId: user.id });
+      const pendingToken = jwt.sign({ id: user.id, purpose: '2fa_pending' }, JWT_SECRET, { expiresIn: PENDING_2FA_TTL });
+      return res.json({ data: { requires2FA: true, pendingToken } });
+    }
+
     await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login', entityType: 'v2_user', entityId: user.id });
 
     // token_version is NOT bumped on login (OD-3, approved) — a new
@@ -107,6 +125,157 @@ router.post('/login', authLimiter, async (req, res) => {
     return res.json({ data: { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName } } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Login failed.', code: 'INTERNAL' } });
+  }
+});
+
+// ==================================================================
+// TWO-FACTOR AUTHENTICATION (user-requested) — TOTP, additive to the
+// password flow above. Enrollment (setup/enable/disable) requires a
+// full existing session (authenticateToken); completing a 2FA-pending
+// login (verify-login) deliberately does NOT — the caller only has the
+// short-lived pending token from POST /login above, not a real session.
+// ==================================================================
+
+router.get('/2fa/status', authenticateToken, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT two_factor_enabled FROM v2_users WHERE id = $1', [req.user.id]);
+    return res.json({ data: { enabled: !!r.rows[0]?.two_factor_enabled } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load 2FA status.', code: 'INTERNAL' } });
+  }
+});
+
+function generateBackupCodes() {
+  const codes = [];
+  for (let i = 0; i < BACKUP_CODE_COUNT; i++) {
+    codes.push(crypto.randomBytes(5).toString('hex'));
+  }
+  return codes;
+}
+
+// Step 1 of enrollment: generate (but do not yet persist as enabled) a
+// TOTP secret, and return it as both a raw string (manual entry) and a
+// scannable QR. Calling this again before /2fa/enable simply overwrites
+// the not-yet-confirmed secret — no partial state to clean up.
+router.post('/2fa/setup', authenticateToken, async (req, res) => {
+  try {
+    const secret = authenticator.generateSecret();
+    await pool.query('UPDATE v2_users SET two_factor_secret = $1 WHERE id = $2', [secret, req.user.id]);
+    const otpauth = authenticator.keyuri(req.user.username, 'GURMAD', secret);
+    const qrDataUrl = await QRCode.toDataURL(otpauth);
+    return res.json({ data: { secret, qrDataUrl } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to start 2FA setup.', code: 'INTERNAL' } });
+  }
+});
+
+// Step 2: the user proves they actually captured the secret in a real
+// authenticator app by submitting one live code. Only THIS confirmation
+// flips two_factor_enabled on — an abandoned /2fa/setup call (secret
+// generated, QR shown, never confirmed) can never lock the account out,
+// since two_factor_enabled stays false. Backup codes are generated once,
+// here, and returned in plaintext exactly once — only their bcrypt
+// hashes are ever persisted.
+router.post('/2fa/enable', authenticateToken, async (req, res) => {
+  const { code } = req.body || {};
+  if (typeof code !== 'string' || !code.trim()) {
+    return res.status(400).json({ error: { message: 'A verification code is required.', code: 'VALIDATION' } });
+  }
+  try {
+    const r = await pool.query('SELECT two_factor_secret FROM v2_users WHERE id = $1', [req.user.id]);
+    const secret = r.rows[0]?.two_factor_secret;
+    if (!secret) return res.status(400).json({ error: { message: 'Start 2FA setup first.', code: 'VALIDATION' } });
+    if (!authenticator.check(code.trim(), secret)) {
+      return res.status(401).json({ error: { message: 'Incorrect code.', code: 'AUTH_INVALID' } });
+    }
+    const rawCodes = generateBackupCodes();
+    const hashedCodes = await Promise.all(rawCodes.map((c) => bcrypt.hash(c, BCRYPT_ROUNDS)));
+    await pool.query('UPDATE v2_users SET two_factor_enabled = TRUE, two_factor_backup_codes = $1 WHERE id = $2', [hashedCodes, req.user.id]);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_enabled', entityType: 'v2_user', entityId: req.user.id });
+    return res.json({ data: { message: 'Two-factor authentication enabled.', backupCodes: rawCodes } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to enable 2FA.', code: 'INTERNAL' } });
+  }
+});
+
+// Disabling requires the current password again (not just an active
+// session) — the same "prove you're still you" bar as changing the
+// password itself, since this removes a security control.
+router.post('/2fa/disable', authenticateToken, async (req, res) => {
+  const { password } = req.body || {};
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ error: { message: 'Your current password is required.', code: 'VALIDATION' } });
+  }
+  try {
+    const r = await pool.query('SELECT password_hash FROM v2_users WHERE id = $1', [req.user.id]);
+    const ok = await bcrypt.compare(password, r.rows[0]?.password_hash || '');
+    if (!ok) return res.status(401).json({ error: { message: 'Incorrect password.', code: 'AUTH_INVALID' } });
+    await pool.query(`UPDATE v2_users SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_backup_codes = '{}' WHERE id = $1`, [req.user.id]);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_disabled', entityType: 'v2_user', entityId: req.user.id });
+    return res.json({ data: { message: 'Two-factor authentication disabled.' } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to disable 2FA.', code: 'INTERNAL' } });
+  }
+});
+
+// Completes a login that POST /login flagged as requires2FA. Accepts
+// EITHER a live TOTP code OR one of the one-time backup codes (the
+// recovery path for a lost authenticator device) — a redeemed backup
+// code is removed from the array immediately so it can never be reused.
+router.post('/2fa/verify-login', authLimiter, async (req, res) => {
+  const { pendingToken, code } = req.body || {};
+  if (typeof pendingToken !== 'string' || !pendingToken) {
+    return res.status(400).json({ error: { message: 'pendingToken is required.', code: 'VALIDATION' } });
+  }
+  if (typeof code !== 'string' || !code.trim()) {
+    return res.status(400).json({ error: { message: 'A verification code is required.', code: 'VALIDATION' } });
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(pendingToken, JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: { message: 'This login attempt has expired. Please sign in again.', code: 'AUTH_INVALID' } });
+  }
+  if (decoded.purpose !== '2fa_pending') {
+    return res.status(401).json({ error: { message: 'Invalid token.', code: 'AUTH_INVALID' } });
+  }
+  try {
+    const r = await pool.query('SELECT * FROM v2_users WHERE id = $1', [decoded.id]);
+    const user = r.rows[0];
+    if (!user || !user.two_factor_enabled) {
+      return res.status(401).json({ error: { message: 'Invalid token.', code: 'AUTH_INVALID' } });
+    }
+
+    const trimmed = code.trim();
+    let ok = authenticator.check(trimmed, user.two_factor_secret);
+    let usedBackupCode = null;
+
+    if (!ok) {
+      // Not a valid live code — check it against the remaining backup
+      // codes (bcrypt-compare each, since they're one-way hashed).
+      for (const hashed of user.two_factor_backup_codes) {
+        if (await bcrypt.compare(trimmed, hashed)) { ok = true; usedBackupCode = hashed; break; }
+      }
+    }
+
+    if (!ok) {
+      await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_2fa_failed', entityType: 'v2_user', entityId: user.id });
+      return res.status(401).json({ error: { message: 'Incorrect code.', code: 'AUTH_INVALID' } });
+    }
+
+    if (usedBackupCode) {
+      const remaining = user.two_factor_backup_codes.filter((h) => h !== usedBackupCode);
+      await pool.query('UPDATE v2_users SET two_factor_backup_codes = $1 WHERE id = $2', [remaining, user.id]);
+      await logAudit({ actorId: user.id, actorUsername: user.username, action: '2fa_backup_code_used', entityType: 'v2_user', entityId: user.id, after: { remaining: remaining.length } });
+    }
+
+    const ctx = await resolveAccessContext(user.id);
+    await pool.query('UPDATE v2_users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1', [user.id]);
+    await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login', entityType: 'v2_user', entityId: user.id });
+    const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: user.token_version });
+    return res.json({ data: { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName } } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Verification failed.', code: 'INTERNAL' } });
   }
 });
 

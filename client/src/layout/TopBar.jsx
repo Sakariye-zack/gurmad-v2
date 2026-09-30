@@ -8,6 +8,8 @@ import { useToast } from '../components/ui/index.js';
 import Avatar from '../components/Avatar.jsx';
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import ThemeToggle from '../components/ThemeToggle.jsx';
+import LanguageToggle from '../components/LanguageToggle.jsx';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 // Top Bar — Phase 10, user-requested ('dashboardka waxaad iigu soo
 // dartaa search bar oo waliba global search ah, notificationka,
@@ -22,6 +24,7 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -101,7 +104,7 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
           value={query}
           onChange={(e) => { setQuery(e.target.value); setSearchOpen(true); }}
           onFocus={() => setSearchOpen(true)}
-          placeholder="Search customers, invoices, employees…"
+          placeholder={t('topbar.searchPlaceholder')}
           style={{
             width: '100%', padding: '9px 12px 9px 34px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
             background: 'var(--bg)', color: 'var(--text)', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box',
@@ -144,8 +147,9 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
 
       <div style={{ flex: 1 }} />
 
-      {/* Notifications + Theme */}
+      {/* Notifications + Language + Theme */}
       <NotificationBell />
+      <LanguageToggle />
       <ThemeToggle />
 
       {/* Profile */}
@@ -174,12 +178,12 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
               <div style={{ fontSize: '13px', fontWeight: 700 }}>{user?.full_name || user?.username}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{user?.role}{user?.zone ? ` — ${user.zone}` : ''}</div>
             </div>
-            <MenuItem icon={Camera} label={uploadAvatar.isPending ? 'Uploading…' : 'Change Photo'} onClick={() => fileInputRef.current?.click()} disabled={uploadAvatar.isPending} />
+            <MenuItem icon={Camera} label={uploadAvatar.isPending ? t('topbar.uploading') : t('topbar.changePhoto')} onClick={() => fileInputRef.current?.click()} disabled={uploadAvatar.isPending} />
             <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" onChange={handlePhotoChange} style={{ display: 'none' }} />
-            <MenuItem icon={ShieldCheck} label="Account Security" onClick={() => { setProfileOpen(false); navigate('/account/security'); }} />
-            <MenuItem icon={UserCircle2} label="My HR" onClick={() => { setProfileOpen(false); navigate('/account/my-hr'); }} />
+            <MenuItem icon={ShieldCheck} label={t('nav.accountSecurity')} onClick={() => { setProfileOpen(false); navigate('/account/security'); }} />
+            <MenuItem icon={UserCircle2} label={t('nav.myHr')} onClick={() => { setProfileOpen(false); navigate('/account/my-hr'); }} />
             <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
-            <MenuItem icon={LogOut} label="Log out" onClick={() => { setProfileOpen(false); logout(); navigate('/login'); }} danger />
+            <MenuItem icon={LogOut} label={t('nav.logout')} onClick={() => { setProfileOpen(false); logout(); navigate('/login'); }} danger />
           </div>
         )}
       </div>

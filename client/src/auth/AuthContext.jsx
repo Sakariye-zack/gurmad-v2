@@ -37,6 +37,12 @@ export function AuthProvider({ children }) {
       let flat;
       try {
         const v2 = await apiClient.post('/v2/auth/login', { username, password });
+        // Two-Factor Authentication (user-requested), V2-native — distinct
+        // from the legacy backend's own require2FA/userId shape below (a
+        // different, pre-existing mechanism this must not disturb). No
+        // token is issued yet; the caller gets only a short-lived
+        // pendingToken and must complete verifyTwoFactorLogin() next.
+        if (v2.data.requires2FA) return { requiresV2TwoFA: true, pendingToken: v2.data.pendingToken };
         flat = { token: v2.data.token, ...v2.data.user };
       } catch (err) {
         if (err.code !== 'AUTH_SOURCE_LEGACY') throw err;
@@ -59,6 +65,24 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Completes a V2-native 2FA login (see `requiresV2TwoFA` above) — the
+  // pendingToken proves the password step already succeeded; this
+  // exchanges it plus a live/backup code for a real session token.
+  const verifyTwoFactorLogin = async (pendingToken, code) => {
+    setLoading(true);
+    try {
+      const v2 = await apiClient.post('/v2/auth/2fa/verify-login', { pendingToken, code });
+      const flat = { token: v2.data.token, ...v2.data.user };
+      apiClient.setToken(flat.token);
+      const { token: _t, ...safeUser } = flat;
+      localStorage.setItem('gurmad_v2_user', JSON.stringify(safeUser));
+      setUser(safeUser);
+      return { success: true, user: safeUser };
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = () => {
     apiClient.clearToken();
     localStorage.removeItem('gurmad_v2_user');
@@ -66,7 +90,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, login, verifyTwoFactorLogin, logout, loading, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );

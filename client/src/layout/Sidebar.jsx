@@ -10,6 +10,33 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
 import { useCompanyName } from '../hooks/useSettings.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
+
+// Somali/English bilingual support (user-requested) — keyed off the
+// existing English `label`/group-name strings rather than adding a
+// `labelKey` field to every NAV entry, so this NAV array (and
+// MobileNavDrawer.jsx, which renders it unmodified) needs zero changes.
+// A label with no entry here just renders in English, same as today.
+export const NAV_LABEL_KEYS = {
+  Dashboard: 'nav.dashboard', Customers: 'nav.customers', Zones: 'nav.zones', Groups: 'nav.groups',
+  'Collection Cycles': 'nav.collectionCycles', Batches: 'nav.batches', Calendar: 'nav.calendar', Map: 'nav.map',
+  Billing: 'nav.billing', Invoices: 'nav.invoices', Debts: 'nav.debts', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
+  Employees: 'nav.employees', Attendance: 'nav.attendance', 'Leave Requests': 'nav.leaveRequests', 'Leave Types': 'nav.leaveTypes',
+  Payroll: 'nav.payroll', 'Payroll History': 'nav.payrollHistory', 'HR Reports': 'nav.hrReports',
+  Trucks: 'nav.trucks', 'Fleet Maintenance': 'nav.fleetMaintenance', 'Fuel Records': 'nav.fuelRecords', 'Document Expiry': 'nav.documentExpiry',
+  Suppliers: 'nav.suppliers', 'Procurement Requests': 'nav.procurementRequests', 'Purchase Orders': 'nav.purchaseOrders',
+  'Inventory Items': 'nav.inventoryItems', 'Inventory Stores': 'nav.inventoryStores', 'Stock Movements': 'nav.stockMovements',
+  'Inventory Adjustments': 'nav.inventoryAdjustments', Assets: 'nav.assets',
+  Reports: 'nav.reports', 'Collection History': 'nav.collectionHistory', Complaints: 'nav.complaints',
+  Documents: 'nav.documents', 'Data Import': 'nav.dataImport', 'Data Export': 'nav.dataExport',
+  'Users & Access': 'nav.usersAccess', 'Roles & Permissions': 'nav.rolesPermissions', 'Audit & Security': 'nav.auditSecurity',
+  'System Settings': 'nav.systemSettings', 'Account Security': 'nav.accountSecurity', 'My HR': 'nav.myHr', Tasks: 'nav.tasks',
+};
+const GROUP_LABEL_KEYS = {
+  Operations: 'nav.group.operations', Financial: 'nav.group.financial', 'HR & Payroll': 'nav.group.hr',
+  Fleet: 'nav.group.fleet', Procurement: 'nav.group.procurement', Inventory: 'nav.group.inventory',
+  'Reports & Complaints': 'nav.group.reports', 'Documents & Data': 'nav.group.documents', Administration: 'nav.group.administration',
+};
 // ThemeToggle/NotificationBell moved to layout/TopBar.jsx (Phase 10,
 // user-requested top bar redesign) — no longer rendered here, avoiding
 // the same two controls appearing twice on screen.
@@ -161,6 +188,7 @@ function groupNavItems() {
 }
 
 function NavItemLink({ item, onClick }) {
+  const { t } = useI18n();
   const link = (
     <NavLink
       to={item.to}
@@ -173,7 +201,7 @@ function NavItemLink({ item, onClick }) {
       })}
     >
       <item.icon size={16} />
-      {item.label}
+      {NAV_LABEL_KEYS[item.label] ? t(NAV_LABEL_KEYS[item.label], item.label) : item.label}
     </NavLink>
   );
   if (item.roles || item.permission) {
@@ -189,9 +217,11 @@ function NavItemLink({ item, onClick }) {
 // rather than either "everything expanded" (the original wall of 30+
 // items this replaces) or "everything collapsed" (hides where you already are).
 function NavGroup({ name, items, currentPath }) {
+  const { t } = useI18n();
   const containsActive = items.some((i) => currentPath === i.to || currentPath.startsWith(i.to + '/'));
   const [open, setOpen] = useState(containsActive);
   const Icon = GROUP_ICONS[name] || Boxes;
+  const displayName = GROUP_LABEL_KEYS[name] ? t(GROUP_LABEL_KEYS[name], name) : name;
 
   return (
     <div>
@@ -206,7 +236,7 @@ function NavGroup({ name, items, currentPath }) {
         }}
       >
         <Icon size={15} />
-        <span style={{ flex: 1, textAlign: 'left' }}>{name}</span>
+        <span style={{ flex: 1, textAlign: 'left' }}>{displayName}</span>
         <ChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
       </button>
       {open && (

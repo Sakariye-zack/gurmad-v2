@@ -7,6 +7,8 @@ import {
   DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
   IsoTruck, DustbinIcon, RouteMotif, DispatchStatChip, DispatchMedallion,
 } from '../components/dispatchAuthKit.jsx';
+import LanguageToggle from '../components/LanguageToggle.jsx';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 // "Fleet dispatch manifest" design — refactored to share its visual kit
 // (dispatchAuthKit.jsx) with PortalLogin.jsx and collector/screens/
@@ -15,19 +17,39 @@ import {
 // specific layout (the split ops-panel hero) and its own auth wiring —
 // zero functional change from before the refactor.
 export default function Login() {
-  const { login, loading } = useAuth();
+  const { login, verifyTwoFactorLogin, loading } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState('');
   const [require2FA, setRequire2FA] = useState(false);
+  // V2-native 2FA (user-requested) sets this once the password step
+  // succeeds; its presence is what tells submit() below to call
+  // verifyTwoFactorLogin() on the next submit instead of login() again —
+  // the legacy backend's own require2FA/userId flow (unrelated, older)
+  // never sets this, so it keeps re-calling login() exactly as before.
+  const [pendingToken, setPendingToken] = useState(null);
   const [focused, setFocused] = useState(null);
 
   const submit = async (e) => {
     e.preventDefault();
     try {
+      if (pendingToken) {
+        const result = await verifyTwoFactorLogin(pendingToken, token);
+        toast.success('Welcome back');
+        navigate(result.user?.role === 'collector' ? '/collector' : '/dashboard');
+        return;
+      }
       const result = await login(username, password, token);
+      if (result.requiresV2TwoFA) {
+        setPendingToken(result.pendingToken);
+        setRequire2FA(true);
+        setToken('');
+        toast.success('Enter your 2FA code');
+        return;
+      }
       if (result.require2FA) {
         setRequire2FA(true);
         toast.success('Enter your 2FA code');
@@ -82,17 +104,16 @@ export default function Login() {
 
           <div style={{ position: 'relative', zIndex: 1, marginTop: '40px' }}>
             <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '42px', fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.05, color: '#fff', maxWidth: '380px' }}>
-              Keeping the routes running, zone by zone.
+              {t('login.heroTitle')}
             </h1>
             <p style={{ fontFamily: MONO_FONT, fontSize: '12px', color: 'rgba(255,255,255,0.55)', marginTop: '14px', maxWidth: '340px', lineHeight: 1.6 }}>
-              Collection scheduling, cashout reconciliation, and fleet
-              operations for every zone — one dispatch terminal.
+              {t('login.heroSubtitle')}
             </p>
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '26px' }}>
-              <DispatchStatChip label="Zones" value="12+" />
-              <DispatchStatChip label="Trucks" value="40+" />
-              <DispatchStatChip label="Uptime" value="99.9%" />
+              <DispatchStatChip label={t('login.zones')} value="12+" />
+              <DispatchStatChip label={t('login.trucks')} value="40+" />
+              <DispatchStatChip label={t('login.uptime')} value="99.9%" />
             </div>
           </div>
 
@@ -139,7 +160,7 @@ export default function Login() {
 
               <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
-                  <label style={dispatchFieldLabelStyle}>[ USERNAME ]</label>
+                  <label style={dispatchFieldLabelStyle}>[ {t('login.username')} ]</label>
                   <input
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -153,7 +174,7 @@ export default function Login() {
                 </div>
 
                 <div>
-                  <label style={dispatchFieldLabelStyle}>[ PASSWORD ]</label>
+                  <label style={dispatchFieldLabelStyle}>[ {t('login.password')} ]</label>
                   <input
                     type="password"
                     value={password}
@@ -168,13 +189,18 @@ export default function Login() {
 
                 {require2FA && (
                   <div>
-                    <label style={dispatchFieldLabelStyle}>[ AUTH CODE ]</label>
+                    <label style={dispatchFieldLabelStyle}>[ {t('login.authCode')} ]</label>
+                    {pendingToken && (
+                      <p style={{ margin: '0 0 8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        Enter the 6-digit code from your authenticator app, or one of your backup codes.
+                      </p>
+                    )}
                     <input
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
                       onFocus={() => setFocused('token')}
                       onBlur={() => setFocused(null)}
-                      maxLength={6}
+                      maxLength={pendingToken ? 10 : 6}
                       autoFocus
                       style={{ ...dispatchInputStyle, ...dispatchFocusRing(focused === 'token'), letterSpacing: '0.3em', textAlign: 'center', fontWeight: 700 }}
                     />
@@ -193,21 +219,25 @@ export default function Login() {
                     cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.65 : 1,
                   }}
                 >
-                  {loading ? 'Signing in…' : 'Sign In'}
+                  {loading ? 'Signing in…' : t('login.signIn')}
                   {!loading && <ChevronRight size={17} strokeWidth={3} />}
                 </button>
               </form>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+              <LanguageToggle />
             </div>
 
             <div
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                 fontFamily: MONO_FONT, fontSize: '10px', letterSpacing: '0.1em', color: 'var(--text-muted)',
-                marginTop: '18px', textTransform: 'uppercase',
+                marginTop: '10px', textTransform: 'uppercase',
               }}
             >
               <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
-              Waste Collection &amp; Management Network
+              {t('login.footer')}
               <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
             </div>
           </div>

@@ -7,6 +7,7 @@ import { PortalAuthProvider } from './portal/PortalAuthContext.jsx';
 import { ToastProvider } from './components/ui/index.js';
 import { router } from './routes/router.jsx';
 import { useDynamicBranding } from './hooks/useDynamicBranding.js';
+import { I18nProvider } from './i18n/I18nContext.jsx';
 
 // User-requested: browser tab title/favicon reflect the real company
 // branding everywhere, including the login screen, not just once logged
@@ -22,17 +23,19 @@ function DynamicBrandingEffect() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <DynamicBrandingEffect />
-      <AuthProvider>
-        {/* Phase 4 — Customer Portal: its own auth context, structurally
-            separate from staff AuthProvider (OD-1) — a distinct token store,
-            a distinct login/logout flow, no shared identity. */}
-        <PortalAuthProvider>
-          <ToastProvider>
-            <RouterProvider router={router} />
-          </ToastProvider>
-        </PortalAuthProvider>
-      </AuthProvider>
+      <I18nProvider>
+        <DynamicBrandingEffect />
+        <AuthProvider>
+          {/* Phase 4 — Customer Portal: its own auth context, structurally
+              separate from staff AuthProvider (OD-1) — a distinct token store,
+              a distinct login/logout flow, no shared identity. */}
+          <PortalAuthProvider>
+            <ToastProvider>
+              <RouterProvider router={router} />
+            </ToastProvider>
+          </PortalAuthProvider>
+        </AuthProvider>
+      </I18nProvider>
     </QueryClientProvider>
   );
 }
