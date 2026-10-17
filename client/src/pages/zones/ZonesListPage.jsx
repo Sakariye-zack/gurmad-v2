@@ -5,12 +5,14 @@ import { PageHeader, Button, DataTable, StatusBadge } from '../../components/ui/
 import RoleGate from '../../components/RoleGate.jsx';
 import { useZones } from '../../hooks/useZones.js';
 import ZoneFormModal from './ZoneFormModal.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Zones List — Phase 3, Module 1. Fresh build per Module_UI_Specifications.md,
 // not the old LandingManagementView. With exactly two approved zones, the
 // list's job is to make both immediately understandable at a glance, not to
 // manage a large catalog.
 export default function ZonesListPage() {
+  const { t } = useI18n();
   const { data, isLoading, error, refetch } = useZones();
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
@@ -20,11 +22,11 @@ export default function ZonesListPage() {
     <div>
       <PageHeader
         icon={MapPinned}
-        title="Zones"
-        subtitle="Gurmad's two operational zones — Farah Omar and Sheekh Bashiir."
+        title={t('nav.zones')}
+        subtitle={t('zone.gurmad_s_two_operational_zones')}
         actions={
           <RoleGate roles={['admin']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Zone</Button>
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('zone.create_zone')}</Button>
           </RoleGate>
         }
       />
@@ -34,15 +36,15 @@ export default function ZonesListPage() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && zones.length === 0}
-        emptyTitle="No zones yet"
-        emptySubtitle="Create the first operational zone to get started."
+        emptyTitle={t('zone.no_zones_yet')}
+        emptySubtitle={t('zone.create_the_first_operational_zone')}
         columns={[
-          { label: 'Zone' },
-          { label: 'Code' },
-          { label: 'Sub-zone' },
-          { label: 'Area' },
-          { label: 'Collection days' },
-          { label: 'Status' },
+          { label: t('common.zone') },
+          { label: t('zone.code') },
+          { label: t('zone.sub_zone') },
+          { label: t('zone.area') },
+          { label: t('zone.collection_days') },
+          { label: t('common.status') },
         ]}
       >
         {zones.map((z) => (

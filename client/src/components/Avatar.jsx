@@ -1,5 +1,6 @@
 import React from 'react';
 import { useMyAvatarUrl } from '../hooks/useAvatar.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 // Personal profile photo — Phase 10, user-requested. Falls back to a
 // colored initials bubble (never a broken-image icon) while loading, on
@@ -14,6 +15,7 @@ function initials(name) {
 }
 
 export default function Avatar({ name, size = 32, version = 0, style }) {
+  const { t } = useI18n();
   const { url } = useMyAvatarUrl(version);
   const dim = `${size}px`;
 
@@ -21,7 +23,7 @@ export default function Avatar({ name, size = 32, version = 0, style }) {
     return (
       <img
         src={url}
-        alt={name || 'Profile photo'}
+        alt={name || t('comp.profile_photo')}
         width={size}
         height={size}
         style={{ width: dim, height: dim, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, ...style }}

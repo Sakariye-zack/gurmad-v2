@@ -51,7 +51,7 @@ export default function PortalPayments() {
           <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
             <td style={tdStyle}>{r.invoice_number}</td>
             <td className="tabular-nums" style={{ ...tdStyle, textAlign: 'right' }}>{r.currency} {parseFloat(r.amount).toFixed(2)}</td>
-            <td style={{ ...tdStyle, textTransform: 'uppercase' }}>{r.method}</td>
+            <td style={{ ...tdStyle, textTransform: 'uppercase' }}>{t('method.' + r.method, r.method)}</td>
             <td style={tdStyle}><StatusBadge status={r.status} map={PAYMENT_STATUS_MAP} /></td>
             <td style={tdStyle}>{new Date(r.created_at).toLocaleDateString()}</td>
           </tr>

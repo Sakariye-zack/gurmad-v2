@@ -7,10 +7,12 @@ import CapacityPanel from '../../components/collection/CapacityPanel.jsx';
 import { useBatches, useCreateBatch, useCycles } from '../../hooks/useCollectionOps.js';
 import { useZonesList, useCustomers } from '../../hooks/useCustomers.js';
 import { useGroups, useGroupEligibleCustomers } from '../../hooks/useGroups.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_LABELS = { draft: 'Draft', assigned: 'Assigned', in_progress: 'In Progress', partially_completed: 'Partially Completed', completed: 'Completed', cancelled: 'Cancelled' };
 
 export default function BatchesListPage() {
+  const { t, tc } = useI18n();
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -24,25 +26,25 @@ export default function BatchesListPage() {
     <div>
       <PageHeader
         icon={ClipboardList}
-        title="Batches"
-        subtitle="Collection batches — customer groups scheduled for a cycle."
+        title={t('nav.batches')}
+        subtitle={t('coll.collection_batches_customer_groups_s')}
         actions={
           <RoleGate roles={['admin', 'gudoomiye']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Batch</Button>
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('coll.create_batch')}</Button>
           </RoleGate>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Total Batches" value={error ? '—' : (data?.data?.length ?? '—')} icon={ClipboardList} />
-        <StatCard label="In Progress" value={error ? '—' : inProgressCount} icon={ClipboardList} accent="var(--info)" />
-        <StatCard label="Draft" value={error ? '—' : draftCount} icon={ClipboardList} accent="var(--warning)" />
+        <StatCard label={t('coll.total_batches')} value={error ? '—' : (data?.data?.length ?? '—')} icon={ClipboardList} />
+        <StatCard label={t('status.in_progress')} value={error ? '—' : inProgressCount} icon={ClipboardList} accent="var(--info)" />
+        <StatCard label={t('status.draft')} value={error ? '—' : draftCount} icon={ClipboardList} accent="var(--warning)" />
       </div>
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by batch code…">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('coll.search_by_batch_code')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-          <option value="">All statuses</option>
-          {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          <option value="">{t('cust.all_statuses')}</option>
+          {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{tc('status.' + k, v)}</option>)}
         </select>
       </FilterBar>
 
@@ -51,17 +53,17 @@ export default function BatchesListPage() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && batches.length === 0}
-        emptyTitle="No batches yet"
-        emptySubtitle="Create the first batch to start assigning collection work."
-        columns={[{ label: 'Batch' }, { label: 'Zone' }, { label: 'Type' }, { label: 'Customers' }, { label: 'Capacity' }, { label: 'Status' }]}
+        emptyTitle={t('coll.no_batches_yet')}
+        emptySubtitle={t('coll.create_the_first_batch_to')}
+        columns={[{ label: t('common.batch') }, { label: t('common.zone') }, { label: t('cust.type') }, { label: t('nav.customers') }, { label: t('coll.capacity') }, { label: t('common.status') }]}
       >
         {batches.map((b) => (
           <tr key={b.id} onClick={() => navigate(`/collection-cycles/batches/${b.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
             <td style={cellStyle}><strong>{b.batch_code}</strong></td>
             <td style={cellStyle}>{b.zone_name}</td>
             <td style={cellStyle}>
-              <span style={{ textTransform: 'capitalize' }}>{b.customer_type}</span>
-              {b.commercial_shift && <span style={{ color: 'var(--text-muted)' }}> ({b.commercial_shift})</span>}
+              <span style={{ textTransform: 'capitalize' }}>{t('cust.' + b.customer_type, b.customer_type)}</span>
+              {b.commercial_shift && <span style={{ color: 'var(--text-muted)' }}> ({t('cust.' + b.commercial_shift, b.commercial_shift)})</span>}
             </td>
             <td style={cellStyle} className="tabular-nums">{b.total_customers}</td>
             <td style={cellStyle}><CapacityPanel capacity={b.capacity} compact /></td>
@@ -81,6 +83,7 @@ function BatchFormModal({ open, onClose }) {
 }
 
 function BatchFormContent({ onClose }) {
+  const { t } = useI18n();
   const [zoneId, setZoneId] = useState('');
   const [cycleId, setCycleId] = useState('');
   const [customerType, setCustomerType] = useState('residential');
@@ -120,7 +123,7 @@ function BatchFormContent({ onClose }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!zoneId || !cycleId || !startDate) { setError('Zone, cycle, and start date are all required.'); return; }
+    if (!zoneId || !cycleId || !startDate) { setError(t('coll.zone_cycle_and_start_date')); return; }
     try {
       const result = await createBatch.mutateAsync({
         zone_id: parseInt(zoneId, 10), cycle_id: parseInt(cycleId, 10), customer_type: customerType,
@@ -132,10 +135,10 @@ function BatchFormContent({ onClose }) {
         // Manual path (no group selected): customer_ids as before.
         ...(groupId ? { group_id: parseInt(groupId, 10), customer_type_filter: typeFilter } : { customer_ids: selectedCustomers }),
       });
-      toast.success(`${result.data.batch_code} created.`);
+      toast.success(t('fin.m.created', undefined, { number: result.data.batch_code }));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -143,79 +146,78 @@ function BatchFormContent({ onClose }) {
     <Modal
       open
       onClose={createBatch.isPending ? () => {} : onClose}
-      title="Create Batch"
+      title={t('coll.create_batch')}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={createBatch.isPending}>Cancel</Button>
-          <Button type="submit" form="batch-form" disabled={createBatch.isPending}>{createBatch.isPending ? 'Saving…' : 'Create Batch'}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={createBatch.isPending}>{t('common.cancel')}</Button>
+          <Button type="submit" form="batch-form" disabled={createBatch.isPending}>{createBatch.isPending ? t('common.saving') : t('coll.create_batch')}</Button>
         </>
       }
     >
       <form id="batch-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Zone</span>
+          <span style={labelStyle}>{t('common.zone')}</span>
           <select value={zoneId} onChange={(e) => { setZoneId(e.target.value); setCycleId(''); setSelectedCustomers([]); }} style={inputStyle}>
-            <option value="">Select a zone…</option>
+            <option value="">{t('cust.select_a_zone')}</option>
             {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </select>
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Collection cycle</span>
+          <span style={labelStyle}>{t('coll.collection_cycle')}</span>
           <select value={cycleId} onChange={(e) => setCycleId(e.target.value)} style={inputStyle} disabled={!zoneId}>
-            <option value="">{zoneId ? 'Select a cycle…' : 'Select a zone first'}</option>
+            <option value="">{zoneId ? t('coll.select_a_cycle') : t('cust.select_a_zone_first')}</option>
             {cycles.map((c) => <option key={c.id} value={c.id}>{c.cycle_type} — {c.start_date} to {c.end_date}</option>)}
           </select>
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Group (optional) — resolve customers by Group instead of picking them below</span>
+          <span style={labelStyle}>{t('coll.group_optional_resolve_customers_by')}</span>
           <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setSelectedCustomers([]); }} style={inputStyle} disabled={!zoneId}>
-            <option value="">{zoneId ? 'No group — pick customers manually' : 'Select a zone first'}</option>
+            <option value="">{zoneId ? t('coll.no_group_pick_customers_manually') : t('cust.select_a_zone_first')}</option>
             {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
           </select>
         </label>
         {groupId && (
           <label style={fieldStyle}>
-            <span style={labelStyle}>Customer type filter</span>
+            <span style={labelStyle}>{t('coll.customer_type_filter')}</span>
             <div style={{ display: 'flex', gap: '8px' }}>
-              {['all', 'residential', 'commercial'].map((t) => (
-                <button type="button" key={t} onClick={() => setTypeFilter(t)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '13px', cursor: 'pointer', textTransform: 'capitalize', border: `1px solid ${typeFilter === t ? 'var(--brand)' : 'var(--border)'}`, background: typeFilter === t ? 'var(--success-bg)' : 'var(--surface)', color: typeFilter === t ? 'var(--brand)' : 'var(--text-muted)' }}>{t}</button>
+              {['all', 'residential', 'commercial'].map((ty) => (
+                <button type="button" key={ty} onClick={() => setTypeFilter(ty)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '13px', cursor: 'pointer', textTransform: 'capitalize', border: `1px solid ${typeFilter === ty ? 'var(--brand)' : 'var(--border)'}`, background: typeFilter === ty ? 'var(--success-bg)' : 'var(--surface)', color: typeFilter === ty ? 'var(--brand)' : 'var(--text-muted)' }}>{ty === 'all' ? t('cust.all_types') : t('cust.' + ty, ty)}</button>
               ))}
             </div>
             {eligiblePreview && (
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {eligiblePreview.count} eligible customer(s) — {eligiblePreview.customer_type_breakdown.residential} residential, {eligiblePreview.customer_type_breakdown.commercial} commercial.
-                This filter narrows the candidate list only — DR-7 (all-Residential or all-Commercial per batch) is still enforced when the batch is created.
+                {t('coll.m.eligible', undefined, { count: eligiblePreview.count, residential: eligiblePreview.customer_type_breakdown.residential, commercial: eligiblePreview.customer_type_breakdown.commercial })}
               </span>
             )}
           </label>
         )}
         <label style={fieldStyle}>
-          <span style={labelStyle}>Customer type</span>
+          <span style={labelStyle}>{t('cust.customer_type')}</span>
           <div style={{ display: 'flex', gap: '8px' }}>
-            {['residential', 'commercial'].map((t) => (
-              <button type="button" key={t} onClick={() => setCustomerType(t)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '13px', cursor: 'pointer', textTransform: 'capitalize', border: `1px solid ${customerType === t ? 'var(--brand)' : 'var(--border)'}`, background: customerType === t ? 'var(--success-bg)' : 'var(--surface)', color: customerType === t ? 'var(--brand)' : 'var(--text-muted)' }}>{t}</button>
+            {['residential', 'commercial'].map((ty) => (
+              <button type="button" key={ty} onClick={() => setCustomerType(ty)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '13px', cursor: 'pointer', textTransform: 'capitalize', border: `1px solid ${customerType === ty ? 'var(--brand)' : 'var(--border)'}`, background: customerType === ty ? 'var(--success-bg)' : 'var(--surface)', color: customerType === ty ? 'var(--brand)' : 'var(--text-muted)' }}>{ty === 'all' ? t('cust.all_types') : t('cust.' + ty, ty)}</button>
             ))}
           </div>
         </label>
         {customerType === 'commercial' && (
           <label style={fieldStyle}>
-            <span style={labelStyle}>Commercial shift</span>
+            <span style={labelStyle}>{t('cust.commercial_shift')}</span>
             <select value={shift} onChange={(e) => setShift(e.target.value)} style={inputStyle}>
-              <option value="day">Day</option>
-              <option value="night">Night</option>
+              <option value="day">{t('cust.day')}</option>
+              <option value="night">{t('cust.night')}</option>
             </select>
           </label>
         )}
         <label style={fieldStyle}>
-          <span style={labelStyle}>Start date</span>
+          <span style={labelStyle}>{t('coll.start_date')}</span>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} />
         </label>
         {!groupId && (
           <label style={fieldStyle}>
-            <span style={labelStyle}>Customers ({selectedCustomers.length} selected)</span>
+            <span style={labelStyle}>{t('coll.m.customersSelected', undefined, { n: selectedCustomers.length })}</span>
             <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px' }}>
-              {!zoneId && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select a zone to see eligible customers.</span>}
-              {zoneId && eligibleCustomers.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No {customerType} customers in this zone.</span>}
+              {!zoneId && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('coll.select_a_zone_to_see')}</span>}
+              {zoneId && eligibleCustomers.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('coll.m.noTypeCustomers', undefined, { type: t('cust.' + customerType, customerType) })}</span>}
               {eligibleCustomers.map((c) => (
                 <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '13px' }}>
                   <input type="checkbox" checked={selectedCustomers.includes(c.id)} onChange={() => toggleCustomer(c.id)} />

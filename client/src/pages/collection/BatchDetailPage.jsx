@@ -16,11 +16,13 @@ import { useTrucks } from '../../hooks/useTrucks.js';
 // path from an actual serviced collection to a real invoice — every one
 // had to be typed by hand. See invoices.js's own POST /bulk-generate.
 import { useBulkGenerateInvoices } from '../../hooks/useFinancial.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_LABELS = { draft: 'Draft', assigned: 'Assigned', in_progress: 'In Progress', partially_completed: 'Partially Completed', completed: 'Completed', cancelled: 'Cancelled' };
 const CUSTOMER_STATUS_MAP = { pending: 'warning', serviced: 'success', missed: 'danger', skipped: 'info', rescheduled: 'info' };
 
 export default function BatchDetailPage() {
+  const { t } = useI18n();
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -34,56 +36,56 @@ export default function BatchDetailPage() {
   const toast = useToast();
   const batch = data?.data;
 
-  if (isLoading) return <LoadingState label="Loading batch…" />;
+  if (isLoading) return <LoadingState label={t('coll.loading_batch')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!batch) return null;
 
   const progress = batch.progress || {};
 
   async function handleStart() {
-    try { await startBatch.mutateAsync(); toast.success('Batch started.'); }
-    catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    try { await startBatch.mutateAsync(); toast.success(t('coll.batch_started')); }
+    catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleCloseCycle() {
     try {
       const result = await closeCycle.mutateAsync();
-      toast.success(`Batch is now ${STATUS_LABELS[result.data.status]}.`);
-    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+      toast.success(t('coll.m.batchNow', undefined, { status: t('status.' + result.data.status, STATUS_LABELS[result.data.status]) }));
+    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleGenerateInvoices() {
     try {
       const result = await bulkGenerateInvoices.mutateAsync(id);
       const { created, skipped_no_fee: skippedNoFee } = result.data;
       if (created.length === 0 && skippedNoFee.length === 0) {
-        toast.success('Nothing to invoice — every serviced customer already has one.');
+        toast.success(t('coll.nothing_to_invoice_every_serviced'));
       } else if (skippedNoFee.length > 0) {
-        toast.success(`${created.length} invoice(s) created. ${skippedNoFee.length} skipped — no fee on file (${skippedNoFee.map((c) => c.customer_name).join(', ')}).`);
+        toast.success(t('coll.m.invoicesCreatedSkipped', undefined, { created: created.length, skipped: skippedNoFee.length, names: skippedNoFee.map((c) => c.customer_name).join(', ') }));
       } else {
-        toast.success(`${created.length} invoice(s) created.`);
+        toast.success(t('coll.m.invoicesCreated', undefined, { created: created.length }));
       }
-    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleCancel(reason) {
-    try { await cancelBatch.mutateAsync(reason); toast.success('Batch cancelled.'); setCancelOpen(false); }
-    catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    try { await cancelBatch.mutateAsync(reason); toast.success(t('coll.batch_cancelled')); setCancelOpen(false); }
+    catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
 
   return (
     <div>
       <button onClick={() => navigate('/collection-cycles/batches')} style={backLinkStyle}>
-        <ArrowLeft size={14} /> Back to Batches
+        <ArrowLeft size={14} /> {t('coll.back_to_batches')}
       </button>
 
       <PageHeader
         icon={ClipboardList}
         title={batch.batch_code}
-        subtitle={`${batch.zone_name} · ${batch.customer_type}${batch.commercial_shift ? ` (${batch.commercial_shift})` : ''}`}
+        subtitle={`${batch.zone_name} · ${t('cust.' + batch.customer_type, batch.customer_type)}${batch.commercial_shift ? ` (${t('cust.' + batch.commercial_shift, batch.commercial_shift)})` : ''}`}
         actions={
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <RoleGate roles={['admin', 'gudoomiye']}>
-              {['draft', 'assigned'].includes(batch.status) && <Button variant="secondary" icon={Play} onClick={handleStart} disabled={startBatch.isPending}>Start</Button>}
-              {['in_progress', 'assigned', 'partially_completed'].includes(batch.status) && <Button variant="secondary" icon={Flag} onClick={handleCloseCycle} disabled={closeCycle.isPending}>Close Cycle</Button>}
-              {!['completed', 'cancelled'].includes(batch.status) && <Button variant="danger" icon={XCircle} onClick={() => setCancelOpen(true)}>Cancel</Button>}
+              {['draft', 'assigned'].includes(batch.status) && <Button variant="secondary" icon={Play} onClick={handleStart} disabled={startBatch.isPending}>{t('coll.start')}</Button>}
+              {['in_progress', 'assigned', 'partially_completed'].includes(batch.status) && <Button variant="secondary" icon={Flag} onClick={handleCloseCycle} disabled={closeCycle.isPending}>{t('coll.close_cycle')}</Button>}
+              {!['completed', 'cancelled'].includes(batch.status) && <Button variant="danger" icon={XCircle} onClick={() => setCancelOpen(true)}>{t('common.cancel')}</Button>}
             </RoleGate>
             {/* Generate Invoices — user-reported gap (Phase 10). Same
                 CREATE_ROLES the backend route itself enforces (admin,
@@ -95,7 +97,7 @@ export default function BatchDetailPage() {
             {(progress.serviced ?? 0) > 0 && (
               <RoleGate roles={['admin', 'cashier']}>
                 <Button variant="secondary" icon={Receipt} onClick={handleGenerateInvoices} disabled={bulkGenerateInvoices.isPending}>
-                  {bulkGenerateInvoices.isPending ? 'Generating…' : 'Generate Invoices'}
+                  {bulkGenerateInvoices.isPending ? t('coll.generating') : t('coll.generate_invoices')}
                 </Button>
               </RoleGate>
             )}
@@ -105,47 +107,47 @@ export default function BatchDetailPage() {
 
       <div style={{ marginBottom: '20px' }}>
         <DetailGrid items={[
-          { label: 'Status', value: <StatusBadge status={STATUS_LABELS[batch.status]} map={{ draft: 'info', assigned: 'warning', 'in progress': 'warning', 'partially completed': 'warning', completed: 'success', cancelled: 'danger' }} /> },
-          { label: 'Progress', value: `${progress.percent_complete ?? 0}%` },
-          { label: 'Total customers', value: progress.total ?? batch.total_customers, className: 'tabular-nums' },
-          { label: 'Pending', value: progress.pending ?? '—', className: 'tabular-nums' },
-          { label: 'Serviced', value: progress.serviced ?? '—', className: 'tabular-nums' },
-          { label: 'Missed', value: progress.missed ?? '—', className: 'tabular-nums' },
-          { label: 'Skipped', value: progress.skipped ?? '—', className: 'tabular-nums' },
-          { label: 'Rescheduled', value: progress.rescheduled ?? '—', className: 'tabular-nums' },
+          { label: t('common.status'), value: <StatusBadge status={STATUS_LABELS[batch.status]} map={{ draft: 'info', assigned: 'warning', 'in progress': 'warning', 'partially completed': 'warning', completed: 'success', cancelled: 'danger' }} /> },
+          { label: t('coll.progress'), value: `${progress.percent_complete ?? 0}%` },
+          { label: t('coll.total_customers'), value: progress.total ?? batch.total_customers, className: 'tabular-nums' },
+          { label: t('status.pending'), value: progress.pending ?? '—', className: 'tabular-nums' },
+          { label: t('status.serviced'), value: progress.serviced ?? '—', className: 'tabular-nums' },
+          { label: t('status.missed'), value: progress.missed ?? '—', className: 'tabular-nums' },
+          { label: t('status.skipped'), value: progress.skipped ?? '—', className: 'tabular-nums' },
+          { label: t('status.rescheduled'), value: progress.rescheduled ?? '—', className: 'tabular-nums' },
         ]} />
       </div>
 
-      <span style={sectionLabelStyle}>Capacity</span>
+      <span style={sectionLabelStyle}>{t('coll.capacity')}</span>
       <div style={{ marginBottom: '20px' }}>
         <CapacityPanel capacity={batch.capacity} />
       </div>
 
-      <span style={sectionLabelStyle}>Tasks &amp; Resources</span>
+      <span style={sectionLabelStyle}>{t('coll.tasks_and_resources')}</span>
       <RoleGate roles={['admin', 'gudoomiye']}>
         <div style={{ marginBottom: '12px' }}>
-          <Button variant="secondary" icon={Plus} onClick={() => setAddTaskOpen(true)}>Add Task</Button>
+          <Button variant="secondary" icon={Plus} onClick={() => setAddTaskOpen(true)}>{t('coll.add_task')}</Button>
         </div>
       </RoleGate>
       {(batch.tasks || []).length === 0 && (
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
-          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>No tasks created yet.</p>
+          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('coll.no_tasks_created_yet')}</p>
         </Card>
       )}
       {(batch.tasks || []).map((task) => (
         <TaskCard key={task.id} task={task} batchId={id} currentUserRole={user?.role} />
       ))}
 
-      <span style={{ ...sectionLabelStyle, marginTop: '24px' }}>Customers</span>
+      <span style={{ ...sectionLabelStyle, marginTop: '24px' }}>{t('nav.customers')}</span>
       <CustomerStatusTable batchId={id} tasks={batch.tasks || []} currentUserRole={user?.role} />
 
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
         onConfirm={() => handleCancel(document.getElementById('cancel-reason')?.value || '')}
-        title="Cancel this batch?"
+        title={t('coll.cancel_this_batch')}
         message={<CancelReasonPrompt />}
-        confirmLabel="Cancel Batch"
+        confirmLabel={t('coll.cancel_batch')}
         danger
         isLoading={cancelBatch.isPending}
       />
@@ -155,15 +157,17 @@ export default function BatchDetailPage() {
 }
 
 function CancelReasonPrompt() {
+  const { t } = useI18n();
   return (
     <div>
-      <p style={{ margin: '0 0 8px' }}>This will stop all further work on the batch. A reason is required.</p>
-      <input id="cancel-reason" placeholder="Reason for cancellation" style={inputStyle} />
+      <p style={{ margin: '0 0 8px' }}>{t('coll.this_will_stop_all_further')}</p>
+      <input id="cancel-reason" placeholder={t('coll.reason_for_cancellation')} style={inputStyle} />
     </div>
   );
 }
 
 function TaskCard({ task, batchId, currentUserRole }) {
+  const { t } = useI18n();
   const toast = useToast();
   const removeResource = useRemoveResource(batchId, task.id);
   const taskStatus = useTaskStatus(batchId, task.id);
@@ -187,16 +191,16 @@ function TaskCard({ task, batchId, currentUserRole }) {
     if (!reason) return;
     try {
       await removeResource.mutateAsync({ resourceType: r.resource_type, resourceId: r.resource_id, reason });
-      toast.success('Resource removed.');
-    } catch (err) { toast.error(err.message || 'Something went wrong.'); }
+      toast.success(t('coll.resource_removed'));
+    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleStatus(status) {
     setStartBlockedMessage(null);
     try {
       await taskStatus.mutateAsync(status);
-      toast.success(`Task status changed to ${status}.`);
+      toast.success(t('coll.m.taskStatusChanged', undefined, { status: t('status.' + status, status) }));
     } catch (err) {
-      const message = err.message || 'Something went wrong.';
+      const message = err.message || t('common.somethingWrong');
       toast.error(message);
       if (status === 'in_progress' && /capacity|DR-7|assignment/i.test(message)) setStartBlockedMessage(message);
     }
@@ -206,30 +210,30 @@ function TaskCard({ task, batchId, currentUserRole }) {
     <Card style={{ padding: '16px', marginBottom: '12px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
         <div>
-          <strong>Task #{task.id}</strong> — <StatusBadge status={task.status.replace('_', ' ')} map={{ pending: 'warning', 'in progress': 'info', completed: 'success' }} />
+          <strong>{t('coll.m.taskNum', undefined, { id: task.id })}</strong> — <StatusBadge status={task.status.replace('_', ' ')} map={{ pending: 'warning', 'in progress': 'info', completed: 'success' }} />
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
-          {task.status === 'pending' && <Button variant="secondary" onClick={() => handleStatus('in_progress')} disabled={taskStatus.isPending}>Start Task</Button>}
-          {task.status === 'in_progress' && <Button variant="primary" onClick={() => handleStatus('completed')} disabled={taskStatus.isPending}>Complete Task</Button>}
+          {task.status === 'pending' && <Button variant="secondary" onClick={() => handleStatus('in_progress')} disabled={taskStatus.isPending}>{t('coll.start_task')}</Button>}
+          {task.status === 'in_progress' && <Button variant="primary" onClick={() => handleStatus('completed')} disabled={taskStatus.isPending}>{t('coll.complete_task')}</Button>}
         </div>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
-        {task.resources.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No resources assigned.</span>}
+        {task.resources.length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('coll.no_resources_assigned')}</span>}
         {task.resources.map((r) => (
           <span key={`${r.resource_type}-${r.resource_id}`} style={chipStyle}>
             <span style={{ textTransform: 'capitalize' }}>{r.resource_type}</span>: {r.name || `#${r.resource_id}`}
             {isAdminOrGud && (
-              <button onClick={() => handleRemove(r)} aria-label="Remove" style={chipRemoveStyle}><Trash2 size={12} /></button>
+              <button onClick={() => handleRemove(r)} aria-label={t('fin.remove')} style={chipRemoveStyle}><Trash2 size={12} /></button>
             )}
           </span>
         ))}
         {isAdminOrGud && (
-          <Button variant="secondary" icon={Plus} style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => setAssignOpen(true)}>Assign Resource</Button>
+          <Button variant="secondary" icon={Plus} style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => setAssignOpen(true)}>{t('coll.assign_resource')}</Button>
         )}
       </div>
       {startBlockedMessage && (
         <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--danger-bg)', color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>
-          Task Start blocked: {startBlockedMessage}
+          {t('coll.m.taskBlocked')} {startBlockedMessage}
         </div>
       )}
       <AssignResourceModal open={assignOpen} onClose={() => setAssignOpen(false)} batchId={batchId} taskId={task.id} />
@@ -238,6 +242,7 @@ function TaskCard({ task, batchId, currentUserRole }) {
 }
 
 function AssignResourceModal({ open, onClose, batchId, taskId }) {
+  const { t } = useI18n();
   const [resourceType, setResourceType] = useState('collector');
   const [resourceId, setResourceId] = useState('');
   const [error, setError] = useState('');
@@ -256,14 +261,14 @@ function AssignResourceModal({ open, onClose, batchId, taskId }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!resourceId) { setError('Select a resource.'); return; }
+    if (!resourceId) { setError(t('coll.select_a_resource')); return; }
     try {
       await assign.mutateAsync({ resource_type: resourceType, resource_id: parseInt(resourceId, 10) });
-      toast.success('Resource assigned.');
+      toast.success(t('coll.resource_assigned'));
       onClose();
       setResourceId('');
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -271,33 +276,33 @@ function AssignResourceModal({ open, onClose, batchId, taskId }) {
     <Modal
       open
       onClose={assign.isPending ? () => {} : onClose}
-      title="Assign Resource"
+      title={t('coll.assign_resource')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={assign.isPending}>Cancel</Button>
-        <Button type="submit" form="assign-resource-form" disabled={assign.isPending || wouldExceedCapacity}>{assign.isPending ? 'Assigning…' : 'Assign'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={assign.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="assign-resource-form" disabled={assign.isPending || wouldExceedCapacity}>{assign.isPending ? t('coll.assigning') : t('coll.assign')}</Button>
       </>}
     >
       <form id="assign-resource-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Resource type</span>
+          <span style={labelStyle}>{t('coll.resource_type')}</span>
           <select value={resourceType} onChange={(e) => { setResourceType(e.target.value); setResourceId(''); }} style={inputStyle}>
-            <option value="collector">Collector</option>
-            <option value="driver">Driver</option>
-            <option value="truck">Truck</option>
+            <option value="collector">{t('collector.role')}</option>
+            <option value="driver">{t('coll.driver')}</option>
+            <option value="truck">{t('coll.truck')}</option>
           </select>
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Resource</span>
+          <span style={labelStyle}>{t('coll.resource')}</span>
           <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={inputStyle}>
-            <option value="">Select…</option>
-            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (capacity ${o.capacity})` : ''}</option>)}
+            <option value="">{t('coll.select')}</option>
+            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (${t('coll.m.capacityShort', undefined, { cap: o.capacity })})` : ''}</option>)}
           </select>
         </label>
         {selectedTruck && selectedTruck.capacity != null && (
           <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: wouldExceedCapacity ? 'var(--danger-bg)' : 'var(--bg)', border: '1px solid var(--border)' }}>
             <span className="tabular-nums" style={{ fontSize: '12px', fontWeight: wouldExceedCapacity ? 700 : 400, color: wouldExceedCapacity ? 'var(--danger)' : 'var(--text-muted)' }}>
-              Batch load {batchLoad} / truck capacity {selectedTruck.capacity}
-              {wouldExceedCapacity ? ` — Over Capacity by ${batchLoad - selectedTruck.capacity}. This truck cannot be assigned.` : ' — Within Capacity.'}
+              {t('coll.m.batchLoad', undefined, { load: batchLoad, cap: selectedTruck.capacity })}
+              {wouldExceedCapacity ? ` — ${t('coll.m.overCapacity', undefined, { by: batchLoad - selectedTruck.capacity })}` : t('coll.within_capacity')}
             </span>
           </div>
         )}
@@ -312,6 +317,7 @@ function AddTaskModal({ open, onClose, batchId }) {
   return <AddTaskContent onClose={onClose} batchId={batchId} />;
 }
 function AddTaskContent({ onClose, batchId }) {
+  const { t } = useI18n();
   const [resourceType, setResourceType] = useState('collector');
   const [resourceId, setResourceId] = useState('');
   const [error, setError] = useState('');
@@ -335,10 +341,10 @@ function AddTaskContent({ onClose, batchId }) {
     try {
       const resources = resourceId ? [{ resource_type: resourceType, resource_id: parseInt(resourceId, 10) }] : [];
       await createTask.mutateAsync({ resources });
-      toast.success('Task created.');
+      toast.success(t('coll.task_created'));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -346,34 +352,34 @@ function AddTaskContent({ onClose, batchId }) {
     <Modal
       open
       onClose={createTask.isPending ? () => {} : onClose}
-      title="Add Task"
+      title={t('coll.add_task')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={createTask.isPending}>Cancel</Button>
-        <Button type="submit" form="add-task-form" disabled={createTask.isPending || wouldExceedCapacity}>{createTask.isPending ? 'Saving…' : 'Add Task'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={createTask.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="add-task-form" disabled={createTask.isPending || wouldExceedCapacity}>{createTask.isPending ? t('common.saving') : t('coll.add_task')}</Button>
       </>}
     >
       <form id="add-task-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>A task can start with no resource, or one — add more from the batch&rsquo;s Task card afterward.</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('coll.a_task_can_start_with')}</span>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Resource type</span>
+          <span style={labelStyle}>{t('coll.resource_type')}</span>
           <select value={resourceType} onChange={(e) => { setResourceType(e.target.value); setResourceId(''); }} style={inputStyle}>
-            <option value="collector">Collector</option>
-            <option value="driver">Driver</option>
-            <option value="truck">Truck</option>
+            <option value="collector">{t('collector.role')}</option>
+            <option value="driver">{t('coll.driver')}</option>
+            <option value="truck">{t('coll.truck')}</option>
           </select>
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Resource</span>
+          <span style={labelStyle}>{t('coll.resource')}</span>
           <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={inputStyle}>
-            <option value="">None (add later)</option>
-            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (capacity ${o.capacity})` : ''}</option>)}
+            <option value="">{t('coll.none_add_later')}</option>
+            {options.map((o) => <option key={o.id} value={o.id}>{o.name || o.plate_number}{resourceType === 'truck' && o.capacity != null ? ` (${t('coll.m.capacityShort', undefined, { cap: o.capacity })})` : ''}</option>)}
           </select>
         </label>
         {selectedTruck && selectedTruck.capacity != null && (
           <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: wouldExceedCapacity ? 'var(--danger-bg)' : 'var(--bg)', border: '1px solid var(--border)' }}>
             <span className="tabular-nums" style={{ fontSize: '12px', fontWeight: wouldExceedCapacity ? 700 : 400, color: wouldExceedCapacity ? 'var(--danger)' : 'var(--text-muted)' }}>
-              Batch load {batchLoad} / truck capacity {selectedTruck.capacity}
-              {wouldExceedCapacity ? ` — Over Capacity by ${batchLoad - selectedTruck.capacity}. This truck cannot be assigned.` : ' — Within Capacity.'}
+              {t('coll.m.batchLoad', undefined, { load: batchLoad, cap: selectedTruck.capacity })}
+              {wouldExceedCapacity ? ` — ${t('coll.m.overCapacity', undefined, { by: batchLoad - selectedTruck.capacity })}` : t('coll.within_capacity')}
             </span>
           </div>
         )}
@@ -384,6 +390,7 @@ function AddTaskContent({ onClose, batchId }) {
 }
 
 function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
+  const { t } = useI18n();
   const { data, isLoading, error, refetch } = useBatchCustomers(batchId);
   const markStatus = useMarkCustomerStatus(batchId);
   const reschedule = useRescheduleCustomer(batchId);
@@ -400,24 +407,24 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
   async function handleMark(customerId, status, reason) {
     try {
       await markStatus.mutateAsync({ customerId, status, task_id: defaultTaskId, reason });
-      toast.success(`Marked ${status}.`);
+      toast.success(t('coll.m.marked', undefined, { status: t('status.' + status, status) }));
       setMissedTarget(null);
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
   async function handleReschedule(customerId, targetBatchId) {
     try {
       await reschedule.mutateAsync({ customerId, target_batch_id: targetBatchId });
-      toast.success('Customer rescheduled.');
+      toast.success(t('coll.customer_rescheduled'));
       setRescheduleTarget(null);
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
-  if (isLoading) return <LoadingState label="Loading customers…" />;
+  if (isLoading) return <LoadingState label={t('coll.loading_customers')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
 
   return (
@@ -432,18 +439,18 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
             <td style={cellStyle}>
               {c.status === 'pending' && (
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {canMarkStatus && !defaultTaskId && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Add a task first.</span>}
+                  {canMarkStatus && !defaultTaskId && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('coll.add_a_task_first')}</span>}
                   {canMarkStatus && defaultTaskId && (
                     <>
-                      <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'serviced')} disabled={markStatus.isPending}>Serviced</Button>
-                      <Button variant="secondary" onClick={() => setMissedTarget(c)} disabled={markStatus.isPending}>Missed</Button>
-                      <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'skipped')} disabled={markStatus.isPending}>Skip</Button>
+                      <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'serviced')} disabled={markStatus.isPending}>{t('status.serviced')}</Button>
+                      <Button variant="secondary" onClick={() => setMissedTarget(c)} disabled={markStatus.isPending}>{t('status.missed')}</Button>
+                      <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'skipped')} disabled={markStatus.isPending}>{t('coll.skip')}</Button>
                     </>
                   )}
                 </div>
               )}
               {c.status === 'missed' && canReschedule && (
-                <Button variant="secondary" icon={CalendarClock} onClick={() => setRescheduleTarget(c)}>Reschedule</Button>
+                <Button variant="secondary" icon={CalendarClock} onClick={() => setRescheduleTarget(c)}>{t('coll.reschedule')}</Button>
               )}
             </td>
           </tr>
@@ -452,24 +459,24 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
       <Modal
         open={!!missedTarget}
         onClose={() => setMissedTarget(null)}
-        title="Mark as Missed"
+        title={t('coll.mark_as_missed')}
         footer={<>
-          <Button variant="secondary" onClick={() => setMissedTarget(null)}>Cancel</Button>
-          <Button variant="danger" onClick={() => handleMark(missedTarget.customer_id, 'missed', document.getElementById('missed-reason')?.value)} disabled={markStatus.isPending}>Confirm Missed</Button>
+          <Button variant="secondary" onClick={() => setMissedTarget(null)}>{t('common.cancel')}</Button>
+          <Button variant="danger" onClick={() => handleMark(missedTarget.customer_id, 'missed', document.getElementById('missed-reason')?.value)} disabled={markStatus.isPending}>{t('coll.confirm_missed')}</Button>
         </>}
       >
         <label style={fieldStyle}>
-          <span style={labelStyle}>Reason (required)</span>
-          <input id="missed-reason" style={inputStyle} placeholder="e.g. Gate locked, no one home" />
+          <span style={labelStyle}>{t('collector.reasonPlaceholder')}</span>
+          <input id="missed-reason" style={inputStyle} placeholder={t('coll.e_g_gate_locked_no')} />
         </label>
       </Modal>
       <Modal
         open={!!rescheduleTarget}
         onClose={() => setRescheduleTarget(null)}
-        title="Reschedule Customer"
+        title={t('coll.reschedule_customer')}
         footer={null}
       >
-        <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>Choose a target Draft batch to move this customer into. Adding this customer to an over-capacity target will be blocked by the server.</p>
+        <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>{t('coll.choose_a_target_draft_batch')}</p>
         {(otherBatchesData?.data || []).filter((b) => b.id !== Number(batchId)).map((b) => (
           <RescheduleTargetOption
             key={b.id}
@@ -478,7 +485,7 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
             disabled={reschedule.isPending}
           />
         ))}
-        {(otherBatchesData?.data || []).length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No other Draft batches available — create one first.</span>}
+        {(otherBatchesData?.data || []).length === 0 && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('coll.no_other_draft_batches_available')}</span>}
       </Modal>
     </>
   );
@@ -507,10 +514,11 @@ function RescheduleTargetOption({ batch, onSelect, disabled }) {
 }
 
 function DataTableSimple({ rows, renderRow }) {
+  const { t } = useI18n();
   if (rows.length === 0) {
     return (
       <Card style={{ padding: '16px' }}>
-        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>No customers in this batch yet.</p>
+        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('coll.no_customers_in_this_batch')}</p>
       </Card>
     );
   }
@@ -519,7 +527,7 @@ function DataTableSimple({ rows, renderRow }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
         <thead>
           <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-            {['Customer #', 'Name', 'Status', 'Actions'].map((h) => (
+            {[t('coll.customer'), t('common.name'), t('common.status'), t('coll.actions')].map((h) => (
               <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
           </tr>

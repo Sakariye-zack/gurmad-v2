@@ -42,7 +42,7 @@ export default function CustomerDetailScreen() {
         <ChevronLeft size={18} /> {t('collector.backToAssignments')}
       </button>
       <h2 style={{ margin: '0 0 4px' }}>{customer.business_name || customer.name}</h2>
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>{batchCode} · {customer.customer_type}</div>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>{batchCode} · {t('cust.' + customer.customer_type, customer.customer_type)}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
         <InfoRow icon={MapPin} label={customer.address_line || t('collector.noAddress')} />
         {customer.phone && <InfoRow icon={Phone} label={customer.phone} href={`tel:${customer.phone}`} />}

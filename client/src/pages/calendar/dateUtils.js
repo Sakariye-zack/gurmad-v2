@@ -3,6 +3,8 @@
 // is a disclosed, non-business implementation default (Spec Open Risks) —
 // not an independently-confirmed business decision.
 
+import { appLocale } from '../../lib/dateLocale.js';
+
 function toDateOnly(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
@@ -73,11 +75,11 @@ export function eachDay(from, to) {
 }
 
 export function formatDayLabel(d) {
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+  return d.toLocaleDateString(appLocale(), { weekday: 'short', day: 'numeric' });
 }
 
 export function formatMonthLabel(d) {
-  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  return d.toLocaleDateString(appLocale(), { month: 'long', year: 'numeric' });
 }
 
 export function formatWeekLabel(d) {
@@ -85,5 +87,6 @@ export function formatWeekLabel(d) {
   const e = endOfWeek(d);
   const sameMonth = s.getMonth() === e.getMonth();
   const sOpts = sameMonth ? { day: 'numeric' } : { month: 'short', day: 'numeric' };
-  return `${s.toLocaleDateString(undefined, sOpts)} – ${e.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const loc = appLocale();
+  return `${s.toLocaleDateString(loc, sOpts)} – ${e.toLocaleDateString(loc, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }

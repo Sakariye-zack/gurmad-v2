@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateZone, useUpdateZone } from '../../hooks/useZones.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const EMPTY = { name: '', zone_code: '', sub_zone: '', area: '', status: 'active', collection_days: [] };
@@ -30,6 +31,7 @@ export default function ZoneFormModal({ open, onClose, zone }) {
 }
 
 function ZoneFormModalContent({ onClose, zone }) {
+  const { t } = useI18n();
   const isEdit = !!zone;
   const [form, setForm] = useState(() => toFormState(zone));
   const [fieldErrors, setFieldErrors] = useState({});
@@ -75,14 +77,14 @@ function ZoneFormModalContent({ onClose, zone }) {
     try {
       if (isEdit) {
         await updateZone.mutateAsync(payload);
-        toast.success(`${payload.name} updated.`);
+        toast.success(t('fin.m.updated', undefined, { name: payload.name }));
       } else {
         await createZone.mutateAsync(payload);
-        toast.success(`${payload.name} created.`);
+        toast.success(t('fin.m.created', undefined, { number: payload.name }));
       }
       onClose();
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -90,34 +92,34 @@ function ZoneFormModalContent({ onClose, zone }) {
     <Modal
       open
       onClose={busy ? () => {} : onClose}
-      title={isEdit ? 'Edit Zone' : 'Create Zone'}
+      title={isEdit ? t('zone.edit_zone') : t('zone.create_zone')}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button type="submit" form="zone-form" disabled={busy}>{busy ? 'Saving…' : 'Save Zone'}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t('common.cancel')}</Button>
+          <Button type="submit" form="zone-form" disabled={busy}>{busy ? t('common.saving') : t('zone.save_zone')}</Button>
         </>
       }
     >
       <form id="zone-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <Field label="Zone name" error={fieldErrors.name}>
+        <Field label={t('zone.zone_name')} error={fieldErrors.name}>
           <input value={form.name} onChange={(e) => set('name', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Zone code" error={fieldErrors.zone_code} hint="Unique, e.g. FARAH-OMAR">
+        <Field label={t('zone.zone_code')} error={fieldErrors.zone_code} hint={t('zone.unique_e_g_farah_omar')}>
           <input value={form.zone_code} onChange={(e) => set('zone_code', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Sub-zone">
+        <Field label={t('zone.sub_zone')}>
           <input value={form.sub_zone} onChange={(e) => set('sub_zone', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Area">
+        <Field label={t('zone.area')}>
           <input value={form.area} onChange={(e) => set('area', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Status">
+        <Field label={t('common.status')}>
           <select value={form.status} onChange={(e) => set('status', e.target.value)} style={inputStyle}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
+            <option value="active">{t('status.active')}</option>
+            <option value="inactive">{t('status.inactive')}</option>
           </select>
         </Field>
-        <Field label="Collection days">
+        <Field label={t('zone.collection_days')}>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {DAYS.map((d) => {
               const active = form.collection_days.includes(d);

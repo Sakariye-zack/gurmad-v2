@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateGroup, useUpdateGroup } from '../../hooks/useGroups.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const EMPTY = { zone_id: '', code: '', name: '', status: 'active' };
 
@@ -25,6 +26,7 @@ export default function GroupFormModal({ open, onClose, group, defaultZoneId }) 
 }
 
 function GroupFormModalContent({ onClose, group, defaultZoneId }) {
+  const { t } = useI18n();
   const isEdit = !!group;
   const [form, setForm] = useState(() => {
     const base = toFormState(group);
@@ -57,14 +59,14 @@ function GroupFormModalContent({ onClose, group, defaultZoneId }) {
     try {
       if (isEdit) {
         await updateGroup.mutateAsync({ code: form.code.trim(), name: form.name.trim() || null, status: form.status });
-        toast.success(`${form.code} updated.`);
+        toast.success(t('fin.m.updated', undefined, { name: form.code }));
       } else {
         await createGroup.mutateAsync({ zone_id: parseInt(form.zone_id, 10), code: form.code.trim(), name: form.name.trim() || null });
-        toast.success(`${form.code} created.`);
+        toast.success(t('fin.m.created', undefined, { number: form.code }));
       }
       onClose();
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -72,32 +74,32 @@ function GroupFormModalContent({ onClose, group, defaultZoneId }) {
     <Modal
       open
       onClose={busy ? () => {} : onClose}
-      title={isEdit ? 'Edit Group' : 'Create Group'}
+      title={isEdit ? t('group.edit_group') : t('group.create_group')}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button type="submit" form="group-form" disabled={busy}>{busy ? 'Saving…' : 'Save Group'}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t('common.cancel')}</Button>
+          <Button type="submit" form="group-form" disabled={busy}>{busy ? t('common.saving') : t('group.save_group')}</Button>
         </>
       }
     >
       <form id="group-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <Field label="Zone" error={fieldErrors.zone_id} hint={isEdit ? 'Zone cannot be changed after a group is created.' : undefined}>
+        <Field label={t('common.zone')} error={fieldErrors.zone_id} hint={isEdit ? t('group.zone_cannot_be_changed_after') : undefined}>
           <select value={form.zone_id} onChange={(e) => set('zone_id', e.target.value)} style={inputStyle} disabled={isEdit}>
-            <option value="">Select a zone…</option>
+            <option value="">{t('cust.select_a_zone')}</option>
             {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </select>
         </Field>
-        <Field label="Group code" error={fieldErrors.code} hint="e.g. Group 07 — unique within its zone.">
+        <Field label={t('group.group_code')} error={fieldErrors.code} hint="e.g. Group 07 — unique within its zone.">
           <input value={form.code} onChange={(e) => set('code', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Name (optional)">
+        <Field label={t('group.name_optional')}>
           <input value={form.name} onChange={(e) => set('name', e.target.value)} style={inputStyle} />
         </Field>
         {isEdit && (
-          <Field label="Status">
+          <Field label={t('common.status')}>
             <select value={form.status} onChange={(e) => set('status', e.target.value)} style={inputStyle}>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
+              <option value="active">{t('status.active')}</option>
+              <option value="inactive">{t('status.inactive')}</option>
             </select>
           </Field>
         )}

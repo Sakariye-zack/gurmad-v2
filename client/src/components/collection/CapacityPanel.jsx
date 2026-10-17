@@ -1,6 +1,7 @@
 import React from 'react';
 import { Truck } from 'lucide-react';
 import { StatCard, StatusBadge, Card } from '../ui/index.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Shared capacity display — Batch List/Detail, Add-Task truck selection, and
 // the reschedule-target picker all use this so "what capacity looks like"
@@ -12,21 +13,22 @@ const STATUS_LABEL = { within: 'Within Capacity', near: 'Near Capacity', over: '
 const STATUS_VARIANT = { within: 'success', near: 'warning', over: 'danger' };
 
 export default function CapacityPanel({ capacity, compact = false }) {
+  const { t } = useI18n();
   if (!capacity || capacity.status === 'no_truck') {
-    if (compact) return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No truck</span>;
+    if (compact) return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('comp.no_truck')}</span>;
     return (
       <Card style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Truck size={16} color="var(--text-muted)" />
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No truck assigned yet — capacity will show once a truck is assigned to a task.</span>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('comp.no_truck_assigned_yet_capacity')}</span>
       </Card>
     );
   }
   if (capacity.status === 'not_configured') {
-    if (compact) return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Capacity not configured</span>;
+    if (compact) return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('comp.capacity_not_configured')}</span>;
     return (
       <Card style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Truck size={16} color="var(--text-muted)" />
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Assigned truck has no capacity configured — capacity cannot be checked.</span>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('comp.assigned_truck_has_no_capacity')}</span>
       </Card>
     );
   }
@@ -46,16 +48,16 @@ export default function CapacityPanel({ capacity, compact = false }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-        <StatCard label="Truck Capacity" value={cap} icon={Truck} />
-        <StatCard label="Current Load" value={load} accent={status === 'over' ? 'var(--danger)' : 'var(--info)'} />
-        <StatCard label="Remaining" value={Math.max(remaining, 0)} accent={remaining < 0 ? 'var(--danger)' : 'var(--success)'} />
-        <StatCard label="Utilization" value={`${utilizationPercent}%`} accent={STATUS_VARIANT[status] === 'danger' ? 'var(--danger)' : STATUS_VARIANT[status] === 'warning' ? 'var(--warning)' : 'var(--success)'} />
+        <StatCard label={t('comp.truck_capacity')} value={cap} icon={Truck} />
+        <StatCard label={t('comp.current_load')} value={load} accent={status === 'over' ? 'var(--danger)' : 'var(--info)'} />
+        <StatCard label={t('group.remaining')} value={Math.max(remaining, 0)} accent={remaining < 0 ? 'var(--danger)' : 'var(--success)'} />
+        <StatCard label={t('comp.utilization')} value={`${utilizationPercent}%`} accent={STATUS_VARIANT[status] === 'danger' ? 'var(--danger)' : STATUS_VARIANT[status] === 'warning' ? 'var(--warning)' : 'var(--success)'} />
       </div>
       <div style={{ marginTop: '10px' }}>
         <StatusBadge status={STATUS_LABEL[status]} map={{ [STATUS_LABEL[status].toLowerCase()]: STATUS_VARIANT[status] }} />
         {status === 'over' && (
           <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--danger)' }}>
-            {load - cap} over capacity — this batch cannot start until it is resolved.
+            {t('comp.m.overCapacity', undefined, { n: load - cap })}
           </span>
         )}
       </div>
@@ -68,15 +70,16 @@ export default function CapacityPanel({ capacity, compact = false }) {
 // commits — a client-side PREVIEW only. The server re-checks authoritatively
 // on submit regardless of what this shows (final hardening pass, §B/§C).
 export function CapacityPreview({ capacityBefore, additionalLoad = 1 }) {
+  const { t } = useI18n();
   if (!capacityBefore || capacityBefore.status === 'no_truck' || capacityBefore.status === 'not_configured' || capacityBefore.capacity == null) {
-    return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No capacity limit to preview.</span>;
+    return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('comp.no_capacity_limit_to_preview')}</span>;
   }
   const resultingLoad = capacityBefore.load + additionalLoad;
   const wouldExceed = resultingLoad > capacityBefore.capacity;
   return (
     <span className="tabular-nums" style={{ fontSize: '12px', color: wouldExceed ? 'var(--danger)' : 'var(--text-muted)', fontWeight: wouldExceed ? 700 : 400 }}>
       {capacityBefore.load} → {resultingLoad} / {capacityBefore.capacity}
-      {wouldExceed && ` — exceeds capacity by ${resultingLoad - capacityBefore.capacity}`}
+      {wouldExceed && ` — ${t('comp.m.exceedsBy', undefined, { n: resultingLoad - capacityBefore.capacity })}`}
     </span>
   );
 }

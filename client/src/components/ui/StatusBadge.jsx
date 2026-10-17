@@ -23,7 +23,7 @@ export default function StatusBadge({ status, map }) {
       borderRadius: '999px', fontSize: '12px', fontWeight: 700, background: bg, color: fg,
     }}>
       <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: fg }} />
-      {t('status.' + key, status)}
+      {t('status.' + key.replace(/\s+/g, '_'), status)}
     </span>
   );
 }

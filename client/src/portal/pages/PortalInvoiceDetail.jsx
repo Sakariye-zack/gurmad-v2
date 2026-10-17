@@ -103,7 +103,7 @@ export default function PortalInvoiceDetail() {
               {invoice.payments.map((p, i) => (
                 <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 0' }}>{p.currency} {parseFloat(p.amount).toFixed(2)}</td>
-                  <td style={{ padding: '8px 0', textTransform: 'uppercase' }}>{p.method}</td>
+                  <td style={{ padding: '8px 0', textTransform: 'uppercase' }}>{t('method.' + p.method, p.method)}</td>
                   <td style={{ padding: '8px 0' }}>{new Date(p.created_at).toLocaleDateString()}</td>
                 </tr>
               ))}

@@ -14,12 +14,20 @@
 import { COMMON, SECURITY_EXTRA } from './common.js';
 import { COLLECTOR } from './collector.js';
 import { PORTAL } from './portal.js';
+import { PHASE2D } from './phase2d.js';
+import { PHASE2C } from './phase2c.js';
+import { PHASE2B } from './phase2b.js';
+import { PHASE2 } from './phase2.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
   ...SECURITY_EXTRA,
   ...COLLECTOR,
   ...PORTAL,
+  ...PHASE2D,
+  ...PHASE2C,
+  ...PHASE2B,
+  ...PHASE2,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

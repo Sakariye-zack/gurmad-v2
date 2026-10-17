@@ -9,6 +9,7 @@ import {
   useCashoutTransactions,
 } from '../../hooks/useCashouts.js';
 import { useCompanyName } from '../../hooks/useSettings.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
 const DOC_TYPE_LABELS = {
@@ -17,6 +18,7 @@ const DOC_TYPE_LABELS = {
 };
 
 export default function CashoutDetailPage() {
+  const { t } = useI18n();
   const { id } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useCashout(id);
@@ -39,7 +41,7 @@ export default function CashoutDetailPage() {
   const [downloading, setDownloading] = useState(false);
   const cashout = data?.data;
 
-  if (isLoading) return <LoadingState label="Loading cashout…" />;
+  if (isLoading) return <LoadingState label={t('fin.loading_cashout')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!cashout) return null;
 
@@ -48,23 +50,23 @@ export default function CashoutDetailPage() {
     try {
       await apiClient.downloadAuthorizedFile(`/v2/cashouts/${id}/document.docx`, `${cashout.cashout_number}.docx`);
     } catch (err) {
-      toast.error(err.message || 'Failed to download document.');
+      toast.error(err.message || t('fin.failed_to_download_document'));
     } finally {
       setDownloading(false);
     }
   }
 
   async function handleApprove() {
-    try { await approveMut.mutateAsync(); toast.success('Cashout approved.'); }
-    catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    try { await approveMut.mutateAsync(); toast.success(t('fin.cashout_approved')); }
+    catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleReject(reason) {
-    try { await rejectMut.mutateAsync(reason); toast.success('Cashout rejected.'); setRejectOpen(false); }
-    catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    try { await rejectMut.mutateAsync(reason); toast.success(t('fin.cashout_rejected')); setRejectOpen(false); }
+    catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   async function handleVoid(reason) {
-    try { await voidMut.mutateAsync(reason); toast.success('Cashout voided.'); setVoidOpen(false); }
-    catch (err) { toast.error(err.message || 'Something went wrong.'); }
+    try { await voidMut.mutateAsync(reason); toast.success(t('fin.cashout_voided')); setVoidOpen(false); }
+    catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
   function handlePrint() {
     window.print();
@@ -91,7 +93,7 @@ export default function CashoutDetailPage() {
       `}</style>
 
       <button onClick={() => navigate('/financial/cashouts')} style={backLinkStyle} className="no-print">
-        <ArrowLeft size={14} /> Back to Cashouts
+        <ArrowLeft size={14} /> {t('fin.back_to_cashouts')}
       </button>
 
       <PageHeader
@@ -100,20 +102,20 @@ export default function CashoutDetailPage() {
         subtitle={`${cashout.zone_name} · ${new Date(cashout.period_start).toLocaleDateString()} – ${new Date(cashout.period_end).toLocaleDateString()}`}
         actions={
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <Button variant="secondary" icon={Eye} onClick={handleOpenPreview}>Preview / Print</Button>
-            <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? 'Preparing…' : 'Download Word (.docx)'}</Button>
+            <Button variant="secondary" icon={Eye} onClick={handleOpenPreview}>{t('fin.preview_print')}</Button>
+            <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? t('fin.preparing') : t('fin.download_word_docx')}</Button>
             <RoleGate roles={['admin', 'head_of_cashiers']}>
-              <Button variant="secondary" icon={Upload} onClick={() => setUploadOpen(true)}>Upload Signed Copy</Button>
+              <Button variant="secondary" icon={Upload} onClick={() => setUploadOpen(true)}>{t('fin.upload_signed_copy')}</Button>
             </RoleGate>
             {cashout.status === 'pending' && (
               <RoleGate roles={['admin', 'gudoomiye']}>
-                <Button variant="secondary" icon={CheckCircle2} onClick={handleApprove} disabled={approveMut.isPending}>Approve</Button>
-                <Button variant="danger" icon={XCircle} onClick={() => setRejectOpen(true)}>Reject</Button>
+                <Button variant="secondary" icon={CheckCircle2} onClick={handleApprove} disabled={approveMut.isPending}>{t('fin.approve')}</Button>
+                <Button variant="danger" icon={XCircle} onClick={() => setRejectOpen(true)}>{t('fin.reject')}</Button>
               </RoleGate>
             )}
             {cashout.status !== 'approved' && cashout.status !== 'voided' && (
               <RoleGate roles={['admin']}>
-                <Button variant="danger" icon={Ban} onClick={() => setVoidOpen(true)}>Void</Button>
+                <Button variant="danger" icon={Ban} onClick={() => setVoidOpen(true)}>{t('status.void')}</Button>
               </RoleGate>
             )}
           </div>
@@ -121,11 +123,11 @@ export default function CashoutDetailPage() {
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '20px' }} className="no-print">
-        <StatCard label="Status" value={<StatusBadge status={cashout.status} map={STATUS_MAP} />} />
-        <StatCard label="Expected" value={`$${parseFloat(cashout.expected_amount).toFixed(2)}`} />
-        <StatCard label="Actual" value={`$${parseFloat(cashout.actual_amount).toFixed(2)}`} />
-        <StatCard label="Shortage" value={`$${parseFloat(cashout.shortage).toFixed(2)}`} accent={parseFloat(cashout.shortage) > 0 ? 'var(--danger)' : 'var(--success)'} />
-        <StatCard label="Surplus" value={`$${parseFloat(cashout.surplus).toFixed(2)}`} accent={parseFloat(cashout.surplus) > 0 ? 'var(--info)' : 'var(--success)'} />
+        <StatCard label={t('common.status')} value={<StatusBadge status={cashout.status} map={STATUS_MAP} />} />
+        <StatCard label={t('dash.expected')} value={`$${parseFloat(cashout.expected_amount).toFixed(2)}`} />
+        <StatCard label={t('dash.actual')} value={`$${parseFloat(cashout.actual_amount).toFixed(2)}`} />
+        <StatCard label={t('dash.shortage')} value={`$${parseFloat(cashout.shortage).toFixed(2)}`} accent={parseFloat(cashout.shortage) > 0 ? 'var(--danger)' : 'var(--success)'} />
+        <StatCard label={t('dash.surplus')} value={`$${parseFloat(cashout.surplus).toFixed(2)}`} accent={parseFloat(cashout.surplus) > 0 ? 'var(--info)' : 'var(--success)'} />
       </div>
 
       {/* ============ OFFICIAL CASHOUT DOCUMENT ============ */}
@@ -141,11 +143,11 @@ export default function CashoutDetailPage() {
       <Modal
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
-        title="Document Preview"
+        title={t('portal.invoice.docPreview')}
         maxWidth="820px"
         footer={<>
-          <Button variant="secondary" onClick={() => setPreviewOpen(false)}>Close</Button>
-          <Button icon={Printer} onClick={handlePrint}>Print</Button>
+          <Button variant="secondary" onClick={() => setPreviewOpen(false)}>{t('common.close')}</Button>
+          <Button icon={Printer} onClick={handlePrint}>{t('fin.print')}</Button>
         </>}
       >
         <div style={{ background: 'var(--bg)', padding: '20px', borderRadius: 'var(--radius-md)', maxHeight: '65vh', overflowY: 'auto' }}>
@@ -157,45 +159,45 @@ export default function CashoutDetailPage() {
           Collection Summary / breakdown sections): those are category
           totals, not individually-linkable entities, so 'link' means the
           real payment rows that back them. */}
-      <Modal open={transactionsOpen} onClose={() => setTransactionsOpen(false)} title={`Transactions — ${cashout.cashout_number}`}>
+      <Modal open={transactionsOpen} onClose={() => setTransactionsOpen(false)} title={t('fin.m.transactionsTitle', undefined, { number: cashout.cashout_number })}>
         <TransactionsList cashoutId={id} enabled={transactionsOpen} />
       </Modal>
 
       <div className="no-print">
-        <span style={sectionLabelStyle}>Cashier Shortage</span>
+        <span style={sectionLabelStyle}>{t('fin.cashier_shortage')}</span>
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
           {cashout.shortage_record ? (
             <ShortagePanel cashoutId={id} shortage={cashout.shortage_record} cashierName={cashout.cashier_name} />
           ) : (
-            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No shortage — nothing to reconcile.</p>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>{t('fin.no_shortage_nothing_to_reconcile')}</p>
           )}
         </Card>
 
         {cashout.debt && (
           <>
-            <span style={sectionLabelStyle}>Linked Customer Debt</span>
+            <span style={sectionLabelStyle}>{t('fin.linked_customer_debt')}</span>
             <Card style={{ padding: '16px', marginBottom: '20px' }}>
               <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                A genuine customer-owed debt independently associated with this cashout — separate from any cashier shortage above.
+                {t('fin.a_genuine_customer_owed_debt')}
               </p>
               <DetailGrid items={[
-                { label: 'Debt amount', value: `$${parseFloat(cashout.debt.amount).toFixed(2)}` },
-                { label: 'Status', value: <StatusBadge status={cashout.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
+                { label: t('fin.debt_amount'), value: `$${parseFloat(cashout.debt.amount).toFixed(2)}` },
+                { label: t('common.status'), value: <StatusBadge status={cashout.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
               ]} />
             </Card>
           </>
         )}
 
-        <span style={sectionLabelStyle}>Generated &amp; Signed Documents</span>
+        <span style={sectionLabelStyle}>{t('fin.generated_and_signed_documents')}</span>
         <Card style={{ padding: '16px', marginBottom: '20px' }}>
           <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>
-            The system-generated document above (printable/exportable) is always preserved as-is. Uploaded signed copies never overwrite it — each upload is a new attachment below.
+            {t('fin.the_system_generated_document_above')}
           </p>
         </Card>
 
-        <span style={sectionLabelStyle}>Supporting Attachments</span>
+        <span style={sectionLabelStyle}>{t('fin.supporting_attachments')}</span>
         {(cashout.attachments || []).length === 0 && (
-          <Card style={{ padding: '16px', marginBottom: '20px' }}><p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>No attachments uploaded yet.</p></Card>
+          <Card style={{ padding: '16px', marginBottom: '20px' }}><p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('fin.no_attachments_uploaded_yet')}</p></Card>
         )}
         {(cashout.attachments || []).length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
@@ -205,13 +207,13 @@ export default function CashoutDetailPage() {
           </div>
         )}
 
-        <span style={sectionLabelStyle}>Approval Timeline</span>
+        <span style={sectionLabelStyle}>{t('fin.approval_timeline')}</span>
         <Card style={{ padding: '16px' }}>
           <DetailGrid items={[
-            { label: 'Created', value: new Date(cashout.created_at).toLocaleString() },
-            ...(cashout.approved_at ? [{ label: cashout.status === 'rejected' ? 'Rejected' : 'Approved', value: new Date(cashout.approved_at).toLocaleString() }] : []),
-            ...(cashout.rejection_reason ? [{ label: 'Rejection reason', value: cashout.rejection_reason }] : []),
-            ...(cashout.voided_at ? [{ label: 'Voided', value: new Date(cashout.voided_at).toLocaleString() }, { label: 'Void reason', value: cashout.voided_reason }] : []),
+            { label: t('fin.created'), value: new Date(cashout.created_at).toLocaleString() },
+            ...(cashout.approved_at ? [{ label: cashout.status === 'rejected' ? t('status.rejected') : t('status.approved'), value: new Date(cashout.approved_at).toLocaleString() }] : []),
+            ...(cashout.rejection_reason ? [{ label: t('fin.rejection_reason'), value: cashout.rejection_reason }] : []),
+            ...(cashout.voided_at ? [{ label: t('status.voided'), value: new Date(cashout.voided_at).toLocaleString() }, { label: t('fin.void_reason'), value: cashout.voided_reason }] : []),
           ]} />
         </Card>
       </div>
@@ -220,9 +222,9 @@ export default function CashoutDetailPage() {
         open={rejectOpen}
         onClose={() => setRejectOpen(false)}
         onConfirm={() => handleReject(document.getElementById('reject-reason')?.value || '')}
-        title="Reject this cashout?"
-        message={<div><p style={{ margin: '0 0 8px' }}>A reason is required.</p><input id="reject-reason" placeholder="Reason for rejection" style={inputStyle} /></div>}
-        confirmLabel="Reject"
+        title={t('fin.reject_this_cashout')}
+        message={<div><p style={{ margin: '0 0 8px' }}>{t('fin.a_reason_is_required')}</p><input id="reject-reason" placeholder={t('fin.reason_for_rejection')} style={inputStyle} /></div>}
+        confirmLabel={t('fin.reject')}
         danger
         isLoading={rejectMut.isPending}
       />
@@ -230,9 +232,9 @@ export default function CashoutDetailPage() {
         open={voidOpen}
         onClose={() => setVoidOpen(false)}
         onConfirm={() => handleVoid(document.getElementById('void-reason')?.value || '')}
-        title="Void this cashout?"
-        message={<div><p style={{ margin: '0 0 8px' }}>Only allowed before approval — the record and its history are preserved. A reason is required.</p><input id="void-reason" placeholder="Reason for voiding" style={inputStyle} /></div>}
-        confirmLabel="Void Cashout"
+        title={t('fin.void_this_cashout')}
+        message={<div><p style={{ margin: '0 0 8px' }}>{t('fin.only_allowed_before_approval_the')}</p><input id="void-reason" placeholder={t('fin.reason_for_voiding')} style={inputStyle} /></div>}
+        confirmLabel={t('fin.void_cashout')}
         danger
         isLoading={voidMut.isPending}
       />
@@ -252,6 +254,7 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
   // System name — user-requested ('meel kasta oo magaca system ku ka soo
   // muuqanayo waa in aan markan update gareeyo'): this printed/PDF
   // document's own letterhead + footer previously hardcoded 'GURMAD'.
+  const { t } = useI18n();
   const { data: companyNameData } = useCompanyName();
   const companyName = companyNameData?.data?.company_name || 'GURMAD';
   const diff = Math.abs(parseFloat(cashout.expected_amount) - parseFloat(cashout.actual_amount));
@@ -296,41 +299,41 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--brand)', paddingBottom: '16px', marginBottom: '20px' }} className="doc-hairline">
         <div>
           <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--brand)', letterSpacing: '-0.01em' }}>{companyName}</div>
-          <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px', color: paperMode ? '#444' : 'var(--text-muted)' }}>Cashout &amp; Cash Reconciliation</div>
+          <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px', color: paperMode ? '#444' : 'var(--text-muted)' }}>{t('fin.cashout_and_cash_reconciliation')}</div>
         </div>
         <div style={{ textAlign: 'right', fontSize: '12px', lineHeight: 1.7 }}>
-          <div><strong>Cashout No.</strong> {cashout.cashout_number}</div>
-          <div><strong>Date</strong> {new Date(cashout.created_at).toLocaleDateString()}</div>
-          <div><strong>Time</strong> {new Date(cashout.created_at).toLocaleTimeString()}</div>
-          <div><strong>Zone</strong> {cashout.zone_name}</div>
+          <div><strong>{t('fin.cashout_no')}</strong> {cashout.cashout_number}</div>
+          <div><strong>{t('common.date')}</strong> {new Date(cashout.created_at).toLocaleDateString()}</div>
+          <div><strong>{t('fin.time')}</strong> {new Date(cashout.created_at).toLocaleTimeString()}</div>
+          <div><strong>{t('common.zone')}</strong> {cashout.zone_name}</div>
         </div>
       </div>
 
       {/* 2. Collection Summary */}
       <DocSection
-        title="Collection Summary"
+        title={t('fin.collection_summary')}
         action={onViewTransactions && (
           <button onClick={onViewTransactions} className="no-print" style={linkButtonStyle}>
-            <List size={12} /> View Transactions
+            <List size={12} /> {t('fin.view_transactions')}
           </button>
         )}
       >
         <DetailGrid items={[
-          { label: 'Customers', value: recon.customerCount ?? '—', className: 'tabular-nums' },
-          { label: 'Transactions', value: recon.transactionCount ?? '—', className: 'tabular-nums' },
-          { label: 'Expected Amount', value: `$${parseFloat(cashout.expected_amount).toFixed(2)}`, className: 'tabular-nums' },
-          { label: 'Amount Being Cashed Out', value: `$${parseFloat(cashout.actual_amount).toFixed(2)}`, className: 'tabular-nums' },
-          { label: 'Currency', value: 'USD' },
+          { label: t('nav.customers'), value: recon.customerCount ?? '—', className: 'tabular-nums' },
+          { label: t('fin.transactions'), value: recon.transactionCount ?? '—', className: 'tabular-nums' },
+          { label: t('fin.expected_amount'), value: `$${parseFloat(cashout.expected_amount).toFixed(2)}`, className: 'tabular-nums' },
+          { label: t('fin.amount_being_cashed_out'), value: `$${parseFloat(cashout.actual_amount).toFixed(2)}`, className: 'tabular-nums' },
+          { label: t('fin.currency'), value: 'USD' },
         ]} />
       </DocSection>
 
       {/* 3. Collection Source Breakdown */}
-      <DocSection title="Collection Source Breakdown">
+      <DocSection title={t('fin.collection_source_breakdown')}>
         {(recon.sourceBreakdown || []).length === 0 && <EmptyLine text="No linked collection events in this period." />}
         {(recon.sourceBreakdown || []).map((s, i) => (
           <BreakdownRow
             key={s.source}
-            label={s.source === 'unlinked' ? 'Not linked to a collection event' : `${s.source.charAt(0).toUpperCase()}${s.source.slice(1)} collections`}
+            label={s.source === 'unlinked' ? t('fin.not_linked_to_a_collection') : t('fin.m.sourceCollections', undefined, { source: `${s.source.charAt(0).toUpperCase()}${s.source.slice(1)}` })}
             value={s.total}
             percent={(s.total / sourceTotal) * 100}
             swatchColor={SWATCH_COLORS[i % SWATCH_COLORS.length]}
@@ -339,7 +342,7 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
       </DocSection>
 
       {/* 4. Payment Method Breakdown */}
-      <DocSection title="Payment Method Breakdown">
+      <DocSection title={t('fin.payment_method_breakdown')}>
         {(recon.methodBreakdown || []).length === 0 && <EmptyLine text="No recorded payments in this period." />}
         {(recon.methodBreakdown || []).map((m, i) => (
           <BreakdownRow key={m.method} label={m.method.toUpperCase()} value={m.total} percent={(m.total / methodTotal) * 100} swatchColor={SWATCH_COLORS[i % SWATCH_COLORS.length]} />
@@ -347,48 +350,48 @@ function CashoutDocument({ cashout, recon, className, onViewTransactions, paperM
       </DocSection>
 
       {/* 5. Reconciliation */}
-      <DocSection title="Reconciliation">
+      <DocSection title={t('fin.reconciliation')}>
         <DetailGrid items={[
-          { label: 'System Expected Amount', value: `$${parseFloat(cashout.expected_amount).toFixed(2)}`, className: 'tabular-nums' },
-          { label: 'Physical/Received Amount', value: `$${parseFloat(cashout.actual_amount).toFixed(2)}`, className: 'tabular-nums' },
-          { label: 'Difference', value: `$${diff.toFixed(2)}`, className: 'tabular-nums' },
+          { label: t('fin.system_expected_amount'), value: `$${parseFloat(cashout.expected_amount).toFixed(2)}`, className: 'tabular-nums' },
+          { label: t('fin.physical_received_amount'), value: `$${parseFloat(cashout.actual_amount).toFixed(2)}`, className: 'tabular-nums' },
+          { label: t('fin.difference'), value: `$${diff.toFixed(2)}`, className: 'tabular-nums' },
           {
-            label: 'Difference Type',
+            label: t('fin.difference_type'),
             value: (
               <span style={{ fontWeight: 700, color: parseFloat(cashout.shortage) > 0 ? 'var(--danger)' : parseFloat(cashout.surplus) > 0 ? 'var(--info)' : 'var(--success)' }}>
-                {parseFloat(cashout.shortage) > 0 ? 'Shortage' : parseFloat(cashout.surplus) > 0 ? 'Surplus' : 'Exact Match'}
+                {parseFloat(cashout.shortage) > 0 ? t('dash.shortage') : parseFloat(cashout.surplus) > 0 ? t('dash.surplus') : t('fin.exact_match')}
               </span>
             ),
           },
         ]} />
-        {cashout.shortage_reason && <p style={{ margin: '10px 0 0', fontSize: '13px' }}><strong>Shortage reason:</strong> {cashout.shortage_reason}</p>}
-        {cashout.remarks && <p style={{ margin: '6px 0 0', fontSize: '13px' }}><strong>Remarks:</strong> {cashout.remarks}</p>}
+        {cashout.shortage_reason && <p style={{ margin: '10px 0 0', fontSize: '13px' }}><strong>{t('fin.shortage_reason')}</strong> {cashout.shortage_reason}</p>}
+        {cashout.remarks && <p style={{ margin: '6px 0 0', fontSize: '13px' }}><strong>{t('fin.remarks')}</strong> {cashout.remarks}</p>}
       </DocSection>
 
       {/* 6. Accountability — user-reported gap (Phase 10 Billing audit,
            continued sweep): every row here used to read as a bare
            numeric id ('#33'). The backend now joins each name; fall
            back to the id only if a user account was since deleted. */}
-      <DocSection title="Accountability">
+      <DocSection title={t('fin.accountability')}>
         <DetailGrid items={[
-          { label: 'Cashier', value: cashout.cashier_name || `#${cashout.cashier_id}` },
-          { label: 'Head of Cashiers', value: cashout.head_of_cashiers_name || `#${cashout.head_of_cashiers_id}` },
-          { label: 'Prepared by', value: cashout.created_by_name || `#${cashout.created_by}` },
-          { label: 'Approved by', value: cashout.approved_by ? (cashout.approved_by_name || `#${cashout.approved_by}`) : 'Not yet approved' },
+          { label: t('fin.cashier'), value: cashout.cashier_name || `#${cashout.cashier_id}` },
+          { label: t('fin.head_of_cashiers'), value: cashout.head_of_cashiers_name || `#${cashout.head_of_cashiers_id}` },
+          { label: t('fin.prepared_by'), value: cashout.created_by_name || `#${cashout.created_by}` },
+          { label: t('fin.approved_by'), value: cashout.approved_by ? (cashout.approved_by_name || `#${cashout.approved_by}`) : t('fin.not_yet_approved') },
         ]} />
       </DocSection>
 
       {/* 7. Signatures */}
-      <DocSection title="Signatures">
+      <DocSection title={t('fin.signatures')}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginTop: '10px' }}>
-          <SignatureBlock label="Cashier Signature" paperMode={paperMode} />
-          <SignatureBlock label="Head of Cashiers Signature" paperMode={paperMode} />
-          <SignatureBlock label="Collector Acknowledgement" paperMode={paperMode} />
+          <SignatureBlock label={t('fin.cashier_signature')} paperMode={paperMode} />
+          <SignatureBlock label={t('fin.head_of_cashiers_signature')} paperMode={paperMode} />
+          <SignatureBlock label={t('fin.collector_acknowledgement')} paperMode={paperMode} />
         </div>
       </DocSection>
 
       <div style={{ marginTop: '24px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center' }} className="doc-hairline">
-        {companyName} — System-generated Cashout document — {cashout.cashout_number}
+        {companyName} — {t('fin.m.systemDoc')} — {cashout.cashout_number}
       </div>
     </Card>
   );
@@ -414,11 +417,12 @@ const linkButtonStyle = {
 };
 
 function TransactionsList({ cashoutId, enabled }) {
+  const { t } = useI18n();
   const { data, isLoading, error } = useCashoutTransactions(cashoutId, enabled);
   const rows = data?.data || [];
-  if (isLoading) return <LoadingState label="Loading transactions…" />;
+  if (isLoading) return <LoadingState label={t('fin.loading_transactions')} />;
   if (error) return <p style={{ color: 'var(--danger)', fontSize: '13px' }}>{error.message}</p>;
-  if (rows.length === 0) return <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>No transactions recorded in this period.</p>;
+  if (rows.length === 0) return <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('fin.no_transactions_recorded_in_this')}</p>;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '50vh', overflowY: 'auto' }}>
       {rows.map((r) => (
@@ -485,6 +489,7 @@ function SignatureBlock({ label }) {
 // audited only — no automatic recovery mechanism (salary deduction, auto-
 // debt, etc.) is offered here.
 function ShortagePanel({ cashoutId, shortage, cashierName }) {
+  const { t } = useI18n();
   const [resolveOpen, setResolveOpen] = useState(false);
   const resolveMut = useResolveShortage(cashoutId);
   const toast = useToast();
@@ -492,54 +497,54 @@ function ShortagePanel({ cashoutId, shortage, cashierName }) {
   async function handleResolve(resolvedAmount, notes) {
     try {
       await resolveMut.mutateAsync({ resolved_amount: parseFloat(resolvedAmount), resolution_notes: notes });
-      toast.success('Shortage marked resolved.');
+      toast.success(t('fin.shortage_marked_resolved'));
       setResolveOpen(false);
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
   return (
     <>
       <DetailGrid items={[
-        { label: 'Shortage Amount', value: `$${parseFloat(shortage.shortage_amount).toFixed(2)}` },
-        { label: 'Cashier Responsible', value: cashierName || `#${shortage.cashier_id}` },
-        { label: 'Status', value: <StatusBadge status={shortage.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
-        { label: 'Reason', value: shortage.reason },
+        { label: t('fin.shortage_amount'), value: `$${parseFloat(shortage.shortage_amount).toFixed(2)}` },
+        { label: t('fin.cashier_responsible'), value: cashierName || `#${shortage.cashier_id}` },
+        { label: t('common.status'), value: <StatusBadge status={shortage.status} map={{ unpaid: 'danger', paid: 'success' }} /> },
+        { label: t('common.reason'), value: shortage.reason },
         ...(shortage.status === 'paid' ? [
-          { label: 'Resolved Amount', value: `$${parseFloat(shortage.resolved_amount).toFixed(2)}` },
-          { label: 'Resolved At', value: new Date(shortage.resolved_at).toLocaleString() },
-          { label: 'Resolution Notes', value: shortage.resolution_notes },
+          { label: t('fin.resolved_amount'), value: `$${parseFloat(shortage.resolved_amount).toFixed(2)}` },
+          { label: t('fin.resolved_at'), value: new Date(shortage.resolved_at).toLocaleString() },
+          { label: t('fin.resolution_notes'), value: shortage.resolution_notes },
         ] : []),
       ]} />
       {shortage.status === 'unpaid' && (
         <RoleGate roles={['admin', 'head_of_cashiers']}>
           <div style={{ marginTop: '12px' }}>
-            <Button variant="secondary" onClick={() => setResolveOpen(true)}>Mark Resolved</Button>
+            <Button variant="secondary" onClick={() => setResolveOpen(true)}>{t('fin.mark_resolved')}</Button>
           </div>
         </RoleGate>
       )}
       <Modal
         open={resolveOpen}
         onClose={() => setResolveOpen(false)}
-        title="Resolve Cashier Shortage"
+        title={t('fin.resolve_cashier_shortage')}
         footer={<>
-          <Button variant="secondary" onClick={() => setResolveOpen(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => setResolveOpen(false)}>{t('common.cancel')}</Button>
           <Button onClick={() => handleResolve(document.getElementById('resolved-amount')?.value, document.getElementById('resolution-notes')?.value)} disabled={resolveMut.isPending}>
-            {resolveMut.isPending ? 'Saving…' : 'Mark Resolved'}
+            {resolveMut.isPending ? t('common.saving') : t('fin.mark_resolved')}
           </Button>
         </>}
       >
         <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>
-          Record what was actually recovered from the cashier. This does not trigger any automatic payroll deduction or accounting entry — it only records the resolution.
+          {t('fin.record_what_was_actually_recovered')}
         </p>
         <label style={{ display: 'block', marginBottom: '10px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700 }}>Amount recovered</span>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('fin.amount_recovered')}</span>
           <input id="resolved-amount" type="number" min="0" step="0.01" defaultValue={shortage.shortage_amount} style={inputStyle} />
         </label>
         <label style={{ display: 'block' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700 }}>Resolution notes (required)</span>
-          <input id="resolution-notes" placeholder="e.g. Cashier repaid in cash on..." style={inputStyle} />
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('fin.resolution_notes_required')}</span>
+          <input id="resolution-notes" placeholder={t('fin.e_g_cashier_repaid_in')} style={inputStyle} />
         </label>
       </Modal>
     </>
@@ -554,6 +559,7 @@ function ShortagePanel({ cashoutId, shortage, cashierName }) {
 // a wrongly-uploaded or duplicate attachment had no way to be removed
 // from view at all.
 function AttachmentRow({ attachment, cashoutId }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [voidOpen, setVoidOpen] = useState(false);
@@ -565,7 +571,7 @@ function AttachmentRow({ attachment, cashoutId }) {
       const url = await apiClient.fetchAuthorizedFileUrl(`/v2/cashouts/${cashoutId}/attachments/${attachment.id}/file`);
       window.open(url, '_blank');
     } catch (err) {
-      toast.error(err.message || 'Failed to open attachment.');
+      toast.error(err.message || t('fin.failed_to_open_attachment'));
     } finally {
       setLoading(false);
     }
@@ -573,10 +579,10 @@ function AttachmentRow({ attachment, cashoutId }) {
   async function handleVoid(reason) {
     try {
       await voidMut.mutateAsync({ attachmentId: attachment.id, reason });
-      toast.success('Attachment removed.');
+      toast.success(t('fin.attachment_removed'));
       setVoidOpen(false);
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -584,13 +590,13 @@ function AttachmentRow({ attachment, cashoutId }) {
     <>
       <Card style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <strong>{DOC_TYPE_LABELS[attachment.document_type] || attachment.document_type}</strong>
+          <strong>{t('fin.doc.' + attachment.document_type, DOC_TYPE_LABELS[attachment.document_type] || attachment.document_type)}</strong>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{attachment.original_filename} · {new Date(attachment.uploaded_at).toLocaleString()}</div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <Button variant="secondary" onClick={handleView} disabled={loading}>{loading ? 'Loading…' : 'View'}</Button>
+          <Button variant="secondary" onClick={handleView} disabled={loading}>{loading ? t('common.loading') : t('fin.view')}</Button>
           <RoleGate roles={['admin']}>
-            <Button variant="danger" icon={Trash2} onClick={() => setVoidOpen(true)}>Remove</Button>
+            <Button variant="danger" icon={Trash2} onClick={() => setVoidOpen(true)}>{t('fin.remove')}</Button>
           </RoleGate>
         </div>
       </Card>
@@ -598,14 +604,14 @@ function AttachmentRow({ attachment, cashoutId }) {
         open={voidOpen}
         onClose={() => setVoidOpen(false)}
         onConfirm={() => handleVoid(document.getElementById(`void-attachment-reason-${attachment.id}`)?.value || '')}
-        title="Remove this attachment?"
+        title={t('fin.remove_this_attachment')}
         message={<div>
           <p style={{ margin: '0 0 8px' }}>
-            The file itself is preserved (voided, not deleted) — it stops showing here and in the document count. A reason is required.
+            {t('fin.the_file_itself_is_preserved')}
           </p>
-          <input id={`void-attachment-reason-${attachment.id}`} placeholder="Reason for removal" style={inputStyle} />
+          <input id={`void-attachment-reason-${attachment.id}`} placeholder={t('fin.reason_for_removal')} style={inputStyle} />
         </div>}
-        confirmLabel="Remove"
+        confirmLabel={t('fin.remove')}
         danger
         isLoading={voidMut.isPending}
       />
@@ -614,6 +620,7 @@ function AttachmentRow({ attachment, cashoutId }) {
 }
 
 function UploadAttachmentModal({ open, onClose, cashoutId }) {
+  const { t } = useI18n();
   const [file, setFile] = useState(null);
   const [documentType, setDocumentType] = useState('signed_cashout_form');
   const [error, setError] = useState('');
@@ -623,13 +630,13 @@ function UploadAttachmentModal({ open, onClose, cashoutId }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!file) { setError('Choose a file first.'); return; }
+    if (!file) { setError(t('fin.choose_a_file_first')); return; }
     try {
       await uploadMut.mutateAsync({ file, documentType });
-      toast.success('Attachment uploaded.');
+      toast.success(t('fin.attachment_uploaded'));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -638,22 +645,22 @@ function UploadAttachmentModal({ open, onClose, cashoutId }) {
     <Modal
       open
       onClose={uploadMut.isPending ? () => {} : onClose}
-      title="Upload Signed Copy / Supporting Document"
+      title={t('fin.upload_signed_copy_supporting_docume')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={uploadMut.isPending}>Cancel</Button>
-        <Button type="submit" form="upload-form" disabled={uploadMut.isPending}>{uploadMut.isPending ? 'Uploading…' : 'Upload'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={uploadMut.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="upload-form" disabled={uploadMut.isPending}>{uploadMut.isPending ? t('topbar.uploading') : t('fin.upload')}</Button>
       </>}
     >
       <form id="upload-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>PDF, JPG, or PNG only — a photo taken on a phone works. This never overwrites the system-generated document above.</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('fin.pdf_jpg_or_png_only')}</span>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Document type</span>
+          <span style={labelStyle}>{t('fin.document_type')}</span>
           <select value={documentType} onChange={(e) => setDocumentType(e.target.value)} style={inputStyle}>
-            {Object.entries(DOC_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {Object.entries(DOC_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{t('fin.doc.' + k, v)}</option>)}
           </select>
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>File</span>
+          <span style={labelStyle}>{t('fin.file')}</span>
           <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" capture="environment" onChange={(e) => setFile(e.target.files?.[0] || null)} style={inputStyle} />
         </label>
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}

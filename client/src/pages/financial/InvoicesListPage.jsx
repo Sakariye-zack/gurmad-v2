@@ -5,6 +5,7 @@ import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal,
 import RoleGate from '../../components/RoleGate.jsx';
 import { useInvoices, useCreateInvoice } from '../../hooks/useFinancial.js';
 import { useCustomers } from '../../hooks/useCustomers.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -13,6 +14,7 @@ export default function InvoicesListPage() {
   // kasta hadan ku dhufto waa in details ku ii soo baxaan'): the
   // Dashboard's Outstanding Balance/Debt cards now navigate here with
   // ?status=unpaid.
+  const { t } = useI18n();
   const [searchParams] = useSearchParams();
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [search, setSearch] = useState('');
@@ -27,28 +29,28 @@ export default function InvoicesListPage() {
     <div>
       <PageHeader
         icon={Receipt}
-        title="Invoices"
-        subtitle="Financial documents — what each customer owes."
+        title={t('portal.nav.invoices')}
+        subtitle={t('fin.financial_documents_what_each_custom')}
         actions={
           <RoleGate roles={['admin', 'cashier']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Invoice</Button>
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('fin.create_invoice')}</Button>
           </RoleGate>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Total Invoices" value={error ? '—' : invoices.length} icon={Receipt} />
-        <StatCard label="Unpaid" value={error ? '—' : unpaidCount} icon={Receipt} accent="var(--danger)" />
-        <StatCard label="Partial" value={error ? '—' : partialCount} icon={Receipt} accent="var(--warning)" />
+        <StatCard label={t('fin.total_invoices')} value={error ? '—' : invoices.length} icon={Receipt} />
+        <StatCard label={t('status.unpaid')} value={error ? '—' : unpaidCount} icon={Receipt} accent="var(--danger)" />
+        <StatCard label={t('status.partial')} value={error ? '—' : partialCount} icon={Receipt} accent="var(--warning)" />
       </div>
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search invoice #, customer name or number…">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('fin.search_invoice_customer_name_or')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-          <option value="">All statuses</option>
-          <option value="unpaid">Unpaid</option>
-          <option value="partial">Partial</option>
-          <option value="paid">Paid</option>
-          <option value="voided">Voided</option>
+          <option value="">{t('cust.all_statuses')}</option>
+          <option value="unpaid">{t('status.unpaid')}</option>
+          <option value="partial">{t('status.partial')}</option>
+          <option value="paid">{t('status.paid')}</option>
+          <option value="voided">{t('status.voided')}</option>
         </select>
       </FilterBar>
 
@@ -57,9 +59,9 @@ export default function InvoicesListPage() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && invoices.length === 0}
-        emptyTitle="No invoices yet"
-        emptySubtitle="Create the first invoice to start billing a customer."
-        columns={[{ label: 'Invoice #' }, { label: 'Customer' }, { label: 'Total' }, { label: 'Status' }, { label: 'Created' }]}
+        emptyTitle={t('portal.invoices.empty')}
+        emptySubtitle={t('fin.create_the_first_invoice_to')}
+        columns={[{ label: t('portal.col.invoice') }, { label: t('fin.customer') }, { label: t('common.total') }, { label: t('common.status') }, { label: t('fin.created') }]}
       >
         {invoices.map((inv) => (
           <tr key={inv.id} onClick={() => navigate(`/financial/invoices/${inv.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
@@ -83,6 +85,7 @@ function InvoiceFormModal({ open, onClose }) {
 }
 
 function InvoiceFormContent({ onClose }) {
+  const { t } = useI18n();
   const [customerId, setCustomerId] = useState('');
   const [total, setTotal] = useState('');
   const [discount, setDiscount] = useState('0');
@@ -97,7 +100,7 @@ function InvoiceFormContent({ onClose }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!customerId || !total) { setError('Customer and invoice total are required.'); return; }
+    if (!customerId || !total) { setError(t('fin.customer_and_invoice_total_are')); return; }
     try {
       const result = await createInvoice.mutateAsync({
         customer_id: parseInt(customerId, 10),
@@ -105,10 +108,10 @@ function InvoiceFormContent({ onClose }) {
         discount_amount: parseFloat(discount) || 0,
         notes: notes || undefined,
       });
-      toast.success(`${result.data.invoice_number} created.`);
+      toast.success(t('fin.m.created', undefined, { number: result.data.invoice_number }));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -116,35 +119,35 @@ function InvoiceFormContent({ onClose }) {
     <Modal
       open
       onClose={createInvoice.isPending ? () => {} : onClose}
-      title="Create Invoice"
+      title={t('fin.create_invoice')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={createInvoice.isPending}>Cancel</Button>
-        <Button type="submit" form="invoice-form" disabled={createInvoice.isPending}>{createInvoice.isPending ? 'Saving…' : 'Create Invoice'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={createInvoice.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="invoice-form" disabled={createInvoice.isPending}>{createInvoice.isPending ? t('common.saving') : t('fin.create_invoice')}</Button>
       </>}
     >
       <form id="invoice-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Customer</span>
+          <span style={labelStyle}>{t('fin.customer')}</span>
           <select value={customerId} onChange={(e) => { setCustomerId(e.target.value); const c = customers.find((x) => String(x.id) === e.target.value); if (c?.fee != null) setTotal(String(c.fee)); }} style={inputStyle}>
-            <option value="">Select a customer…</option>
+            <option value="">{t('fin.select_a_customer_2')}</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.customer_number} — {c.business_name || c.name}</option>)}
           </select>
         </label>
         {selectedCustomer?.fee != null && (
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            This customer&rsquo;s on-file fee (${selectedCustomer.fee}) has been pre-filled below — it is a suggestion only, not authoritative. Confirm or change the amount.
+            {t('fin.m.feePrefilled', undefined, { fee: selectedCustomer.fee })}
           </span>
         )}
         <label style={fieldStyle}>
-          <span style={labelStyle}>Invoice total</span>
+          <span style={labelStyle}>{t('fin.invoice_total')}</span>
           <input type="number" min="0" step="0.01" value={total} onChange={(e) => setTotal(e.target.value)} style={inputStyle} />
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Discount (optional)</span>
+          <span style={labelStyle}>{t('fin.discount_optional')}</span>
           <input type="number" min="0" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} style={inputStyle} />
         </label>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Notes (optional)</span>
+          <span style={labelStyle}>{t('fin.notes_optional')}</span>
           <input value={notes} onChange={(e) => setNotes(e.target.value)} style={inputStyle} />
         </label>
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}

@@ -8,6 +8,7 @@ import { useCustomers } from '../../hooks/useCustomers.js';
 import { useEmployees } from '../../hooks/useEmployees.js';
 import { useTrucks } from '../../hooks/useTrucks.js';
 import ZoneFormModal from './ZoneFormModal.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Zone Detail — user-requested gap-audit ('maxaa ka dhiman imika
 // mashruucaygan'): this page's own placeholder said 'Customers,
@@ -18,6 +19,7 @@ import ZoneFormModal from './ZoneFormModal.jsx';
 // the exact same class of stale-placeholder gap already fixed on
 // EmployeeDetailPage.jsx earlier this phase.
 export default function ZoneDetailPage() {
+  const { t } = useI18n();
   const { id } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useZone(id);
@@ -30,14 +32,14 @@ export default function ZoneDetailPage() {
   const employees = employeesData?.data || [];
   const trucks = trucksData?.data || [];
 
-  if (isLoading) return <LoadingState label="Loading zone…" />;
+  if (isLoading) return <LoadingState label={t('zone.loading_zone')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!zone) return null;
 
   return (
     <div>
       <button onClick={() => navigate('/zones')} style={backLinkStyle}>
-        <ArrowLeft size={14} /> Back to Zones
+        <ArrowLeft size={14} /> {t('zone.back_to_zones')}
       </button>
 
       <PageHeader
@@ -46,45 +48,45 @@ export default function ZoneDetailPage() {
         subtitle={zone.zone_code}
         actions={
           <RoleGate roles={['admin']}>
-            <Button variant="secondary" icon={Pencil} onClick={() => setEditOpen(true)}>Edit Zone</Button>
+            <Button variant="secondary" icon={Pencil} onClick={() => setEditOpen(true)}>{t('zone.edit_zone')}</Button>
           </RoleGate>
         }
       />
 
       <DetailGrid items={[
-        { label: 'Status', value: <StatusBadge status={zone.status} /> },
-        { label: 'Sub-zone', value: zone.sub_zone || '—' },
-        { label: 'Area', value: zone.area || '—' },
-        { label: 'Collection days', value: (zone.collection_days || []).join(', ') || '—' },
+        { label: t('common.status'), value: <StatusBadge status={zone.status} /> },
+        { label: t('zone.sub_zone'), value: zone.sub_zone || '—' },
+        { label: t('zone.area'), value: zone.area || '—' },
+        { label: t('zone.collection_days'), value: (zone.collection_days || []).join(', ') || '—' },
       ]} />
 
       <Card style={{ padding: '16px', marginTop: '16px' }}>
-        <SectionLabel icon={Users}>Customers ({customers.length})</SectionLabel>
-        {customers.length === 0 && <p style={emptyStyle}>No customers in this zone yet.</p>}
+        <SectionLabel icon={Users}>{t('zone.m.customersN', undefined, { n: customers.length })}</SectionLabel>
+        {customers.length === 0 && <p style={emptyStyle}>{t('zone.no_customers_in_this_zone')}</p>}
         {customers.slice(0, 8).map((c) => (
           <ZoneRow key={c.id} onClick={() => navigate(`/customers/${c.id}`)} title={c.business_name || c.name} subtitle={c.customer_number} />
         ))}
-        {customers.length > 8 && <p style={moreStyle}>+ {customers.length - 8} more — see the full Customers list.</p>}
+        {customers.length > 8 && <p style={moreStyle}>{t('zone.m.moreCustomers', undefined, { n: customers.length - 8 })}</p>}
       </Card>
 
       <RoleGate roles={['admin', 'gudoomiye', 'zone_accountant']}>
         <Card style={{ padding: '16px', marginTop: '16px' }}>
-          <SectionLabel icon={Users2}>Employees ({employees.length})</SectionLabel>
-          {employees.length === 0 && <p style={emptyStyle}>No employees assigned to this zone yet.</p>}
+          <SectionLabel icon={Users2}>{t('zone.m.employeesN', undefined, { n: employees.length })}</SectionLabel>
+          {employees.length === 0 && <p style={emptyStyle}>{t('zone.no_employees_assigned_to_this')}</p>}
           {employees.slice(0, 8).map((e) => (
             <ZoneRow key={e.id} onClick={() => navigate(`/employees/${e.id}`)} title={e.name} subtitle={e.job_role || e.employee_type} />
           ))}
-          {employees.length > 8 && <p style={moreStyle}>+ {employees.length - 8} more — see the full Employees list.</p>}
+          {employees.length > 8 && <p style={moreStyle}>{t('zone.m.moreEmployees', undefined, { n: employees.length - 8 })}</p>}
         </Card>
       </RoleGate>
 
       <Card style={{ padding: '16px', marginTop: '16px' }}>
-        <SectionLabel icon={Truck}>Trucks ({trucks.length})</SectionLabel>
-        {trucks.length === 0 && <p style={emptyStyle}>No trucks assigned to this zone yet.</p>}
+        <SectionLabel icon={Truck}>{t('zone.m.trucksN', undefined, { n: trucks.length })}</SectionLabel>
+        {trucks.length === 0 && <p style={emptyStyle}>{t('zone.no_trucks_assigned_to_this')}</p>}
         {trucks.slice(0, 8).map((t) => (
           <ZoneRow key={t.id} onClick={() => navigate(`/trucks/${t.id}`)} title={t.plate_number} subtitle={t.model || t.status} />
         ))}
-        {trucks.length > 8 && <p style={moreStyle}>+ {trucks.length - 8} more — see the full Trucks list.</p>}
+        {trucks.length > 8 && <p style={moreStyle}>{t('zone.m.moreTrucks', undefined, { n: trucks.length - 8 })}</p>}
       </Card>
 
       <ZoneFormModal open={editOpen} onClose={() => setEditOpen(false)} zone={zone} />

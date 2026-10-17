@@ -6,6 +6,7 @@ import { useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import MapCanvas from './MapCanvas.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Route & GIS / Map — Implementation Spec §16/§17. V1: read-only
 // customer-pin visualization plus Zone/Group/Route filtering. No
@@ -16,6 +17,7 @@ import MapCanvas from './MapCanvas.jsx';
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'head_of_cashiers'];
 
 export default function MapPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const [zoneId, setZoneId] = useState('');
   const [groupId, setGroupId] = useState('');
@@ -58,29 +60,29 @@ export default function MapPage() {
       <div style={{ marginBottom: '14px' }}>
         <PageHeader
           icon={MapPin}
-          title="Map"
-          subtitle="Read-only view of customer locations by zone, group, and route."
+          title={t('nav.map')}
+          subtitle={t('map.read_only_view_of_customer')}
         />
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
         {!isZoneScoped && (
           <SelectField icon={MapPin} value={zoneId} onChange={setZoneId}>
-            <option value="">All zones</option>
+            <option value="">{t('group.all_zones')}</option>
             {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </SelectField>
         )}
         <SelectField icon={ListFilter} value={groupId} onChange={handleGroupChange}>
-          <option value="">All groups</option>
+          <option value="">{t('map.all_groups')}</option>
           {groups.map((g) => <option key={g.id} value={g.id}>{g.name || g.code}</option>)}
         </SelectField>
         <SelectField icon={RouteIcon} value={routeId} onChange={setRouteId} disabled={!groupId}>
-          <option value="">All routes</option>
+          <option value="">{t('map.all_routes')}</option>
           {routes.map((r) => <option key={r.id} value={r.id}>{r.name || r.code}</option>)}
         </SelectField>
       </div>
 
-      {isLoading && <LoadingState label="Loading map…" />}
+      {isLoading && <LoadingState label={t('map.loading_map')} />}
       {!isLoading && error && <ErrorState message={error.message} onRetry={refetch} />}
       {/* The map itself always renders once loaded — even with zero located
           customers, showing the company's own operating region (Togdheer,
@@ -99,7 +101,7 @@ export default function MapPage() {
               boxShadow: 'var(--shadow-md)', fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600,
             }}>
               <MapPin size={14} />
-              No customer locations in this view — try a different zone/group/route, or add coordinates when registering a customer.
+              {t('map.m.noLocations')}
             </div>
           )}
         </div>

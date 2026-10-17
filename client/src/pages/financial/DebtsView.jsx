@@ -4,10 +4,12 @@ import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal,
 import RoleGate from '../../components/RoleGate.jsx';
 import { useDebts, useSettleDebt, useCreateDebt } from '../../hooks/useFinancial.js';
 import { useCustomers } from '../../hooks/useCustomers.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_MAP = { unpaid: 'danger', paid: 'success' };
 
 export default function DebtsView() {
+  const { t } = useI18n();
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   const [settleTarget, setSettleTarget] = useState(null);
@@ -25,10 +27,10 @@ export default function DebtsView() {
   async function handleSettle(overrideReason) {
     try {
       await settleDebt.mutateAsync({ id: settleTarget.id, settlement_override_reason: overrideReason || undefined });
-      toast.success('Debt settled.');
+      toast.success(t('fin.debt_settled'));
       setSettleTarget(null);
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -36,25 +38,25 @@ export default function DebtsView() {
     <div>
       <PageHeader
         icon={HandCoins}
-        title="Debts"
-        subtitle="Outstanding amounts owed, traceable to their originating invoice where applicable."
+        title={t('nav.debts')}
+        subtitle={t('fin.outstanding_amounts_owed_traceable_t')}
         actions={
           <RoleGate roles={['admin', 'cashier', 'gudoomiye']}>
-            <Button icon={Plus} onClick={() => setCreateOpen(true)}>Create Debt</Button>
+            <Button icon={Plus} onClick={() => setCreateOpen(true)}>{t('fin.create_debt')}</Button>
           </RoleGate>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Total Debts" value={error ? '—' : debts.length} icon={HandCoins} />
-        <StatCard label="Unpaid" value={error ? '—' : unpaidCount} icon={HandCoins} accent="var(--danger)" />
+        <StatCard label={t('fin.total_debts')} value={error ? '—' : debts.length} icon={HandCoins} />
+        <StatCard label={t('status.unpaid')} value={error ? '—' : unpaidCount} icon={HandCoins} accent="var(--danger)" />
       </div>
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by customer name or number…">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('fin.search_by_customer_name_or')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-          <option value="">All statuses</option>
-          <option value="unpaid">Unpaid</option>
-          <option value="paid">Paid</option>
+          <option value="">{t('cust.all_statuses')}</option>
+          <option value="unpaid">{t('status.unpaid')}</option>
+          <option value="paid">{t('status.paid')}</option>
         </select>
       </FilterBar>
 
@@ -63,15 +65,15 @@ export default function DebtsView() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && debts.length === 0}
-        emptyTitle="No debts recorded"
-        columns={[{ label: 'Customer' }, { label: 'Amount' }, { label: 'Linked Invoice' }, { label: 'Status' }, { label: 'Actions' }]}
+        emptyTitle={t('fin.no_debts_recorded')}
+        columns={[{ label: t('fin.customer') }, { label: t('common.amount') }, { label: t('fin.linked_invoice') }, { label: t('common.status') }, { label: t('fin.actions') }]}
       >
         {debts.map((d) => (
           <tr key={d.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{d.customer_name} <span style={{ color: 'var(--text-muted)' }}>({d.customer_number})</span></td>
             <td style={cellStyle} className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</td>
             <td style={cellStyle}>
-              {d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>Standalone</span>}
+              {d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>{t('cust.standalone')}</span>}
               {/* User-requested (Phase 10 — 'qaabkeebu partial iyo debt
                   ba u diiwaan galin karaa'): auto-tracked debts (kept in
                   sync by payments.js on every payment/reversal against
@@ -79,14 +81,14 @@ export default function DebtsView() {
                   person created by hand, so nobody mistakes a live,
                   system-maintained number for a fixed manual entry. */}
               {d.source === 'auto_invoice' && (
-                <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: 'var(--info)', textTransform: 'uppercase' }}>auto</span>
+                <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: 'var(--info)', textTransform: 'uppercase' }}>{t('fin.auto')}</span>
               )}
             </td>
             <td style={cellStyle}><StatusBadge status={d.status} map={STATUS_MAP} /></td>
             <td style={cellStyle}>
               {d.status === 'unpaid' && (
                 <RoleGate roles={['admin', 'cashier']}>
-                  <Button variant="secondary" onClick={() => setSettleTarget(d)}>Settle</Button>
+                  <Button variant="secondary" onClick={() => setSettleTarget(d)}>{t('fin.settle')}</Button>
                 </RoleGate>
               )}
             </td>
@@ -97,16 +99,16 @@ export default function DebtsView() {
       <Modal
         open={!!settleTarget}
         onClose={() => setSettleTarget(null)}
-        title="Settle Debt"
+        title={t('fin.settle_debt')}
         footer={<>
-          <Button variant="secondary" onClick={() => setSettleTarget(null)}>Cancel</Button>
-          <Button onClick={() => handleSettle(document.getElementById('override-reason')?.value)} disabled={settleDebt.isPending}>Settle</Button>
+          <Button variant="secondary" onClick={() => setSettleTarget(null)}>{t('common.cancel')}</Button>
+          <Button onClick={() => handleSettle(document.getElementById('override-reason')?.value)} disabled={settleDebt.isPending}>{t('fin.settle')}</Button>
         </>}
       >
         <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--text-muted)' }}>
-          If this debt is linked to an invoice that still has an outstanding balance, a reason is required to settle it anyway.
+          {t('fin.if_this_debt_is_linked')}
         </p>
-        <input id="override-reason" placeholder="Override reason (only needed if the linked invoice is still outstanding)" style={inputStyle} />
+        <input id="override-reason" placeholder={t('fin.override_reason_only_needed_if')} style={inputStyle} />
       </Modal>
 
       <CreateDebtModal open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -115,6 +117,7 @@ export default function DebtsView() {
 }
 
 function CreateDebtModal({ open, onClose }) {
+  const { t } = useI18n();
   const [customerId, setCustomerId] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -131,15 +134,15 @@ function CreateDebtModal({ open, onClose }) {
     e.preventDefault();
     setError('');
     const amt = parseFloat(amount);
-    if (!customerId) { setError('Select a customer.'); return; }
-    if (isNaN(amt) || amt <= 0) { setError('Enter a valid amount.'); return; }
+    if (!customerId) { setError(t('fin.select_a_customer')); return; }
+    if (isNaN(amt) || amt <= 0) { setError(t('fin.enter_a_valid_amount')); return; }
     try {
       await createDebt.mutateAsync({ customer_id: parseInt(customerId, 10), amount: amt, currency, description: description || undefined });
-      toast.success('Debt recorded.');
+      toast.success(t('fin.debt_recorded'));
       onClose();
       setCustomerId(''); setAmount(''); setCurrency('USD'); setDescription('');
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -147,33 +150,30 @@ function CreateDebtModal({ open, onClose }) {
     <Modal
       open
       onClose={createDebt.isPending ? () => {} : onClose}
-      title="Create Debt"
+      title={t('fin.create_debt')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={createDebt.isPending}>Cancel</Button>
-        <Button type="submit" form="debt-form" disabled={createDebt.isPending}>{createDebt.isPending ? 'Saving…' : 'Create Debt'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={createDebt.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="debt-form" disabled={createDebt.isPending}>{createDebt.isPending ? t('common.saving') : t('fin.create_debt')}</Button>
       </>}
     >
       <form id="debt-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
-          For an amount a customer owes that isn't tied to an existing invoice
-          (e.g. a verbal agreement, a carried-over balance). To record a debt
-          against a specific invoice's shortfall instead, use that invoice's
-          own detail page.
+          {t('fin.for_an_amount_a_customer')}
         </p>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Customer</span>
+          <span style={labelStyle}>{t('fin.customer')}</span>
           <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} style={inputStyle}>
-            <option value="">Select a customer…</option>
+            <option value="">{t('fin.select_a_customer_2')}</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.customer_number} — {c.business_name || c.name}</option>)}
           </select>
         </label>
         <div style={{ display: 'flex', gap: '10px' }}>
           <label style={{ ...fieldStyle, flex: 1 }}>
-            <span style={labelStyle}>Amount</span>
+            <span style={labelStyle}>{t('common.amount')}</span>
             <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} style={inputStyle} />
           </label>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Currency</span>
+            <span style={labelStyle}>{t('fin.currency')}</span>
             <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={inputStyle}>
               <option value="USD">USD</option>
               <option value="SLSH">SLSH</option>
@@ -181,7 +181,7 @@ function CreateDebtModal({ open, onClose }) {
           </label>
         </div>
         <label style={fieldStyle}>
-          <span style={labelStyle}>Description (optional)</span>
+          <span style={labelStyle}>{t('fin.description_optional')}</span>
           <input value={description} onChange={(e) => setDescription(e.target.value)} style={inputStyle} />
         </label>
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}

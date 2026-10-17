@@ -2,11 +2,13 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { eachDay, isToday, toISODate } from './dateUtils.js';
 import { isOverdue, eventsForDay } from './WeekGrid.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
-const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DOW_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const MAX_VISIBLE = 3;
 
 export default function MonthGrid({ from, to, batches, focusMonth }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const days = eachDay(from, to);
   const weeks = [];
@@ -15,7 +17,7 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '5px', marginBottom: '5px' }}>
-        {DOW_LABELS.map((l) => (
+        {DOW_KEYS.map((k) => t('cal.dow.' + k)).map((l) => (
           <div key={l} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '1px 0' }}>{l}</div>
         ))}
       </div>
@@ -58,7 +60,7 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                     </button>
                   ))}
                   {overflow > 0 && (
-                    <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 700 }}>+{overflow} more</span>
+                    <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 700 }}>{t('cal.m.more', undefined, { n: overflow })}</span>
                   )}
                 </div>
               );

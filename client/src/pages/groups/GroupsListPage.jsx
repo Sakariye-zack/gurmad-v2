@@ -6,11 +6,13 @@ import RoleGate from '../../components/RoleGate.jsx';
 import { useGroups } from '../../hooks/useGroups.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import GroupFormModal from './GroupFormModal.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Groups List — Group & Group-Based Collection CR, Spec §22. No fixed cap on
 // how many Groups a Zone can have (Locked Decision #1 — "31+ groups, no
 // hardcoded maximum"); this page paginates rather than assuming a small set.
 export default function GroupsListPage() {
+  const { t } = useI18n();
   const [zoneFilter, setZoneFilter] = useState('');
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -24,18 +26,18 @@ export default function GroupsListPage() {
     <div>
       <PageHeader
         icon={Boxes}
-        title="Groups"
-        subtitle="Operational sub-divisions of a Zone — collection is organized and assigned per Group."
+        title={t('nav.groups')}
+        subtitle={t('group.operational_sub_divisions_of_a')}
         actions={
           <RoleGate roles={['admin', 'gudoomiye']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Group</Button>
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('group.create_group')}</Button>
           </RoleGate>
         }
       />
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search by code or name…">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('group.search_by_code_or_name')}>
         <select value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} style={selectStyle}>
-          <option value="">All zones</option>
+          <option value="">{t('group.all_zones')}</option>
           {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
         </select>
       </FilterBar>
@@ -45,9 +47,9 @@ export default function GroupsListPage() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && groups.length === 0}
-        emptyTitle="No groups yet"
-        emptySubtitle="Create the first Group to start organizing collection by Group."
-        columns={[{ label: 'Group' }, { label: 'Zone' }, { label: 'Customers' }, { label: 'Routes' }, { label: 'Status' }]}
+        emptyTitle={t('group.no_groups_yet')}
+        emptySubtitle={t('group.create_the_first_group_to')}
+        columns={[{ label: t('group.group') }, { label: t('common.zone') }, { label: t('nav.customers') }, { label: t('group.routes') }, { label: t('common.status') }]}
       >
         {groups.map((g) => (
           <tr key={g.id} onClick={() => navigate(`/groups/${g.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>

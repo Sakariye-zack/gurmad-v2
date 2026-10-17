@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useUpdateCustomerNumber } from '../../hooks/useCustomers.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Dedicated Customer Number edit surface — deliberately separate from the
 // general Edit Customer form (Discovery §23): a sensitive, audited,
@@ -12,6 +13,7 @@ export default function CustomerNumberEditModal({ open, onClose, customer }) {
 }
 
 function Content({ onClose, customer }) {
+  const { t } = useI18n();
   const [value, setValue] = useState(customer.customer_number);
   const [error, setError] = useState('');
   const toast = useToast();
@@ -22,10 +24,10 @@ function Content({ onClose, customer }) {
     setError('');
     try {
       await updateNumber.mutateAsync(value.trim());
-      toast.success(`Customer Number updated to ${value.trim().toUpperCase()}.`);
+      toast.success(t('cust.m.numberUpdated', undefined, { number: value.trim().toUpperCase() }));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -33,23 +35,22 @@ function Content({ onClose, customer }) {
     <Modal
       open
       onClose={updateNumber.isPending ? () => {} : onClose}
-      title="Edit Customer Number"
+      title={t('cust.edit_customer_number')}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={updateNumber.isPending}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={updateNumber.isPending}>{t('common.cancel')}</Button>
           <Button type="submit" form="customer-number-form" disabled={updateNumber.isPending}>
-            {updateNumber.isPending ? 'Saving…' : 'Save'}
+            {updateNumber.isPending ? t('common.saving') : t('cust.save')}
           </Button>
         </>
       }
     >
       <form id="customer-number-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
-          Current: <strong>{customer.customer_number}</strong>. This customer&rsquo;s internal record and all
-          its history (billing, debts, collection tasks) stay linked by internal ID and are unaffected by this change.
+          {t('cust.m.currentLabel')} <strong>{customer.customer_number}</strong>. {t('cust.m.numberNote')}
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700 }}>New Customer Number</span>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('cust.new_customer_number')}</span>
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}

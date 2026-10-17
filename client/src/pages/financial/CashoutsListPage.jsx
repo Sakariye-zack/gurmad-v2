@@ -5,10 +5,12 @@ import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal,
 import RoleGate from '../../components/RoleGate.jsx';
 import { useCashouts, useCreateCashout, useReconciliationPreview, useCashiers } from '../../hooks/useCashouts.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
 
 export default function CashoutsListPage() {
+  const { t } = useI18n();
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -22,28 +24,28 @@ export default function CashoutsListPage() {
     <div>
       <PageHeader
         icon={Wallet2}
-        title="Cashout"
-        subtitle="Cash reconciliation — Head of Cashiers reconciles a cashier's recorded collections against what was physically received."
+        title={t('nav.cashout')}
+        subtitle={t('fin.cash_reconciliation_head_of_cashiers')}
         actions={
           <RoleGate roles={['admin', 'head_of_cashiers']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>New Cashout</Button>
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('fin.new_cashout')}</Button>
           </RoleGate>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label="Total Cashouts" value={error ? '—' : cashouts.length} icon={Wallet2} />
-        <StatCard label="Pending Approval" value={error ? '—' : pendingCount} icon={Wallet2} accent="var(--warning)" />
-        <StatCard label="With Shortage" value={error ? '—' : shortageCount} icon={Wallet2} accent="var(--danger)" />
+        <StatCard label={t('fin.total_cashouts')} value={error ? '—' : cashouts.length} icon={Wallet2} />
+        <StatCard label={t('fin.pending_approval')} value={error ? '—' : pendingCount} icon={Wallet2} accent="var(--warning)" />
+        <StatCard label={t('fin.with_shortage')} value={error ? '—' : shortageCount} icon={Wallet2} accent="var(--danger)" />
       </div>
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search cashout number…">
+      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('fin.search_cashout_number')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-          <option value="">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-          <option value="voided">Voided</option>
+          <option value="">{t('cust.all_statuses')}</option>
+          <option value="pending">{t('status.pending')}</option>
+          <option value="approved">{t('status.approved')}</option>
+          <option value="rejected">{t('status.rejected')}</option>
+          <option value="voided">{t('status.voided')}</option>
         </select>
       </FilterBar>
 
@@ -52,8 +54,8 @@ export default function CashoutsListPage() {
         error={error?.message}
         onRetry={refetch}
         isEmpty={!isLoading && !error && cashouts.length === 0}
-        emptyTitle="No cashouts yet"
-        columns={[{ label: 'Cashout No.' }, { label: 'Zone' }, { label: 'Expected' }, { label: 'Actual' }, { label: 'Shortage' }, { label: 'Surplus' }, { label: 'Status' }, { label: 'Signed' }]}
+        emptyTitle={t('fin.no_cashouts_yet')}
+        columns={[{ label: t('fin.cashout_no') }, { label: t('common.zone') }, { label: t('dash.expected') }, { label: t('dash.actual') }, { label: t('dash.shortage') }, { label: t('dash.surplus') }, { label: t('common.status') }, { label: t('fin.signed') }]}
       >
         {cashouts.map((co) => (
           <tr key={co.id} onClick={() => navigate(`/financial/cashouts/${co.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
@@ -85,6 +87,7 @@ function toIsoZ(local) {
 }
 
 function CashoutFormContent({ onClose }) {
+  const { t } = useI18n();
   const [zoneId, setZoneId] = useState('');
   const [cashierId, setCashierId] = useState('');
   const [periodStart, setPeriodStart] = useState('');
@@ -116,7 +119,7 @@ function CashoutFormContent({ onClose }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!zoneId || !cashierId || !periodStart || !periodEnd) { setError('Zone, cashier, and period are all required.'); return; }
+    if (!zoneId || !cashierId || !periodStart || !periodEnd) { setError(t('fin.zone_cashier_and_period_are')); return; }
     try {
       const result = await createCashout.mutateAsync({
         zone_id: parseInt(zoneId, 10), cashier_id: parseInt(cashierId, 10),
@@ -125,10 +128,10 @@ function CashoutFormContent({ onClose }) {
         edahab_amount: parseFloat(edahab) || 0, slsh_amount: parseFloat(slsh) || 0,
         shortage_reason: shortageReason || undefined, remarks: remarks || undefined,
       });
-      toast.success(`${result.data.cashout_number} created.`);
+      toast.success(t('fin.m.created', undefined, { number: result.data.cashout_number }));
       onClose();
     } catch (err) {
-      setError(err.message || 'Something went wrong.');
+      setError(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -136,36 +139,36 @@ function CashoutFormContent({ onClose }) {
     <Modal
       open
       onClose={createCashout.isPending ? () => {} : onClose}
-      title="New Cashout"
+      title={t('fin.new_cashout')}
       footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={createCashout.isPending}>Cancel</Button>
-        <Button type="submit" form="cashout-form" disabled={createCashout.isPending}>{createCashout.isPending ? 'Saving…' : 'Create Cashout'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={createCashout.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="cashout-form" disabled={createCashout.isPending}>{createCashout.isPending ? t('common.saving') : t('fin.create_cashout')}</Button>
       </>}
     >
       <form id="cashout-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div style={{ display: 'flex', gap: '10px' }}>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Zone</span>
+            <span style={labelStyle}>{t('common.zone')}</span>
             <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
-              <option value="">Select a zone…</option>
+              <option value="">{t('cust.select_a_zone')}</option>
               {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </label>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Cashier</span>
+            <span style={labelStyle}>{t('fin.cashier')}</span>
             <select value={cashierId} onChange={(e) => setCashierId(e.target.value)} style={inputStyle}>
-              <option value="">Select a cashier…</option>
+              <option value="">{t('fin.select_a_cashier')}</option>
               {cashiers.map((c) => <option key={c.id} value={c.id}>{c.full_name || c.username} ({c.username}{c.zone ? `, ${c.zone}` : ''})</option>)}
             </select>
           </label>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Period start</span>
+            <span style={labelStyle}>{t('fin.period_start')}</span>
             <input type="datetime-local" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} style={inputStyle} />
           </label>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Period end</span>
+            <span style={labelStyle}>{t('fin.period_end')}</span>
             <input type="datetime-local" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} style={inputStyle} />
           </label>
         </div>
@@ -173,35 +176,35 @@ function CashoutFormContent({ onClose }) {
         {preview.data?.data && (
           <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg)', border: '1px solid var(--border)', fontSize: '12px' }}>
             <div className="tabular-nums" style={{ fontWeight: 700, marginBottom: '4px' }}>
-              System expected: ${expected.toFixed(2)} ({preview.data.data.transactionCount} transactions, {preview.data.data.customerCount} customers)
+              {t('fin.m.systemExpected', undefined, { expected: expected.toFixed(2), transactions: preview.data.data.transactionCount, customers: preview.data.data.customerCount })}
             </div>
             {preview.data.data.overlapsExistingCashout && (
-              <span style={{ color: 'var(--danger)' }}>This cashier already has a cashout covering an overlapping period.</span>
+              <span style={{ color: 'var(--danger)' }}>{t('fin.this_cashier_already_has_a')}</span>
             )}
           </div>
         )}
 
-        <span style={sectionLabelStyle}>Amount Physically Received</span>
+        <span style={sectionLabelStyle}>{t('fin.amount_physically_received')}</span>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
-          <label style={fieldStyle}><span style={labelStyle}>Cash</span><input type="number" min="0" step="0.01" value={cash} onChange={(e) => setCash(e.target.value)} style={inputStyle} /></label>
+          <label style={fieldStyle}><span style={labelStyle}>{t('fin.cash')}</span><input type="number" min="0" step="0.01" value={cash} onChange={(e) => setCash(e.target.value)} style={inputStyle} /></label>
           <label style={fieldStyle}><span style={labelStyle}>ZAAD</span><input type="number" min="0" step="0.01" value={zaad} onChange={(e) => setZaad(e.target.value)} style={inputStyle} /></label>
-          <label style={fieldStyle}><span style={labelStyle}>eDahab</span><input type="number" min="0" step="0.01" value={edahab} onChange={(e) => setEdahab(e.target.value)} style={inputStyle} /></label>
+          <label style={fieldStyle}><span style={labelStyle}>{t('fin.edahab')}</span><input type="number" min="0" step="0.01" value={edahab} onChange={(e) => setEdahab(e.target.value)} style={inputStyle} /></label>
           <label style={fieldStyle}><span style={labelStyle}>SLSH</span><input type="number" min="0" step="0.01" value={slsh} onChange={(e) => setSlsh(e.target.value)} style={inputStyle} /></label>
         </div>
-        <div className="tabular-nums" style={{ fontSize: '13px', fontWeight: 700 }}>Total actual: ${actual.toFixed(2)}</div>
+        <div className="tabular-nums" style={{ fontSize: '13px', fontWeight: 700 }}>{t('fin.m.totalActual', undefined, { actual: actual.toFixed(2) })}</div>
         {diff != null && Math.abs(diff) > 0.005 && (
           <div style={{ fontSize: '12px', color: diff > 0 ? 'var(--danger)' : 'var(--info)' }}>
-            {diff > 0 ? `Shortage of $${diff.toFixed(2)} will be recorded.` : `Surplus of $${(-diff).toFixed(2)} will be recorded.`}
+            {diff > 0 ? t('fin.m.shortageRecorded', undefined, { amount: diff.toFixed(2) }) : t('fin.m.surplusRecorded', undefined, { amount: (-diff).toFixed(2) })}
           </div>
         )}
         {diff != null && diff > 0.005 && (
           <label style={fieldStyle}>
-            <span style={labelStyle}>Shortage reason (required)</span>
-            <input value={shortageReason} onChange={(e) => setShortageReason(e.target.value)} style={inputStyle} placeholder="Explain the shortfall" />
+            <span style={labelStyle}>{t('fin.shortage_reason_required')}</span>
+            <input value={shortageReason} onChange={(e) => setShortageReason(e.target.value)} style={inputStyle} placeholder={t('fin.explain_the_shortfall')} />
           </label>
         )}
         <label style={fieldStyle}>
-          <span style={labelStyle}>Remarks (optional)</span>
+          <span style={labelStyle}>{t('fin.remarks_optional')}</span>
           <input value={remarks} onChange={(e) => setRemarks(e.target.value)} style={inputStyle} />
         </label>
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}

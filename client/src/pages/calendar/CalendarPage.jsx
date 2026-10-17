@@ -11,6 +11,7 @@ import {
   addDays, endOfWeek, formatMonthLabel, formatWeekLabel, monthGridRange,
   startOfWeek, toISODate,
 } from './dateUtils.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUS_OPTIONS = ['draft', 'assigned', 'in_progress', 'partially_completed', 'completed', 'cancelled'];
 const CUSTOMER_TYPE_OPTIONS = ['residential', 'commercial'];
@@ -21,6 +22,7 @@ const CUSTOMER_TYPE_OPTIONS = ['residential', 'commercial'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'head_of_cashiers'];
 
 export default function CalendarPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const [view, setView] = useState('week'); // 'week' | 'month'
   const [anchor, setAnchor] = useState(() => new Date());
@@ -63,16 +65,16 @@ export default function CalendarPage() {
       <div style={{ marginBottom: '14px' }}>
         <PageHeader
           icon={CalendarDays}
-          title="Operational Calendar"
-          subtitle="Read-only view of collection batches by date. Click a batch to open it."
+          title={t('cal.operational_calendar')}
+          subtitle={t('cal.read_only_view_of_collection')}
         />
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={goPrev} aria-label="Previous" style={navBtnStyle}><ChevronLeft size={15} /></button>
-          <button onClick={goToday} style={{ ...navBtnStyle, width: 'auto', padding: '0 12px', fontSize: '12px', fontWeight: 700 }}>Today</button>
-          <button onClick={goNext} aria-label="Next" style={navBtnStyle}><ChevronRight size={15} /></button>
+          <button onClick={goPrev} aria-label={t('cal.previous')} style={navBtnStyle}><ChevronLeft size={15} /></button>
+          <button onClick={goToday} style={{ ...navBtnStyle, width: 'auto', padding: '0 12px', fontSize: '12px', fontWeight: 700 }}>{t('cal.today')}</button>
+          <button onClick={goNext} aria-label={t('common.next')} style={navBtnStyle}><ChevronRight size={15} /></button>
           <span style={{ fontSize: '13px', fontWeight: 700, marginLeft: '4px' }}>{rangeLabel}</span>
         </div>
 
@@ -81,13 +83,13 @@ export default function CalendarPage() {
             onClick={() => setView('week')}
             style={toggleBtnStyle(view === 'week')}
           >
-            Week
+            {t('cal.week')}
           </button>
           <button
             onClick={() => setView('month')}
             style={toggleBtnStyle(view === 'month')}
           >
-            Month
+            {t('cal.month')}
           </button>
         </div>
       </div>
@@ -95,24 +97,24 @@ export default function CalendarPage() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
         {!isZoneScoped && (
           <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={selectStyle}>
-            <option value="">All zones</option>
+            <option value="">{t('group.all_zones')}</option>
             {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </select>
         )}
         <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle}>
-          <option value="">All statuses</option>
-          {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          <option value="">{t('cust.all_statuses')}</option>
+          {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{t('status.' + s, s.replace(/_/g, ' '))}</option>)}
         </select>
         <select value={customerType} onChange={(e) => setCustomerType(e.target.value)} style={selectStyle}>
-          <option value="">All customer types</option>
-          {CUSTOMER_TYPE_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          <option value="">{t('cal.all_customer_types')}</option>
+          {CUSTOMER_TYPE_OPTIONS.map((c) => <option key={c} value={c}>{t('cust.' + c, c)}</option>)}
         </select>
       </div>
 
-      {isLoading && <LoadingState label="Loading calendar…" />}
+      {isLoading && <LoadingState label={t('cal.loading_calendar')} />}
       {!isLoading && error && <ErrorState message={error.message} onRetry={refetch} />}
       {!isLoading && !error && batches.length === 0 && (
-        <EmptyState icon={CalendarDays} title="No batches in this range" subtitle="Try a different date range or clear the filters." />
+        <EmptyState icon={CalendarDays} title={t('cal.no_batches_in_this_range')} subtitle={t('cal.try_a_different_date_range')} />
       )}
       {!isLoading && !error && batches.length > 0 && (
         <div className="v2-calendar-grid-wrap" style={{ overflowX: 'auto' }}>
@@ -152,6 +154,7 @@ function CalendarListFallback({ batches }) {
 }
 
 function ListRow({ batch }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   return (
     <button
@@ -167,7 +170,7 @@ function ListRow({ batch }) {
     >
       <div>
         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>{batch.batch_code}</div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{batch.zone_name} · {batch.start_date}{batch.end_date ? ` – ${batch.end_date}` : ' (ongoing)'}</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{batch.zone_name} · {batch.start_date}{batch.end_date ? ` – ${batch.end_date}` : t('cal.ongoing')}</div>
       </div>
       <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-muted)' }}>{batch.status.replace(/_/g, ' ')}</span>
     </button>

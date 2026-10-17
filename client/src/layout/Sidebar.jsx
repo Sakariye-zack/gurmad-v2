@@ -249,6 +249,7 @@ function NavGroup({ name, items, currentPath }) {
 }
 
 export default function Sidebar() {
+  const { t } = useI18n();
   const { user, logout } = useAuth();
   const location = useLocation();
   const { ungrouped, byGroup } = groupNavItems();
@@ -320,7 +321,7 @@ export default function Sidebar() {
         <div style={{ fontSize: '12px', fontWeight: 700 }}>{user?.full_name || user?.username}</div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>{user?.role}{user?.zone ? ` — ${user.zone}` : ''}</div>
         <button onClick={logout} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', padding: 0 }}>
-          <LogOut size={14} /> Log out
+          <LogOut size={14} /> {t("nav.logout")}
         </button>
       </div>
     </aside>
