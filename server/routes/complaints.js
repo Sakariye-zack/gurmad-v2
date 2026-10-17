@@ -5,6 +5,7 @@ const multer = require('multer');
 const { pool } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { rejectIfInfected } = require('../lib/virusScan');
 const {
   MANAGEMENT_ROLES, createComplaint, getComplaintsForStaff, getComplaintDetailForStaff,
   updateComplaintStatus, assignComplaint, replyToComplaint, setComplaintPriority,
@@ -175,6 +176,7 @@ router.post('/:id/attachments', authenticateToken, requireRole(...MANAGEMENT_ROL
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { filePath: req.file.path, label: 'complaint_attachment' })) return;
   try {
     const complaintRes = await pool.query('SELECT id FROM complaints WHERE id = $1', [id]);
     if (complaintRes.rows.length === 0) return res.status(404).json({ error: { message: 'Complaint not found.', code: 'NOT_FOUND' } });

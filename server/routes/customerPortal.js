@@ -18,6 +18,7 @@ const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
 // module also used by routes/complaints.js (staff) — no duplicated
 // business logic between the two API surfaces, per the approved contract.
 const { createComplaint, getComplaintsForCustomer, getComplaintDetail } = require('../lib/complaintsService');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const COMPLAINT_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'complaints');
 fs.mkdirSync(COMPLAINT_UPLOAD_DIR, { recursive: true });
@@ -703,6 +704,7 @@ router.post('/complaints', authenticateCustomerPortal, uploadComplaintPhoto.sing
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: { message: 'Photo content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (req.file && await rejectIfInfected(req, res, { filePath: req.file.path, label: 'portal_complaint_photo' })) return;
   // QA fix (Phase 5 QA, defect found live-testing): priority is staff-set
   // only, per the approved Decision Record — a customer-supplied priority
   // was previously accepted and honored here. Any client-sent `priority`

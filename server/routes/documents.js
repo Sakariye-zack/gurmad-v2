@@ -5,6 +5,7 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { putFile, getFileStream, fileExists, UPLOAD_DIR } = require('../lib/documentStorage');
 const { sniffFileType } = require('../lib/fileSniff');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const router = express.Router();
 
@@ -124,6 +125,7 @@ router.post('/', authenticateToken, requireRole(...UPLOAD_ROLES), upload.single(
   if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { buffer: req.file.buffer, label: 'document' })) return;
 
   const role = (req.user.role || '').toLowerCase();
   let targetZoneId = null;
@@ -324,6 +326,7 @@ router.post('/:id/replace', authenticateToken, requireRole(...UPLOAD_ROLES), upl
   if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { buffer: req.file.buffer, label: 'document' })) return;
   const { title, category, description } = req.body;
   if (category !== undefined && category !== '' && !CATEGORY_VALUES.includes(category)) {
     return res.status(400).json({ error: { message: `category must be one of: ${CATEGORY_VALUES.join(', ')}.`, code: 'VALIDATION' } });

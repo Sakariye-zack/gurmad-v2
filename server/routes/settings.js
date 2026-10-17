@@ -6,6 +6,7 @@ const sharp = require('sharp');
 const { pool, logAudit } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const router = express.Router();
 
@@ -346,6 +347,7 @@ router.post('/company/logo', (req, res, next) => {
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { filePath: req.file.path, label: 'company_logo' })) return;
   try {
     const existing = await pool.query('SELECT * FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
     const before = existing.rows[0] || null;

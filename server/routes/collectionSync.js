@@ -7,6 +7,7 @@ const { applyBatchCustomerStatusChange } = require('../lib/collectionValidation'
 const { sniffFileType } = require('../lib/fileSniff');
 const { putFile, getFileStream, fileExists } = require('../lib/documentStorage');
 const logger = require('../lib/logger');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const router = express.Router();
 
@@ -357,6 +358,7 @@ router.post('/photo', requireRole('collector', 'admin'), uploadPhoto.single('pho
   if (!sniffFileType(req.file.buffer, req.file.mimetype)) {
     return res.status(400).json({ error: { message: 'Photo content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { buffer: req.file.buffer, label: 'collection_photo' })) return;
 
   // The photo may only be attached to an action THIS actor already got
   // `accepted` for — same actor_id scoping rationale as H-1 above (never

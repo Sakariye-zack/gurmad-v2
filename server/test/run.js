@@ -17,6 +17,8 @@ if (!['localhost', '127.0.0.1', '::1'].includes(HOST)) {
   process.exit(1);
 }
 
+const stubclamd = require('./stubclamd');
+const CLAM_PORT = process.env.TEST_CLAM_PORT || '5198';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function recreateDb() {
@@ -37,7 +39,8 @@ async function waitHealthy(base, tries = 60) {
 
 (async () => {
   await recreateDb();
-  const env = { ...process.env, DB_NAME: TEST_DB, PORT, NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  const clam = await stubclamd.start(Number(CLAM_PORT));
+  const env = { ...process.env, DB_NAME: TEST_DB, PORT, CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });
@@ -55,6 +58,7 @@ async function waitHealthy(base, tries = 60) {
     console.error(e.message); console.error(log.slice(-2000));
   } finally {
     server.kill();
+    clam.close();
   }
   process.exit(code);
 })();

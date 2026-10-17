@@ -7,6 +7,7 @@ const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { computeExpectedForPeriod, hasOverlappingCashout, EPSILON } = require('../lib/cashoutCalculations');
 const { buildCashoutDocx } = require('../lib/documentGenerators');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const router = express.Router();
 
@@ -547,6 +548,7 @@ router.post('/:id/attachments', authenticateToken, requireRole(...VIEW_ROLES), u
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { filePath: req.file.path, label: 'cashout_attachment' })) return;
   const documentType = req.body.document_type;
   if (!DOCUMENT_TYPES.includes(documentType)) {
     fs.unlink(req.file.path, () => {});

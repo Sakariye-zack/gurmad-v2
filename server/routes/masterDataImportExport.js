@@ -7,6 +7,7 @@ const {
 } = require('../lib/csvImportExport');
 const { IMPORT_ENTITIES, EXPORT_ENTITIES, resolveUserZoneId } = require('../lib/masterDataEntities');
 const { sniffFileType } = require('../lib/fileSniff');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 const router = express.Router();
 
@@ -181,6 +182,7 @@ router.post('/:entity/import/validate', authenticateToken, async (req, res, next
   if (!sniffFileType(req.file.buffer, 'text/csv')) {
     return res.status(400).json({ error: { message: 'File content does not look like a valid CSV/text file.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { buffer: req.file.buffer, label: 'import_csv' })) return;
 
   const role = (req.user.role || '').toLowerCase();
   let zoneId = null; let companyWide = false;

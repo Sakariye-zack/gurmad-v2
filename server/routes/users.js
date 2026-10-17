@@ -6,6 +6,7 @@ const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sniffFileType } = require('../lib/fileSniff');
+const { rejectIfInfected } = require('../lib/virusScan');
 
 // User & Access Administration — Implementation Spec §16/§17. Admin-only
 // user-management surface (Preconditions §9's default, not separately
@@ -98,6 +99,7 @@ router.post('/me/avatar', authenticateToken, (req, res, next) => {
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: { message: 'File content does not match its claimed type.', code: 'VALIDATION' } });
   }
+  if (await rejectIfInfected(req, res, { filePath: req.file.path, label: 'avatar' })) return;
   try {
     const existing = await pool.query('SELECT avatar_storage_path FROM v2_users WHERE id = $1', [req.user.id]);
     const oldPath = existing.rows[0]?.avatar_storage_path ? path.join(AVATAR_UPLOAD_DIR, existing.rows[0].avatar_storage_path) : null;
