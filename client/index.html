@@ -8,7 +8,13 @@
          in the manifest itself means this link is inert for the staff app
          (a browser only offers install when the current page is within the
          manifest's scope) — no separate manifest file needed per app. -->
-    <link rel="manifest" id="v2-manifest-link" href="/manifest.webmanifest" />
+    <!-- Dynamic manifest (user-requested: the installed app's home-screen
+         icon + name must come from the real company logo/name set in
+         Settings, not a baked-in icon) — GET /api/v2/settings/company/
+         manifest.webmanifest builds it per app. The static
+         manifest.webmanifest / collector-manifest.webmanifest files remain
+         in public/ only as the service workers' precache entries. -->
+    <link rel="manifest" id="v2-manifest-link" href="/api/v2/settings/company/manifest.webmanifest?app=portal" />
     <meta name="theme-color" content="#2F7D3E" />
     <!-- Gap-audit fix (Phase 10, user-requested: staff/customer mobile
          apps should feel like real mobile apps): both manifests above had
@@ -42,7 +48,7 @@
       // replacement of, the existing Portal-scoped default below. Only one
       // of the two manifests is ever active for a given page load.
       if (window.location.pathname.startsWith('/collector')) {
-        document.getElementById('v2-manifest-link').setAttribute('href', '/collector-manifest.webmanifest');
+        document.getElementById('v2-manifest-link').setAttribute('href', '/api/v2/settings/company/manifest.webmanifest?app=collector');
       }
 
       // Service worker registration is gated per-app — neither registers

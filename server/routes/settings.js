@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const sharp = require('sharp');
 const { pool, logAudit } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
@@ -60,6 +61,101 @@ router.get('/company/name', async (req, res) => {
     res.json({ data: { company_name: result.rows[0]?.company_name || null } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load company name.', code: 'INTERNAL' } });
+  }
+});
+
+// PWA / browser-tab icon — user-requested ('loagada systemka ku haka
+// soo muuqato mobile appska iyo xaga browserkaba'): the installed
+// Customer Portal / Collector apps and the browser tab were showing the
+// generic static trash-can icon (public/icon-*.png) even after a real
+// company logo was uploaded. The logo itself is usually a wide wordmark,
+// unusable as a square home-screen icon, so this serves a square PNG
+// (logo centered on white with a maskable-safe margin) resized from the
+// uploaded file. Public for the same reason as /company/logo above — the
+// install prompt / manifest fetch carries no session. 404 when no logo is
+// set; callers (the manifest below, useDynamicBranding.js) fall back to
+// the static icons in that case, never a broken icon.
+const ICON_SIZES = [64, 180, 192, 512];
+const iconCache = new Map();
+router.get('/company/icon/:size.png', async (req, res) => {
+  const size = parseInt(req.params.size, 10);
+  if (!ICON_SIZES.includes(size)) return res.status(404).json({ error: { message: 'Unsupported icon size.', code: 'NOT_FOUND' } });
+  try {
+    const result = await pool.query('SELECT logo_storage_path FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
+    const stored = result.rows[0]?.logo_storage_path;
+    if (!stored) return res.status(404).json({ error: { message: 'No company logo is set.', code: 'NOT_FOUND' } });
+    const filePath = path.join(UPLOAD_DIR, stored);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Logo file not found.', code: 'NOT_FOUND' } });
+
+    // Keyed on the stored filename (a new upload always gets a new
+    // filename), so a replaced logo is never served from a stale cache.
+    const cacheKey = `${stored}:${size}`;
+    let png = iconCache.get(cacheKey);
+    if (!png) {
+      const margin = Math.round(size * 0.14);
+      const inner = size - margin * 2;
+      const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
+      // A JPEG logo's "white" is rarely pure #fff (compression + a slightly
+      // tinted background) — padding with literal white leaves a faintly
+      // visible box around the logo. Sampling the logo's own top-left
+      // pixel as the fill color makes the margin blend in seamlessly.
+      const flat = await sharp(filePath).flatten({ background: WHITE }).toBuffer();
+      const corner = await sharp(flat).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+      const bg = { r: corner[0], g: corner[1], b: corner[2], alpha: 1 };
+      png = await sharp(flat)
+        .resize(inner, inner, { fit: 'contain', background: bg })
+        .extend({ top: margin, bottom: margin, left: margin, right: margin, background: bg })
+        .png()
+        .toBuffer();
+      if (iconCache.size > 20) iconCache.clear();
+      iconCache.set(cacheKey, png);
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(png);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to build company icon.', code: 'INTERNAL' } });
+  }
+});
+
+// Dynamic web-app manifest for the two installable apps (Customer Portal,
+// Collector) — replaces the static public/manifest.webmanifest /
+// collector-manifest.webmanifest as what index.html links to, so the
+// installed app's home-screen icon + name come from Settings > Company
+// Information (logo, company name) instead of being baked into the
+// build. Falls back to the static icons/GURMAD name when nothing is
+// configured yet. Same public exception as the logo/name routes.
+const STATIC_MANIFEST_ICONS = [
+  { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+  { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+];
+router.get('/company/manifest.webmanifest', async (req, res) => {
+  const app = req.query.app === 'collector' ? 'collector' : 'portal';
+  try {
+    const result = await pool.query('SELECT company_name, logo_storage_path FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
+    const row = result.rows[0] || {};
+    const companyName = row.company_name || 'GURMAD';
+    const icons = row.logo_storage_path
+      ? [192, 512].map((s) => ({
+          src: `/api/v2/settings/company/icon/${s}.png?v=${encodeURIComponent(row.logo_storage_path)}`,
+          sizes: `${s}x${s}`, type: 'image/png', purpose: 'any maskable',
+        }))
+      : STATIC_MANIFEST_ICONS;
+    const manifest = {
+      name: app === 'collector' ? `${companyName} Collector` : `${companyName} Customer Portal`,
+      short_name: app === 'collector' ? 'Collector' : companyName,
+      start_url: app === 'collector' ? '/collector' : '/portal',
+      scope: app === 'collector' ? '/collector' : '/portal',
+      display: 'standalone',
+      background_color: '#F7F8F6',
+      theme_color: '#2F7D3E',
+      icons,
+    };
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(JSON.stringify(manifest));
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to build manifest.', code: 'INTERNAL' } });
   }
 });
 
