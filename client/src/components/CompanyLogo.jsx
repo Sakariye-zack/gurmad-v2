@@ -10,12 +10,12 @@ import React, { useState } from 'react';
 //
 // Falls back to `fallback` (typically the "GURMAD V2" wordmark text) when
 // no logo is set yet or the request fails — never a broken-image icon.
-export default function CompanyLogo({ fallback, height = 32, style }) {
+export default function CompanyLogo({ fallback, height = 32, style, full = false }) {
   const [failed, setFailed] = useState(false);
   if (failed) return fallback;
   return (
     <img
-      src="/api/v2/settings/company/logo-trimmed"
+      src={full ? '/api/v2/settings/company/logo' : '/api/v2/settings/company/logo-trimmed'}
       alt="Company logo"
       height={height}
       style={{ display: 'block', maxWidth: '160px', objectFit: 'contain', ...style }}
