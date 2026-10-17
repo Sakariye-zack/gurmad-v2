@@ -261,7 +261,7 @@ export function DispatchMedallion({ size = 62, logoHeight = 32, fallback }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
-        <CompanyLogoSlot height={logoHeight} fallback={fallback} />
+        <CompanyLogoSlot height={logoHeight} fallback={fallback} size={size} />
       </div>
     </div>
   );
@@ -270,6 +270,7 @@ export function DispatchMedallion({ size = 62, logoHeight = 32, fallback }) {
 // Deferred import to avoid a circular concern — CompanyLogo itself has no
 // dependency on this file, this is just kept local to the medallion.
 import CompanyLogo from './CompanyLogo.jsx';
-function CompanyLogoSlot({ height, fallback }) {
-  return <CompanyLogo height={height} fallback={fallback} style={{ borderRadius: '50%' }} />;
+// The trimmed company logo is a wide wordmark: bound its width to the circle's inner area (height follows the aspect ratio).
+function CompanyLogoSlot({ height, fallback, size = 62 }) {
+  return <CompanyLogo height={height} fallback={fallback} style={{ maxWidth: `${Math.round(size * 0.74)}px`, height: 'auto', maxHeight: `${Math.round(size * 0.6)}px` }} />;
 }
