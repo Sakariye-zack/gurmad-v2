@@ -149,12 +149,6 @@ export default function TruckDetailPage() {
         {maintenanceRecords.length > 6 && <p style={moreStyle}>+ {maintenanceRecords.length - 6} more — see Fleet Maintenance.</p>}
       </Card>
 
-      <Card style={{ ...cardPad, marginTop: '16px' }}>
-        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
-          Collection task assignment for this truck will appear here once that module is implemented.
-        </p>
-      </Card>
-
       <TruckFormModal open={editOpen} onClose={() => setEditOpen(false)} truck={truck} />
       <ConfirmDialog
         open={!!pendingStatus}

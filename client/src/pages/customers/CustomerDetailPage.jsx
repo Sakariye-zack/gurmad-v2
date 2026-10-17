@@ -105,13 +105,6 @@ export default function CustomerDetailPage() {
         <CustomerCollectionHistorySection customerId={customer.id} />
       </RoleGate>
 
-      <Card style={{ ...cardPad, marginTop: '16px' }}>
-        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>
-          Task activity for this customer will appear here once that module is implemented, per the
-          approved one-module-at-a-time sequence.
-        </p>
-      </Card>
-
       <CustomerPortalAccessCard customerId={customer.id} />
 
       <CustomerFormModal open={editOpen} onClose={() => setEditOpen(false)} customer={customer} />
