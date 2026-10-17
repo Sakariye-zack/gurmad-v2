@@ -2,17 +2,19 @@ import React from 'react';
 import { Bell } from 'lucide-react';
 import { PageHeader, Button, LoadingState, EmptyState, ErrorState, StatusBadge } from '../../components/ui/index.js';
 import { useStaffNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from '../../hooks/useStaffNotifications.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Staff Notifications — Implementation Spec §18. The second (and last) of
 // exactly 2 approved UI surfaces. No detail page — expanding/marking an
 // item in place is sufficient at this minimal payload size (Spec §18).
 export default function NotificationsListPage() {
+  const { t } = useI18n();
   const { data, isLoading, isError, refetch } = useStaffNotifications();
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
 
-  if (isLoading) return <LoadingState label="Loading notifications…" />;
-  if (isError) return <ErrorState message="Couldn't load notifications." onRetry={refetch} />;
+  if (isLoading) return <LoadingState label={t('notif.loading')} />;
+  if (isError) return <ErrorState message={t('notif.loadFailed')} onRetry={refetch} />;
 
   const notifications = data?.data || [];
   const hasUnread = notifications.some((n) => !n.is_read);
@@ -21,15 +23,15 @@ export default function NotificationsListPage() {
     <div>
       <PageHeader
         icon={Bell}
-        title="Notifications"
+        title={t('portal.notifications')}
         actions={hasUnread ? (
           <Button variant="secondary" onClick={() => markAllRead.mutate()} disabled={markAllRead.isPending}>
-            Mark all read
+            {t('portal.notif.markAll')}
           </Button>
         ) : undefined}
       />
       {notifications.length === 0 ? (
-        <EmptyState icon={Bell} title="No notifications" subtitle="You're all caught up." />
+        <EmptyState icon={Bell} title={t('notif.empty')} subtitle={t('notif.emptyHint')} />
       ) : (
         notifications.map((n) => (
           <div

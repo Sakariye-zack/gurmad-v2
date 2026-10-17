@@ -1,9 +1,11 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Design_System.md §12: no native window.confirm()/prompt() anywhere in V2 —
 // this and ConfirmDialog are the only two ways to interrupt a user, ever.
 export default function Modal({ open, onClose, title, children, footer, maxWidth = '520px' }) {
+  const { t } = useI18n();
   if (!open) return null;
   return (
     <div
@@ -13,7 +15,7 @@ export default function Modal({ open, onClose, title, children, footer, maxWidth
       <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', width: '100%', maxWidth, boxShadow: 'var(--shadow-md)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <h3>{title}</h3>
-          <button aria-label="Close" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+          <button aria-label={t('common.close')} onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
             <X size={18} />
           </button>
         </div>

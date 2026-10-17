@@ -5,9 +5,11 @@ import { Button, useToast } from '../../../components/ui/index.js';
 import PortalPageHeader from '../../components/PortalPageHeader.jsx';
 import PortalCard from '../../components/PortalCard.jsx';
 import { portalApiClient } from '../../apiClient.js';
+import { useI18n } from '../../../i18n/I18nContext.jsx';
 
 export default function PortalComplaintSubmit() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const toast = useToast();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -26,10 +28,10 @@ export default function PortalComplaintSubmit() {
       // Phase 5 QA: the backend now also ignores it even if sent).
       if (photo) formData.append('photo', photo);
       const res = await portalApiClient.postForm('/complaints', formData);
-      toast.success('Complaint submitted.');
+      toast.success(t('portal.submit.done'));
       navigate(`/portal/complaints/${res.data.id}`);
     } catch (err) {
-      toast.error(err.message || 'Failed to submit complaint.');
+      toast.error(err.message || t('portal.submit.failed'));
     } finally {
       setSaving(false);
     }
@@ -38,23 +40,23 @@ export default function PortalComplaintSubmit() {
   return (
     <div>
       <button onClick={() => navigate('/portal/complaints')} style={backLinkStyle}>
-        <ArrowLeft size={14} /> Back to Complaints
+        <ArrowLeft size={14} /> {t('portal.complaints.back')}
       </button>
-      <PortalPageHeader title="Submit a Complaint" subtitle="Tell us what went wrong" />
+      <PortalPageHeader title={t('portal.submit.title')} subtitle={t('portal.submit.subtitle')} />
 
       <PortalCard>
         <form onSubmit={handleSubmit} style={{ maxWidth: '480px' }}>
-          <label style={labelStyle}>Title</label>
+          <label style={labelStyle}>{t('common.title')}</label>
           <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} required maxLength={255} />
 
-          <label style={labelStyle}>Description</label>
+          <label style={labelStyle}>{t('common.description')}</label>
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={5} style={{ ...inputStyle, resize: 'vertical' }} required />
 
-          <label style={labelStyle}>Photo (optional — PDF, JPEG, or PNG, max 10MB)</label>
+          <label style={labelStyle}>{t('portal.submit.photo')}</label>
           <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setPhoto(e.target.files?.[0] || null)} style={inputStyle} />
 
           <Button type="submit" disabled={saving || !title.trim() || !description.trim()} style={{ marginTop: '16px' }}>
-            {saving ? 'Submitting…' : 'Submit Complaint'}
+            {saving ? t('portal.submit.submitting') : t('portal.submit.button')}
           </Button>
         </form>
       </PortalCard>

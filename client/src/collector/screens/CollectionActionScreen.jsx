@@ -4,6 +4,7 @@ import { Camera, ChevronLeft, RotateCcw } from 'lucide-react';
 import { Button, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { getCachedAssignments } from '../lib/collectorStore.js';
 import { useSyncQueueContext } from '../SyncQueueContext.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const STATUSES = [
   { value: 'serviced', label: 'Serviced' },
@@ -29,6 +30,7 @@ const JPEG_QUALITY = 0.72;
 export default function CollectionActionScreen() {
   const { batchId, customerId } = useParams();
   const navigate = useNavigate();
+  const { t, tc } = useI18n();
   const toast = useToast();
   const { captureAction } = useSyncQueueContext();
 
@@ -123,11 +125,11 @@ export default function CollectionActionScreen() {
   // No data is at risk either way (the lookup is scoped to this
   // collector's own cache — see CustomerDetailScreen's identical guard),
   // this is a UX/recovery fix only.
-  if (customer === null) return <ErrorState message="Customer not found in your current assignments." onRetry={() => navigate('/collector/assignments')} />;
+  if (customer === null) return <ErrorState message={t('collector.customerNotFound')} onRetry={() => navigate('/collector/assignments')} />;
 
   const submit = async () => {
-    if (!status) return toast.error('Select a status.');
-    if (status === 'missed' && !reason.trim()) return toast.error('A reason is required to mark Missed.');
+    if (!status) return toast.error(t('collector.selectStatus'));
+    if (status === 'missed' && !reason.trim()) return toast.error(t('collector.reasonRequired'));
     // User-requested (Phase 10): photo is optional for Serviced, not
     // required — the "required" copy/validation below is removed; the
     // capture UI and upload path are unchanged, a collector can still
@@ -142,7 +144,7 @@ export default function CollectionActionScreen() {
         photoBase64: status === 'serviced' ? photo?.base64 : null,
         photoMime: status === 'serviced' ? photo?.mime : null,
       });
-      toast.success('Queued — will sync automatically');
+      toast.success(t('collector.queued'));
       navigate('/collector/assignments');
     } finally {
       setSubmitting(false);
@@ -152,7 +154,7 @@ export default function CollectionActionScreen() {
   return (
     <div>
       <button onClick={() => navigate(-1)} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', fontWeight: 700, fontSize: '13px', marginBottom: '16px', cursor: 'pointer', minHeight: '44px' }}>
-        <ChevronLeft size={18} /> Back
+        <ChevronLeft size={18} /> {t('common.back')}
       </button>
       <h2 style={{ margin: '0 0 16px' }}>{customer.business_name || customer.name}</h2>
 
@@ -168,13 +170,13 @@ export default function CollectionActionScreen() {
               // dark mode without an explicit color.
               color: 'var(--text)',
             }}>
-            {s.label}
+            {tc('status.' + s.value, s.label)}
           </button>
         ))}
       </div>
 
       {status === 'missed' && (
-        <textarea placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)}
+        <textarea placeholder={t('collector.reasonPlaceholder')} value={reason} onChange={(e) => setReason(e.target.value)}
           style={{ width: '100%', minHeight: '72px', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', fontSize: '15px', marginBottom: '12px' }} />
       )}
 
@@ -185,7 +187,7 @@ export default function CollectionActionScreen() {
               <video ref={videoRef} playsInline muted style={{ width: '100%', display: 'block', maxHeight: '360px', objectFit: 'cover' }} />
               <button
                 onClick={capturePhoto}
-                aria-label="Capture photo"
+                aria-label={t('collector.capturePhoto')}
                 style={{
                   position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)',
                   width: '64px', height: '64px', borderRadius: '50%', background: '#fff', border: '4px solid var(--brand)',
@@ -195,29 +197,29 @@ export default function CollectionActionScreen() {
             </div>
           ) : photo ? (
             <div>
-              <img src={photo.previewUrl} alt="Captured visit evidence" style={{ width: '100%', borderRadius: 'var(--radius-md)', display: 'block', maxHeight: '320px', objectFit: 'cover' }} />
+              <img src={photo.previewUrl} alt={t('collector.capturedAlt')} style={{ width: '100%', borderRadius: 'var(--radius-md)', display: 'block', maxHeight: '320px', objectFit: 'cover' }} />
               <Button variant="secondary" icon={RotateCcw} onClick={retake} style={{ width: '100%', minHeight: '44px', marginTop: '8px' }}>
-                Retake Photo
+                {t('collector.retakePhoto')}
               </Button>
             </div>
           ) : (
             <Button icon={Camera} onClick={openCamera} style={{ width: '100%', minHeight: '48px' }}>
-              Take Photo (optional)
+              {t('collector.takePhoto')}
             </Button>
           )}
           {cameraDenied && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
-              Camera access is needed to mark a visit as Serviced — you can still mark Missed or Skipped, or enable camera access in your browser settings.
+              {t('collector.cameraDenied')}
             </div>
           )}
         </div>
       )}
 
-      <textarea placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)}
+      <textarea placeholder={t('collector.notePlaceholder')} value={note} onChange={(e) => setNote(e.target.value)}
         style={{ width: '100%', minHeight: '60px', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', fontSize: '15px', marginBottom: '16px' }} />
 
       <Button onClick={submit} disabled={!status || submitting} style={{ width: '100%', minHeight: '52px', fontSize: '16px' }}>
-        {submitting ? 'Saving…' : 'Save Visit'}
+        {submitting ? t('common.saving') : t('collector.saveVisit')}
       </Button>
     </div>
   );

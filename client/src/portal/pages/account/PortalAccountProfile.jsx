@@ -4,6 +4,7 @@ import { DetailGrid, LoadingState, ErrorState } from '../../../components/ui/ind
 import PortalPageHeader from '../../components/PortalPageHeader.jsx';
 import PortalCard from '../../components/PortalCard.jsx';
 import { portalApiClient } from '../../apiClient.js';
+import { useI18n } from '../../../i18n/I18nContext.jsx';
 
 // Rebuild — Implementation Spec §21: split from the original PortalProfile.jsx
 // into a read-only identity page (this file) and a dedicated Security page
@@ -11,6 +12,7 @@ import { portalApiClient } from '../../apiClient.js';
 // appears, just regrouped, matching the Discovery's own "content splits,
 // not deleted" commitment.
 export default function PortalAccountProfile() {
+  const { t } = useI18n();
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -28,21 +30,21 @@ export default function PortalAccountProfile() {
 
   return (
     <div>
-      <PortalPageHeader title="My Account" subtitle="Profile and security settings" />
+      <PortalPageHeader title={t('portal.myAccount')} subtitle={t('portal.account.subtitle')} />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', borderBottom: '1px solid var(--border)' }}>
-        <NavLink to="/portal/account/profile" end style={({ isActive }) => tabStyle(isActive)}>Profile</NavLink>
-        <NavLink to="/portal/account/security" style={({ isActive }) => tabStyle(isActive)}>Security</NavLink>
+        <NavLink to="/portal/account/profile" end style={({ isActive }) => tabStyle(isActive)}>{t('portal.account.profile')}</NavLink>
+        <NavLink to="/portal/account/security" style={({ isActive }) => tabStyle(isActive)}>{t('portal.account.security')}</NavLink>
       </div>
 
-      {loading ? <LoadingState label="Loading profile…" /> : error ? <ErrorState message={error} onRetry={load} /> : profile && (
+      {loading ? <LoadingState label={t('portal.account.loadingProfile')} /> : error ? <ErrorState message={error} onRetry={load} /> : profile && (
         <PortalCard>
           <DetailGrid items={[
-            { label: 'Customer Number', value: profile.customer_number },
-            { label: 'Name', value: profile.business_name || profile.name },
-            { label: 'Phone', value: profile.phone },
-            { label: 'Zone', value: profile.zone_name },
-            { label: 'Address', value: profile.address_line || '—' },
-            { label: 'Collection', value: `${profile.collection_frequency || '—'}${profile.collection_mode ? ` (${profile.collection_mode})` : ''}` },
+            { label: t('portal.account.customerNumber'), value: profile.customer_number },
+            { label: t('common.name'), value: profile.business_name || profile.name },
+            { label: t('common.phone'), value: profile.phone },
+            { label: t('common.zone'), value: profile.zone_name },
+            { label: t('common.address'), value: profile.address_line || '—' },
+            { label: t('portal.account.collection'), value: `${profile.collection_frequency || '—'}${profile.collection_mode ? ` (${profile.collection_mode})` : ''}` },
           ]} />
         </PortalCard>
       )}

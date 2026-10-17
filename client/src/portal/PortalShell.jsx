@@ -5,6 +5,8 @@ import { usePortalAuth } from './PortalAuthContext.jsx';
 import { portalApiClient } from './apiClient.js';
 import PortalMobileTabBar from './PortalMobileTabBar.jsx';
 import { useCompanyName } from '../hooks/useSettings.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
+import LanguageToggle from '../components/LanguageToggle.jsx';
 
 // Customer Portal Rebuild — Implementation Spec §3/§18/§20: a real
 // navigation structure (primary tabs + an Account area + a notification
@@ -12,16 +14,16 @@ import { useCompanyName } from '../hooks/useSettings.js';
 // from the staff AppShell/Sidebar (no staff nav, no RoleGate — there is no
 // staff-role hierarchy inside the portal, per OD-1).
 const NAV_ITEMS = [
-  { to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/portal/collections', label: 'Collections', icon: Truck },
-  { to: '/portal/invoices', label: 'Invoices', icon: FileText },
-  { to: '/portal/payments', label: 'Payments', icon: Wallet },
+  { to: '/portal', labelKey: 'portal.nav.dashboard', icon: LayoutDashboard, end: true },
+  { to: '/portal/collections', labelKey: 'portal.nav.collections', icon: Truck },
+  { to: '/portal/invoices', labelKey: 'portal.nav.invoices', icon: FileText },
+  { to: '/portal/payments', labelKey: 'portal.nav.payments', icon: Wallet },
   // "Complaints" — added now that Phase 5's real backend/service layer
   // exists (lib/complaintsService.js, Implementation Spec §15) — the exact
   // condition the Rebuild's own comment here said would unblock this,
   // never shipped ahead of it.
-  { to: '/portal/complaints', label: 'Complaints', icon: MessageSquareWarning },
-  { to: '/portal/account/profile', label: 'Account', icon: ShieldCheck },
+  { to: '/portal/complaints', labelKey: 'portal.nav.complaints', icon: MessageSquareWarning },
+  { to: '/portal/account/profile', labelKey: 'portal.nav.account', icon: ShieldCheck },
 ];
 
 // Mobile App Implementation Spec §1: the identical viewport-detection
@@ -33,6 +35,7 @@ const MOBILE_BREAKPOINT = 768;
 export default function PortalShell() {
   const { customer, logout } = usePortalAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [unreadCount, setUnreadCount] = useState(0);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < MOBILE_BREAKPOINT);
   // System name — user-requested ('meel kasta oo magaca system ku ka soo
@@ -68,11 +71,12 @@ export default function PortalShell() {
         minWidth: 0,
       }}>
         <div style={{ fontWeight: 800, fontSize: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {isMobile ? companyName : `${companyName} — My Account`}
+          {isMobile ? companyName : `${companyName} — ${t('portal.myAccount')}`}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '14px', flexShrink: 0 }}>
+          <LanguageToggle />
           <button
-            aria-label="Notifications"
+            aria-label={t('portal.notifications')}
             onClick={() => { navigate('/portal/notifications'); refreshUnreadCount(); }}
             // Hardening — Accessibility: the icon alone renders at ~25x25px,
             // below the 44x44px minimum touch target (Design_System.md §9)
@@ -88,11 +92,11 @@ export default function PortalShell() {
               present; the name remains visible everywhere on Account/Profile. */}
           {!isMobile && <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{customer?.name}</span>}
           <button
-            aria-label="Log out"
+            aria-label={t('collector.logout')}
             onClick={logout}
             style={isMobile ? { ...logoutBtnStyle, minWidth: '44px', minHeight: '44px', justifyContent: 'center' } : logoutBtnStyle}
           >
-            <LogOut size={14} /> {!isMobile && 'Log out'}
+            <LogOut size={14} /> {!isMobile && t('collector.logout')}
           </button>
         </div>
       </header>
@@ -116,7 +120,7 @@ export default function PortalShell() {
                 borderBottom: isActive ? '2px solid var(--brand)' : '2px solid transparent',
               })}
             >
-              <item.icon size={15} /> {item.label}
+              <item.icon size={15} /> {t(item.labelKey)}
             </NavLink>
           ))}
         </nav>

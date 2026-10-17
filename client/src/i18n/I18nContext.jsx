@@ -23,14 +23,22 @@ export function I18nProvider({ children }) {
     setLangState(next);
   }, []);
 
-  const t = useCallback((key, fallback) => {
+  // t(key, fallback?, vars?) — vars fills {placeholders} in the string, e.g.
+  // t('x.count', undefined, { n: 3 }) with 'Waxaa jira {n}' -> 'Waxaa jira 3'.
+  const t = useCallback((key, fallback, vars) => {
     const entry = TRANSLATIONS[key];
-    if (!entry) return fallback ?? key;
-    return entry[lang] || entry.en || fallback || key;
+    const str = entry ? (entry[lang] || entry.en || fallback || key) : (fallback ?? key);
+    return vars ? str.replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m)) : str;
   }, [lang]);
 
+  // tc: same as t() but with the first letter upper-cased (for chips/buttons built from status words).
+  const tc = useCallback((key, fallback, vars) => {
+    const s = t(key, fallback, vars);
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }, [t]);
+
   return (
-    <I18nContext.Provider value={{ lang, setLang, t }}>
+    <I18nContext.Provider value={{ lang, setLang, t, tc }}>
       {children}
     </I18nContext.Provider>
   );

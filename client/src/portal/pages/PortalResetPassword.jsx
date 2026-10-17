@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { portalApiClient } from '../apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 export default function PortalResetPassword() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const token = params.get('token') || '';
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState(null);
@@ -19,7 +21,7 @@ export default function PortalResetPassword() {
       await portalApiClient.post('/auth/reset-password', { token, newPassword });
       setDone(true);
     } catch (err) {
-      setError(err.message || 'Reset failed.');
+      setError(err.message || t('portal.reset.failed'));
     } finally {
       setLoading(false);
     }
@@ -28,23 +30,23 @@ export default function PortalResetPassword() {
   return (
     <div style={wrapStyle}>
       <div style={cardStyle}>
-        <h2 style={{ margin: '0 0 4px' }}>Set New Password</h2>
+        <h2 style={{ margin: '0 0 4px' }}>{t('portal.reset.title')}</h2>
         {done ? (
           <>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>Password reset successfully.</p>
-            <button onClick={() => navigate('/portal/login')} style={btnStyle}>Go to Sign In</button>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>{t('portal.reset.done')}</p>
+            <button onClick={() => navigate('/portal/login')} style={btnStyle}>{t('portal.reset.goSignIn')}</button>
           </>
         ) : !token ? (
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>This reset link is missing its token.</p>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>{t('portal.reset.noToken')}</p>
         ) : (
           <form onSubmit={handleSubmit}>
             {error && <div style={errorStyle}>{error}</div>}
-            <label style={labelStyle}>New Password</label>
+            <label style={labelStyle}>{t('security.newPassword')}</label>
             <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} required minLength={8} autoFocus />
-            <button type="submit" disabled={loading} style={btnStyle}>{loading ? 'Resetting…' : 'Reset Password'}</button>
+            <button type="submit" disabled={loading} style={btnStyle}>{loading ? t('portal.reset.resetting') : t('portal.forgot.title')}</button>
           </form>
         )}
-        <Link to="/portal/login" style={linkStyle}>Back to Sign In</Link>
+        <Link to="/portal/login" style={linkStyle}>{t('portal.backToSignIn')}</Link>
       </div>
     </div>
   );

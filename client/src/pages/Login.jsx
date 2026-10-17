@@ -142,7 +142,7 @@ export default function Login() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '22px' }}>
                 <MapPin size={12} color="var(--accent)" />
                 <span style={{ fontFamily: MONO_FONT, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>
-                  COLLECTION OPS &nbsp;/&nbsp; ACCESS TERMINAL
+                  {t('login.opsLabel')}
                 </span>
               </div>
 
@@ -219,7 +219,7 @@ export default function Login() {
                     cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.65 : 1,
                   }}
                 >
-                  {loading ? 'Signing in…' : t('login.signIn')}
+                  {loading ? t('collector.reauth.signingIn') : t('login.signIn')}
                   {!loading && <ChevronRight size={17} strokeWidth={3} />}
                 </button>
               </form>

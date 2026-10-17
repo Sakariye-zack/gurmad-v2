@@ -25,11 +25,11 @@ export default function AccountSecurity() {
     try {
       const res = await apiClient.post('/v2/auth/password/change', { currentPassword, newPassword });
       if (res.data?.token) apiClient.setToken(res.data.token);
-      toast.success(res.data?.message || 'Password changed.');
+      toast.success(res.data?.message || t('security.pwChanged'));
       setCurrentPassword('');
       setNewPassword('');
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     } finally {
       setSaving(false);
     }
@@ -45,7 +45,7 @@ export default function AccountSecurity() {
       apiClient.clearToken();
       window.location.href = '/login';
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
       setLoggingOutAll(false);
     }
   }
@@ -61,22 +61,22 @@ export default function AccountSecurity() {
           <input type="password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} />
           <label style={labelStyle}>{t('security.newPassword')}</label>
           <input type="password" required minLength={8} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} />
-          <Button type="submit" disabled={saving} style={{ marginTop: '14px' }}>{saving ? 'Saving…' : t('security.changePassword')}</Button>
+          <Button type="submit" disabled={saving} style={{ marginTop: '14px' }}>{saving ? t('common.saving') : t('security.changePassword')}</Button>
         </form>
       </Card>
 
       <Card style={{ padding: '24px', maxWidth: '480px' }}>
         <h3 style={{ marginTop: 0 }}>{t('security.activeSessions')}</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-          If you believe your account may be compromised, sign out of every device at once. You will need to sign in again here too.
+          {t('security.logoutAllBody')}
         </p>
         <Button variant="danger" onClick={() => setLogoutAllConfirmOpen(true)}>{t('security.logoutAll')}</Button>
       </Card>
 
       <ConfirmDialog
         open={logoutAllConfirmOpen}
-        title="Log out of all devices?"
-        message="This will immediately end every active session for your account, including this one."
+        title={t('portal.security.confirmTitle')}
+        message={t('security.logoutAllConfirm')}
         confirmLabel="Log Out Everywhere"
         danger
         isLoading={loggingOutAll}
@@ -113,7 +113,7 @@ function TwoFactorCard() {
       const res = await startSetup.mutateAsync();
       setSetupData(res.data);
     } catch (err) {
-      toast.error(err.message || 'Failed to start 2FA setup.');
+      toast.error(err.message || t('security.setupFailed'));
     }
   }
 
@@ -124,20 +124,20 @@ function TwoFactorCard() {
       setBackupCodes(res.data.backupCodes);
       setSetupData(null);
       setConfirmCode('');
-      toast.success('Two-factor authentication enabled.');
+      toast.success(t('security.enabledToast'));
     } catch (err) {
-      toast.error(err.message || 'Incorrect code.');
+      toast.error(err.message || t('security.badCode'));
     }
   }
 
   async function handleDisable() {
     try {
       await disableTwoFactor.mutateAsync(disablePassword);
-      toast.success('Two-factor authentication disabled.');
+      toast.success(t('security.disabledToast'));
       setDisableOpen(false);
       setDisablePassword('');
     } catch (err) {
-      toast.error(err.message || 'Incorrect password.');
+      toast.error(err.message || t('security.badPassword'));
     }
   }
 
@@ -148,14 +148,14 @@ function TwoFactorCard() {
   if (backupCodes) {
     return (
       <Card style={{ padding: '24px', maxWidth: '480px', marginTop: '20px' }}>
-        <h3 style={{ marginTop: 0 }}>Save Your Backup Codes</h3>
+        <h3 style={{ marginTop: 0 }}>{t('security.backupTitle')}</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-          Each code works once, in place of your authenticator app, if you ever lose access to your device. Store them somewhere safe — they will not be shown again.
+          {t('security.backupBody')}
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontFamily: 'monospace', fontSize: '14px', background: 'var(--bg)', padding: '14px', borderRadius: 'var(--radius-md)', margin: '12px 0' }}>
           {backupCodes.map((c) => <div key={c}>{c}</div>)}
         </div>
-        <Button onClick={() => setBackupCodes(null)}>I've Saved These Codes</Button>
+        <Button onClick={() => setBackupCodes(null)}>{t('security.backupSaved')}</Button>
       </Card>
     );
   }
@@ -163,16 +163,16 @@ function TwoFactorCard() {
   if (setupData) {
     return (
       <Card style={{ padding: '24px', maxWidth: '480px', marginTop: '20px' }}>
-        <h3 style={{ marginTop: 0 }}>Set Up Two-Factor Authentication</h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Scan this QR code with an authenticator app (Google Authenticator, Authy, etc.), then enter the 6-digit code it shows.</p>
-        <img src={setupData.qrDataUrl} alt="2FA QR code" style={{ display: 'block', margin: '12px 0', width: '180px', height: '180px' }} />
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Can't scan? Enter this key manually: <code>{setupData.secret}</code></p>
+        <h3 style={{ marginTop: 0 }}>{t('security.setupTitle')}</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{t('security.setupScan')}</p>
+        <img src={setupData.qrDataUrl} alt={t('security.qrAlt')} style={{ display: 'block', margin: '12px 0', width: '180px', height: '180px' }} />
+        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('security.cantScan')} <code>{setupData.secret}</code></p>
         <form onSubmit={handleConfirm}>
-          <label style={labelStyle}>6-Digit Code</label>
+          <label style={labelStyle}>{t('security.sixDigit')}</label>
           <input required maxLength={6} value={confirmCode} onChange={(e) => setConfirmCode(e.target.value)} style={inputStyle} />
           <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
-            <Button type="submit" disabled={enableTwoFactor.isPending}>{enableTwoFactor.isPending ? 'Verifying…' : 'Confirm & Enable'}</Button>
-            <Button type="button" variant="secondary" onClick={() => setSetupData(null)}>Cancel</Button>
+            <Button type="submit" disabled={enableTwoFactor.isPending}>{enableTwoFactor.isPending ? t('security.verifying') : t('security.confirmEnable')}</Button>
+            <Button type="button" variant="secondary" onClick={() => setSetupData(null)}>{t('common.cancel')}</Button>
           </div>
         </form>
       </Card>
@@ -192,8 +192,8 @@ function TwoFactorCard() {
         </>
       ) : (
         <>
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Not enabled. Add an authenticator-app code as a second step at login, for stronger account protection.</p>
-          <Button onClick={handleStart} disabled={startSetup.isPending}>{startSetup.isPending ? 'Starting…' : t('security.enable2fa')}</Button>
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{t('security.notEnabled')}</p>
+          <Button onClick={handleStart} disabled={startSetup.isPending}>{startSetup.isPending ? t('security.starting') : t('security.enable2fa')}</Button>
         </>
       )}
 
@@ -201,11 +201,11 @@ function TwoFactorCard() {
         open={disableOpen}
         onClose={() => setDisableOpen(false)}
         onConfirm={handleDisable}
-        title="Disable two-factor authentication?"
+        title={t('security.disableTitle')}
         message={
           <div>
-            <p style={{ margin: '0 0 8px' }}>Enter your current password to confirm.</p>
-            <input type="password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} style={inputStyle} placeholder="Current password" />
+            <p style={{ margin: '0 0 8px' }}>{t('security.disableConfirm')}</p>
+            <input type="password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} style={inputStyle} placeholder={t('security.currentPassword')} />
           </div>
         }
         confirmLabel={t('security.disable2fa')}

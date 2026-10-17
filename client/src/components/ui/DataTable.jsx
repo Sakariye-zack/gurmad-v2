@@ -2,12 +2,14 @@ import React from 'react';
 import LoadingState from './LoadingState.jsx';
 import ErrorState from './ErrorState.jsx';
 import EmptyState from './EmptyState.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // The only table component in V2 — Design_System.md §8: "no page hand-rolls
 // its own <table>". overflow-x lives on this component's own wrapper, never
 // the page body, so wide tables never cause page-level horizontal scroll.
 export default function DataTable({ columns, children, loading, error, onRetry, isEmpty, emptyTitle, emptySubtitle }) {
-  if (loading) return <LoadingState label="Loading…" />;
+  const { t } = useI18n();
+  if (loading) return <LoadingState label={t('common.loading')} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
 
   return (
@@ -28,7 +30,7 @@ export default function DataTable({ columns, children, loading, error, onRetry, 
         </thead>
         <tbody>{children}</tbody>
       </table>
-      {isEmpty && <EmptyState title={emptyTitle || 'No records found.'} subtitle={emptySubtitle} />}
+      {isEmpty && <EmptyState title={emptyTitle || t('common.noRecords')} subtitle={emptySubtitle} />}
     </div>
   );
 }

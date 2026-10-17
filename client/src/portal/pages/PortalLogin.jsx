@@ -6,6 +6,8 @@ import {
   DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
   RouteMotif, DispatchMedallion,
 } from '../../components/dispatchAuthKit.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
+import LanguageToggle from '../../components/LanguageToggle.jsx';
 
 // Same "fleet dispatch manifest" visual kit as the staff Login page and
 // the Collector LoginScreen (dispatchAuthKit.jsx), toned for a customer
@@ -17,6 +19,7 @@ import {
 export default function PortalLogin() {
   const { login, loading } = usePortalAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -29,7 +32,7 @@ export default function PortalLogin() {
       await login(phone, password);
       navigate('/portal');
     } catch (err) {
-      setError(err.message || 'Login failed.');
+      setError(err.message || t('portal.login.failed'));
     }
   }
 
@@ -38,6 +41,7 @@ export default function PortalLogin() {
       <div style={{ height: '8px', background: hazardTape, flexShrink: 0 }} />
 
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 2 }}><LanguageToggle /></div>
         <RouteMotif style={{ position: 'absolute', bottom: '-10px', right: '-10px', opacity: 0.7 }} />
         <RouteMotif style={{ position: 'absolute', top: '-30px', left: '-30px', transform: 'rotate(180deg)', opacity: 0.35 }} />
 
@@ -56,7 +60,7 @@ export default function PortalLogin() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '22px' }}>
               <MapPin size={12} color="var(--accent)" />
               <span style={{ fontFamily: MONO_FONT, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>
-                CUSTOMER PORTAL
+                {t('portal.login.label')}
               </span>
             </div>
 
@@ -64,10 +68,10 @@ export default function PortalLogin() {
               <DispatchMedallion fallback={null} />
               <div>
                 <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '24px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
-                  My Account
+                  {t('portal.myAccount')}
                 </h1>
                 <div style={{ fontFamily: MONO_FONT, fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                  Track pickups, invoices &amp; payments
+                  {t('portal.login.tagline')}
                 </div>
               </div>
             </div>
@@ -80,7 +84,7 @@ export default function PortalLogin() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <label style={dispatchFieldLabelStyle}>[ PHONE NUMBER ]</label>
+                <label style={dispatchFieldLabelStyle}>[ {t('portal.login.phone')} ]</label>
                 <div style={{ position: 'relative' }}>
                   <User size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
                   <input
@@ -98,7 +102,7 @@ export default function PortalLogin() {
               </div>
 
               <div>
-                <label style={dispatchFieldLabelStyle}>[ PASSWORD ]</label>
+                <label style={dispatchFieldLabelStyle}>[ {t('login.password')} ]</label>
                 <div style={{ position: 'relative' }}>
                   <Lock size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
                   <input
@@ -126,7 +130,7 @@ export default function PortalLogin() {
                   cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.65 : 1,
                 }}
               >
-                {loading ? 'Signing in…' : 'Sign In'}
+                {loading ? t('collector.reauth.signingIn') : t('login.signIn')}
                 {!loading && <ChevronRight size={17} strokeWidth={3} />}
               </button>
 
@@ -134,7 +138,7 @@ export default function PortalLogin() {
                 to="/portal/forgot-password"
                 style={{ display: 'block', textAlign: 'center', fontFamily: MONO_FONT, fontSize: '12px', color: 'var(--brand)', marginTop: '2px' }}
               >
-                Forgot password?
+                {t('portal.login.forgot')}
               </Link>
             </div>
           </form>
@@ -147,7 +151,7 @@ export default function PortalLogin() {
             }}
           >
             <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
-            Waste Collection &amp; Management Network
+            {t('login.footer')}
             <span style={{ width: '20px', height: '1px', background: 'var(--border)' }} />
           </div>
         </div>

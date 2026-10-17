@@ -5,6 +5,7 @@ import { Button, LoadingState } from '../../components/ui/index.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { useAssignments } from '../hooks/useAssignments.js';
 import { apiClient } from '../../lib/apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Screen — user-requested ("Home screen kana iigu soo dar", Phase 10 Gap
 // Audit follow-up). The collector previously landed straight on the
@@ -19,6 +20,7 @@ import { apiClient } from '../../lib/apiClient.js';
 // hard error/loading gate would.
 export default function HomeScreen() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const { data, loading: assignmentsLoading, refresh } = useAssignments();
   const [perf, setPerf] = useState(null); // { assigned, serviced, missed, skipped, completionRate } | null
@@ -55,7 +57,7 @@ export default function HomeScreen() {
   const completionRate = perf?.completionRate ?? (assigned > 0 ? Math.round((serviced / assigned) * 1000) / 10 : null);
 
   const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const greeting = hour < 12 ? t('collector.greeting.morning') : hour < 18 ? t('collector.greeting.afternoon') : t('collector.greeting.evening');
 
   return (
     <div>
@@ -72,9 +74,9 @@ export default function HomeScreen() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
-            <TrendingUp size={15} /> Today's Progress
+            <TrendingUp size={15} /> {t('collector.todayProgress')}
           </div>
-          {(perfLoading || assignmentsLoading) && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading…</span>}
+          {(perfLoading || assignmentsLoading) && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('common.loading')}</span>}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '14px' }}>
@@ -82,15 +84,15 @@ export default function HomeScreen() {
             {completionRate !== null ? `${completionRate}%` : '—'}
           </div>
           <div style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600 }}>
-            {serviced} of {assigned} serviced
+            {t('collector.servicedOf', undefined, { serviced, assigned })}
           </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-          <MiniStat icon={Clock} label="Pending" value={pending} color="var(--warning)" />
-          <MiniStat icon={CheckCircle2} label="Serviced" value={serviced} color="var(--success)" />
-          <MiniStat icon={XCircle} label="Missed" value={missed} color="var(--danger)" />
-          <MiniStat icon={SkipForward} label="Skipped" value={skipped} color="var(--info)" />
+          <MiniStat icon={Clock} label={t('status.pending')} value={pending} color="var(--warning)" />
+          <MiniStat icon={CheckCircle2} label={t('status.serviced')} value={serviced} color="var(--success)" />
+          <MiniStat icon={XCircle} label={t('status.missed')} value={missed} color="var(--danger)" />
+          <MiniStat icon={SkipForward} label={t('status.skipped')} value={skipped} color="var(--info)" />
         </div>
       </div>
 
@@ -100,7 +102,7 @@ export default function HomeScreen() {
           onClick={() => navigate('/collector/assignments')}
           style={{ width: '100%', minHeight: '52px', fontSize: '15px', justifyContent: 'center' }}
         >
-          {pending > 0 ? `View Today's Assignments (${pending} pending)` : "View Today's Assignments"}
+          {pending > 0 ? t('collector.viewAssignmentsPending', undefined, { n: pending }) : t('collector.viewAssignments')}
         </Button>
         <Button
           variant="secondary"
@@ -108,12 +110,12 @@ export default function HomeScreen() {
           onClick={refresh}
           style={{ width: '100%', minHeight: '48px', justifyContent: 'center' }}
         >
-          Refresh Assignments
+          {t('collector.refreshAssignments')}
         </Button>
       </div>
 
       {assignmentsLoading && !data && (
-        <div style={{ marginTop: '16px' }}><LoadingState label="Loading your day…" /></div>
+        <div style={{ marginTop: '16px' }}><LoadingState label={t('collector.loadingDay')} /></div>
       )}
     </div>
   );

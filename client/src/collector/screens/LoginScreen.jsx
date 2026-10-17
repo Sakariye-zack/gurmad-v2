@@ -4,6 +4,8 @@ import { Truck as TruckIcon, ChevronRight, MapPin } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 import { useCompanyName } from '../../hooks/useSettings.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
+import LanguageToggle from '../../components/LanguageToggle.jsx';
 import { deriveKeyFromToken } from '../lib/collectorCrypto.js';
 import {
   DISPLAY_FONT, MONO_FONT, hazardTape, dispatchFieldLabelStyle, dispatchInputStyle, dispatchFocusRing,
@@ -26,6 +28,7 @@ import {
 export default function LoginScreen() {
   const { login, loading } = useAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -42,13 +45,13 @@ export default function LoginScreen() {
     try {
       const result = await login(username, password, '');
       if (result.require2FA) {
-        setError('2FA accounts must sign in via the desktop app.');
+        setError(t('collector.login.no2fa'));
         return;
       }
       await deriveKeyFromToken(apiClient.getToken());
       navigate('/collector');
     } catch (err) {
-      setError(err.message || 'Sign in failed.');
+      setError(err.message || t('collector.reauth.failed'));
     }
   };
 
@@ -58,8 +61,8 @@ export default function LoginScreen() {
         <div style={{ height: '8px', background: hazardTape, flexShrink: 0 }} />
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '28px', textAlign: 'center', maxWidth: '340px' }}>
-            <h3 style={{ fontFamily: DISPLAY_FONT, textTransform: 'uppercase' }}>No connection</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '13px', fontFamily: MONO_FONT }}>Connect to the internet to sign in.</p>
+            <h3 style={{ fontFamily: DISPLAY_FONT, textTransform: 'uppercase' }}>{t('collector.login.noConnection')}</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', fontFamily: MONO_FONT }}>{t('collector.login.connect')}</p>
           </div>
         </div>
       </div>
@@ -71,6 +74,7 @@ export default function LoginScreen() {
       <div style={{ height: '8px', background: hazardTape, flexShrink: 0 }} />
 
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 2 }}><LanguageToggle /></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: '360px' }}>
           <div
             style={{
@@ -85,7 +89,7 @@ export default function LoginScreen() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '20px' }}>
               <MapPin size={12} color="var(--accent)" />
               <span style={{ fontFamily: MONO_FONT, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>
-                FIELD COLLECTION APP
+                {t('collector.login.appLabel')}
               </span>
             </div>
 
@@ -93,17 +97,17 @@ export default function LoginScreen() {
               <DispatchMedallion fallback={<TruckIcon size={22} color="var(--brand)" />} />
               <div>
                 <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '22px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
-                  Collector
+                  {t('collector.role')}
                 </h1>
                 <div style={{ fontFamily: MONO_FONT, fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                  {companyName} Field Unit
+                  {t('collector.login.fieldUnit', undefined, { company: companyName })}
                 </div>
               </div>
             </div>
 
             <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
-                <label style={dispatchFieldLabelStyle}>[ USERNAME ]</label>
+                <label style={dispatchFieldLabelStyle}>[ {t('login.username')} ]</label>
                 <input
                   autoFocus
                   value={username}
@@ -114,7 +118,7 @@ export default function LoginScreen() {
                 />
               </div>
               <div>
-                <label style={dispatchFieldLabelStyle}>[ PASSWORD ]</label>
+                <label style={dispatchFieldLabelStyle}>[ {t('login.password')} ]</label>
                 <input
                   type="password"
                   value={password}
@@ -143,7 +147,7 @@ export default function LoginScreen() {
                   cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.65 : 1,
                 }}
               >
-                {loading ? 'Signing in…' : 'Sign In'}
+                {loading ? t('collector.reauth.signingIn') : t('login.signIn')}
                 {!loading && <ChevronRight size={17} strokeWidth={3} />}
               </button>
             </form>
@@ -160,7 +164,7 @@ export default function LoginScreen() {
               marginTop: '18px', textTransform: 'uppercase', textAlign: 'center',
             }}
           >
-            Waste Collection &amp; Management Network
+            {t('login.footer')}
           </div>
         </div>
       </div>

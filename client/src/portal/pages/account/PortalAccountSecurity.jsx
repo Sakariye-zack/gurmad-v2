@@ -5,6 +5,7 @@ import { Button, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast 
 import PortalPageHeader from '../../components/PortalPageHeader.jsx';
 import PortalCard from '../../components/PortalCard.jsx';
 import { portalApiClient } from '../../apiClient.js';
+import { useI18n } from '../../../i18n/I18nContext.jsx';
 
 // Rebuild — Implementation Spec §21/§6: password change (now transparently
 // swaps the stored token — the backend bumps token_version and returns a
@@ -12,6 +13,7 @@ import { portalApiClient } from '../../apiClient.js';
 // token dies), account status, and "log out of all devices" (the concrete
 // customer-facing security-compromise-response action, OD-3).
 export default function PortalAccountSecurity() {
+  const { t } = useI18n();
   const toast = useToast();
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState(null);
@@ -42,11 +44,11 @@ export default function PortalAccountSecurity() {
       // fresh one the server returned so this device's session continues
       // uninterrupted, matching the "you stay logged in here" copy below.
       if (res.data?.token) portalApiClient.setToken(res.data.token);
-      toast.success('Password changed. You remain signed in on this device — other devices will need to sign in again.');
+      toast.success(t('portal.security.changed'));
       setCurrentPassword('');
       setNewPassword('');
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
     } finally {
       setSaving(false);
     }
@@ -62,49 +64,48 @@ export default function PortalAccountSecurity() {
       portalApiClient.clearToken();
       window.location.href = '/portal/login';
     } catch (err) {
-      toast.error(err.message || 'Something went wrong.');
+      toast.error(err.message || t('common.somethingWrong'));
       setRevoking(false);
     }
   }
 
   return (
     <div>
-      <PortalPageHeader title="My Account" subtitle="Profile and security settings" />
+      <PortalPageHeader title={t('portal.myAccount')} subtitle={t('portal.account.subtitle')} />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', borderBottom: '1px solid var(--border)' }}>
-        <NavLink to="/portal/account/profile" style={({ isActive }) => tabStyle(isActive)}>Profile</NavLink>
-        <NavLink to="/portal/account/security" style={({ isActive }) => tabStyle(isActive)}>Security</NavLink>
+        <NavLink to="/portal/account/profile" style={({ isActive }) => tabStyle(isActive)}>{t('portal.account.profile')}</NavLink>
+        <NavLink to="/portal/account/security" style={({ isActive }) => tabStyle(isActive)}>{t('portal.account.security')}</NavLink>
       </div>
 
-      {loading ? <LoadingState label="Loading…" /> : error ? <ErrorState message={error} onRetry={load} /> : profile && (
+      {loading ? <LoadingState label={t('common.loading')} /> : error ? <ErrorState message={error} onRetry={load} /> : profile && (
         <>
           <PortalCard>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontSize: '14px' }}>Account Status</h3>
+              <h3 style={{ margin: 0, fontSize: '14px' }}>{t('portal.security.status')}</h3>
               <StatusBadge status={profile.status} />
             </div>
           </PortalCard>
 
           <PortalCard style={{ marginTop: '16px' }}>
-            <h3 style={{ margin: '0 0 12px', fontSize: '14px' }}>Change Password</h3>
+            <h3 style={{ margin: '0 0 12px', fontSize: '14px' }}>{t('portal.security.changePassword')}</h3>
             <form onSubmit={handleChangePassword} style={{ maxWidth: '320px' }}>
-              <label style={labelStyle}>Current Password</label>
+              <label style={labelStyle}>{t('security.currentPassword')}</label>
               <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} required />
-              <label style={labelStyle}>New Password</label>
+              <label style={labelStyle}>{t('security.newPassword')}</label>
               <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} required minLength={8} />
-              <Button type="submit" disabled={saving} style={{ marginTop: '14px' }}>{saving ? 'Saving…' : 'Change Password'}</Button>
+              <Button type="submit" disabled={saving} style={{ marginTop: '14px' }}>{saving ? t('common.saving') : t('portal.security.changePassword')}</Button>
             </form>
           </PortalCard>
 
           <PortalCard style={{ marginTop: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
               <ShieldAlert size={16} color="#DC2626" />
-              <h3 style={{ margin: 0, fontSize: '14px' }}>Log Out of All Devices</h3>
+              <h3 style={{ margin: 0, fontSize: '14px' }}>{t('security.logoutAll')}</h3>
             </div>
             <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--text-muted)' }}>
-              If you suspect your account has been accessed by someone else, use this to immediately end every
-              signed-in session, including this one. You'll need to sign in again afterward.
+              {t('portal.security.logoutAllBody')}
             </p>
-            <Button variant="danger" onClick={() => setRevokeConfirmOpen(true)}>Log Out Everywhere</Button>
+            <Button variant="danger" onClick={() => setRevokeConfirmOpen(true)}>{t('portal.security.logoutEverywhere')}</Button>
           </PortalCard>
         </>
       )}
@@ -113,9 +114,9 @@ export default function PortalAccountSecurity() {
         open={revokeConfirmOpen}
         onClose={() => setRevokeConfirmOpen(false)}
         onConfirm={handleRevokeAll}
-        title="Log out of all devices?"
-        message="This will immediately end every signed-in session on every device, including this one. You will need to sign in again."
-        confirmLabel="Log Out Everywhere"
+        title={t('portal.security.confirmTitle')}
+        message={t('portal.security.confirmBody')}
+        confirmLabel={t('portal.security.logoutEverywhere')}
         danger
         isLoading={revoking}
       />

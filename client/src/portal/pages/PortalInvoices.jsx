@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DataTable, StatusBadge, EmptyState } from '../../components/ui/index.js';
 import { portalApiClient } from '../apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 export default function PortalInvoices() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -22,16 +24,16 @@ export default function PortalInvoices() {
 
   return (
     <div>
-      <h2 style={{ margin: '0 0 16px' }}>My Invoices</h2>
+      <h2 style={{ margin: '0 0 16px' }}>{t('portal.invoices.title')}</h2>
       <DataTable
         loading={loading}
         error={error}
         onRetry={load}
-        columns={[{ label: 'Invoice #' }, { label: 'Total', align: 'right' }, { label: 'Status' }, { label: 'Date' }]}
+        columns={[{ label: t('portal.col.invoice') }, { label: t('portal.col.total'), align: 'right' }, { label: t('common.status') }, { label: t('common.date') }]}
         isEmpty={rows && rows.length === 0}
       >
         {rows && rows.length === 0 ? (
-          <tr><td colSpan={4}><EmptyState title="No invoices yet" /></td></tr>
+          <tr><td colSpan={4}><EmptyState title={t('portal.invoices.empty')} /></td></tr>
         ) : rows?.map((r) => (
           <tr key={r.id} onClick={() => navigate(`/portal/invoices/${r.id}`)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
             <td style={tdStyle}>{r.invoice_number}</td>

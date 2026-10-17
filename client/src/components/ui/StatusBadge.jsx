@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // One canonical status→semantic-color mapping, not re-derived per page.
 // Design_System.md §2/§8: color is never the only signal — text + a small
@@ -11,6 +12,7 @@ const DEFAULT_MAP = {
 };
 
 export default function StatusBadge({ status, map }) {
+  const { t } = useI18n();
   const key = (status || '').toLowerCase();
   const variant = (map && map[key]) || DEFAULT_MAP[key] || 'info';
   const fg = `var(--${variant})`;
@@ -21,7 +23,7 @@ export default function StatusBadge({ status, map }) {
       borderRadius: '999px', fontSize: '12px', fontWeight: 700, background: bg, color: fg,
     }}>
       <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: fg }} />
-      {status}
+      {t('status.' + key, status)}
     </span>
   );
 }

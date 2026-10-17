@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useState } from 'react';
 import { CheckCircle2, XCircle, X } from 'lucide-react';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Design_System.md §11: toast is for immediate feedback on a just-completed
 // action only — never for something the user needs to act on later (that's
@@ -7,6 +8,7 @@ import { CheckCircle2, XCircle, X } from 'lucide-react';
 const ToastContext = createContext(null);
 
 export function ToastProvider({ children }) {
+  const { t: tr } = useI18n();
   const [toasts, setToasts] = useState([]);
 
   const push = useCallback((message, type = 'success') => {
@@ -35,7 +37,7 @@ export function ToastProvider({ children }) {
             {t.message}
             <button
               onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
-              aria-label="Dismiss"
+              aria-label={tr('common.dismiss')}
               style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', opacity: 0.7 }}
             >
               <X size={13} />

@@ -10,6 +10,8 @@ import { purgeAllLocalData } from './lib/collectorStore.js';
 import { discardKey } from './lib/collectorCrypto.js';
 import { apiClient } from '../lib/apiClient.js';
 import { useCompanyName } from '../hooks/useSettings.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
+import LanguageToggle from '../components/LanguageToggle.jsx';
 
 // Live truck location — Phase 10, user-requested ('ilaa gawaadhidii ay ka
 // soo muuqato': trucks should appear on the Map). Every 2 minutes while
@@ -62,6 +64,7 @@ export default function CollectorShell() {
   const { activeCount } = useSyncQueueContext();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   // System name — user-requested ('meel kasta oo magaca system ku ka soo
@@ -102,12 +105,13 @@ export default function CollectorShell() {
           <div style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {user?.full_name || user?.username}
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{user?.zone || 'Collector'}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{user?.zone || t('collector.role')}</div>
         </div>
+        <LanguageToggle />
         <NotificationBell to="/collector/notifications" />
         <button
           onClick={() => setConfirmOpen(true)}
-          aria-label="Log out"
+          aria-label={t('collector.logout')}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px',
             borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg)',
@@ -122,9 +126,9 @@ export default function CollectorShell() {
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={doLogout}
-        title="Log out"
-        message="This will sign you out and remove all locally saved visit data from this device."
-        confirmLabel="Log out"
+        title={t('collector.logout')}
+        message={t('collector.logoutMessage')}
+        confirmLabel={t('collector.logout')}
         danger
         isLoading={loggingOut}
       />
@@ -137,10 +141,10 @@ export default function CollectorShell() {
         borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-around',
         padding: '8px 0 max(8px, env(safe-area-inset-bottom))', zIndex: 50,
       }}>
-        <NavTab to="/collector" icon={Home} label="Home" end />
-        <NavTab to="/collector/assignments" icon={ClipboardList} label="Assignments" />
-        <NavTab to="/collector/sync" icon={RefreshCw} label="Sync" badge={activeCount} />
-        <NavTab to="/collector/account" icon={ShieldAlert} label="Account" />
+        <NavTab to="/collector" icon={Home} label={t('collector.nav.home')} end />
+        <NavTab to="/collector/assignments" icon={ClipboardList} label={t('collector.nav.assignments')} />
+        <NavTab to="/collector/sync" icon={RefreshCw} label={t('collector.nav.sync')} badge={activeCount} />
+        <NavTab to="/collector/account" icon={ShieldAlert} label={t('collector.nav.account')} />
       </nav>
     </div>
   );

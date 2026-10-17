@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { portalApiClient } from '../apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 export default function PortalForgotPassword() {
+  const { t } = useI18n();
   const [phone, setPhone] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -23,22 +25,22 @@ export default function PortalForgotPassword() {
   return (
     <div style={wrapStyle}>
       <div style={cardStyle}>
-        <h2 style={{ margin: '0 0 4px' }}>Reset Password</h2>
+        <h2 style={{ margin: '0 0 4px' }}>{t('portal.forgot.title')}</h2>
         {submitted ? (
           <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>
-            If an account exists for that phone number, password reset instructions have been sent via WhatsApp.
+            {t('portal.forgot.sent')}
           </p>
         ) : (
           <form onSubmit={handleSubmit}>
             <p style={{ margin: '0 0 16px', color: 'var(--text-muted)', fontSize: '13px' }}>
-              Enter your phone number and we'll send reset instructions via WhatsApp.
+              {t('portal.forgot.intro')}
             </p>
-            <label style={labelStyle}>Phone Number</label>
+            <label style={labelStyle}>{t('portal.forgot.phone')}</label>
             <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} required autoFocus />
-            <button type="submit" disabled={loading} style={btnStyle}>{loading ? 'Sending…' : 'Send Reset Link'}</button>
+            <button type="submit" disabled={loading} style={btnStyle}>{loading ? t('portal.forgot.sending') : t('portal.forgot.send')}</button>
           </form>
         )}
-        <Link to="/portal/login" style={linkStyle}>Back to Sign In</Link>
+        <Link to="/portal/login" style={linkStyle}>{t('portal.backToSignIn')}</Link>
       </div>
     </div>
   );

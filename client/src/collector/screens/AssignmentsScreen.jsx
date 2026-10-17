@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { RefreshCw, MapPin } from 'lucide-react';
 import { PageHeader, Button, StatusBadge, LoadingState, EmptyState, ErrorState } from '../../components/ui/index.js';
 import { useAssignments } from '../hooks/useAssignments.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Screen 6.2 (Decisions §17). Refresh occurs ONLY at: mount (the "login"
 // trigger, since this hook mounts fresh each time the collector reaches
@@ -12,10 +13,11 @@ import { useAssignments } from '../hooks/useAssignments.js';
 export default function AssignmentsScreen() {
   const { data, fetchedAt, loading, error, isOffline, refresh } = useAssignments();
   const navigate = useNavigate();
+  const { t } = useI18n();
 
-  if (loading && !data) return <LoadingState label="Loading your assignments…" />;
+  if (loading && !data) return <LoadingState label={t('collector.loadingAssignments')} />;
   if (error?.type === 'network' && !data?.batches?.length) {
-    return <ErrorState message="Couldn't load assignments. Check your connection." onRetry={refresh} />;
+    return <ErrorState message={t('collector.loadAssignmentsFailed')} onRetry={refresh} />;
   }
 
   const batches = data?.batches || [];
@@ -31,22 +33,22 @@ export default function AssignmentsScreen() {
   return (
     <div>
       <PageHeader
-        title="Today's Assignments"
-        subtitle={isOffline ? `Offline — showing data from ${formatTime(fetchedAt)}` : `${totalCustomers} customer${totalCustomers === 1 ? '' : 's'} across ${batches.length} batch${batches.length === 1 ? '' : 'es'}`}
-        actions={<Button variant="secondary" icon={RefreshCw} onClick={refresh} style={{ minHeight: '44px' }}>Refresh</Button>}
+        title={t('collector.assignmentsTitle')}
+        subtitle={isOffline ? t('collector.offlineShowing', undefined, { time: formatTime(fetchedAt, t) }) : t('collector.customersAcross', undefined, { customers: totalCustomers, batches: batches.length })}
+        actions={<Button variant="secondary" icon={RefreshCw} onClick={refresh} style={{ minHeight: '44px' }}>{t('common.refresh')}</Button>}
       />
 
       {totalCustomers > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '18px' }}>
-          <StatChip label="Pending" value={counts.pending} color="var(--warning)" />
-          <StatChip label="Serviced" value={counts.serviced} color="var(--success)" />
-          <StatChip label="Missed" value={counts.missed} color="var(--danger)" />
-          <StatChip label="Skipped" value={counts.skipped} color="var(--info)" />
+          <StatChip label={t('status.pending')} value={counts.pending} color="var(--warning)" />
+          <StatChip label={t('status.serviced')} value={counts.serviced} color="var(--success)" />
+          <StatChip label={t('status.missed')} value={counts.missed} color="var(--danger)" />
+          <StatChip label={t('status.skipped')} value={counts.skipped} color="var(--info)" />
         </div>
       )}
 
       {batches.length === 0 ? (
-        <EmptyState title="No assignments for today" subtitle="Check back later or pull to refresh." />
+        <EmptyState title={t('collector.noAssignments')} subtitle={t('collector.noAssignmentsHint')} />
       ) : (
         batches.map((b) => (
           <div key={b.id} style={{ marginBottom: '20px' }}>
@@ -72,7 +74,7 @@ export default function AssignmentsScreen() {
                       shows customer/entity names has the identical gap. */}
                   <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text)' }}>{c.business_name || c.name}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                    <MapPin size={12} /> {c.address_line || 'No address on file'}
+                    <MapPin size={12} /> {c.address_line || t('collector.noAddress')}
                   </div>
                 </div>
                 <StatusBadge status={c.status} />
@@ -85,8 +87,8 @@ export default function AssignmentsScreen() {
   );
 }
 
-function formatTime(iso) {
-  if (!iso) return 'earlier';
+function formatTime(iso, t) {
+  if (!iso) return t('collector.earlier');
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 

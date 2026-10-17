@@ -11,7 +11,15 @@
 // not attempted in this pass; those pages render in English regardless
 // of the selected language until translated the same way (add the key
 // here, call t('key') at the call site).
+import { COMMON, SECURITY_EXTRA } from './common.js';
+import { COLLECTOR } from './collector.js';
+import { PORTAL } from './portal.js';
+
 export const TRANSLATIONS = {
+  ...COMMON,
+  ...SECURITY_EXTRA,
+  ...COLLECTOR,
+  ...PORTAL,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

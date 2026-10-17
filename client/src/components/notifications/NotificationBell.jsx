@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell } from 'lucide-react';
 import { useUnreadNotificationCount } from '../../hooks/useStaffNotifications.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Staff Notifications — Implementation Spec §18. One of exactly 2 approved
 // UI surfaces. Additive element in the shared Sidebar — no existing
@@ -15,11 +16,12 @@ import { useUnreadNotificationCount } from '../../hooks/useStaffNotifications.js
 export default function NotificationBell({ to = '/notifications' }) {
   const { data } = useUnreadNotificationCount();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const count = data?.data?.count || 0;
   return (
     <button
       onClick={() => navigate(to)}
-      aria-label="Notifications"
+      aria-label={t('portal.notifications')}
       style={{
         position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',

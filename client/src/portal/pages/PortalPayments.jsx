@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { DataTable, StatusBadge, EmptyState } from '../../components/ui/index.js';
 import { portalApiClient } from '../apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // User-reported (Phase 10, screenshot from the Customer Portal): payment
 // status always rendered as a flat, neutral blue 'recorded' pill —
@@ -18,6 +19,7 @@ import { portalApiClient } from '../apiClient.js';
 const PAYMENT_STATUS_MAP = { recorded: 'success', reversed: 'danger' };
 
 export default function PortalPayments() {
+  const { t } = useI18n();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -35,16 +37,16 @@ export default function PortalPayments() {
 
   return (
     <div>
-      <h2 style={{ margin: '0 0 16px' }}>My Payments</h2>
+      <h2 style={{ margin: '0 0 16px' }}>{t('portal.payments.title')}</h2>
       <DataTable
         loading={loading}
         error={error}
         onRetry={load}
-        columns={[{ label: 'Invoice #' }, { label: 'Amount', align: 'right' }, { label: 'Method' }, { label: 'Status' }, { label: 'Date' }]}
+        columns={[{ label: t('portal.col.invoice') }, { label: t('common.amount'), align: 'right' }, { label: t('common.method') }, { label: t('common.status') }, { label: t('common.date') }]}
         isEmpty={rows && rows.length === 0}
       >
         {rows && rows.length === 0 ? (
-          <tr><td colSpan={5}><EmptyState title="No payments yet" /></td></tr>
+          <tr><td colSpan={5}><EmptyState title={t('portal.payments.empty')} /></td></tr>
         ) : rows?.map((r) => (
           <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
             <td style={tdStyle}>{r.invoice_number}</td>

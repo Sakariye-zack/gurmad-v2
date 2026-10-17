@@ -6,6 +6,7 @@ import AccountSecurity from '../../pages/account/AccountSecurity.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { purgeAllLocalData } from '../lib/collectorStore.js';
 import { discardKey } from '../lib/collectorCrypto.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Screen 6.7 + 6.8 (Decisions §17). 6.7 reuses the existing, unmodified
 // AccountSecurity page component exactly as-is (Discovery §12 confirmed it
@@ -17,6 +18,7 @@ import { discardKey } from '../lib/collectorCrypto.js';
 export default function AccountScreen() {
   const { logout } = useAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -41,16 +43,16 @@ export default function AccountScreen() {
       <AccountSecurity />
       <div style={{ marginTop: '24px' }}>
         <Button variant="danger" icon={LogOut} onClick={() => setConfirmOpen(true)} style={{ width: '100%', minHeight: '48px' }}>
-          Log out
+          {t('collector.logout')}
         </Button>
       </div>
       <ConfirmDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={doLogout}
-        title="Log out"
-        message="This will sign you out and remove all locally saved visit data from this device."
-        confirmLabel="Log out"
+        title={t('collector.logout')}
+        message={t('collector.logoutMessage')}
+        confirmLabel={t('collector.logout')}
         danger
         isLoading={loggingOut}
       />
