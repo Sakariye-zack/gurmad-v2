@@ -47,6 +47,14 @@ export function useEnableUser() {
   });
 }
 
+export function useResetUserPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, password }) => apiClient.put(`/v2/users/${id}/password`, { password }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'users'] }),
+  });
+}
+
 export function useRevokeUser() {
   const qc = useQueryClient();
   return useMutation({

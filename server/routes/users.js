@@ -316,4 +316,34 @@ router.put('/:id/revoke', authenticateToken, requireRole('admin'), async (req, r
   }
 });
 
+// Admin sets a new password for another user (forgotten password). Revokes
+// every outstanding session and clears any failed-login lockout. An admin
+// changing their own password must use Account Security -> Change Password,
+// which verifies the current one.
+router.put('/:id/password', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+  if (id === req.user.id) {
+    return res.status(400).json({ error: { message: 'Use Account Security to change your own password.', code: 'VALIDATION' } });
+  }
+  const { password } = req.body || {};
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: { message: 'password (min 8 characters) is required.', code: 'VALIDATION' } });
+  }
+  try {
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const r = await pool.query(
+      `UPDATE v2_users SET password_hash = $1, token_version = token_version + 1,
+              failed_login_count = 0, locked_until = NULL, updated_at = NOW()
+       WHERE id = $2 RETURNING id, username`,
+      [hash, id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'password_reset_by_admin', entityType: 'v2_user', entityId: id });
+    return res.json({ data: r.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to reset password.', code: 'INTERNAL' } });
+  }
+});
+
 module.exports = router;

@@ -5,6 +5,7 @@ import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser }
 import { useEmployees } from '../../hooks/useEmployees.js';
 import { useRoles } from '../../hooks/useRoles.js';
 import UserEditModal from './UserEditModal.jsx';
+import UserResetPasswordModal from './UserResetPasswordModal.jsx';
 
 // User & Access Administration — admin-only. Role assignment used to be
 // restricted to 6 hardcoded strings; Dynamic Roles & Permissions
@@ -20,6 +21,7 @@ export default function UsersListPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ username: '', password: '', full_name: '', role_id: '', employee_id: '' });
   const [editingUser, setEditingUser] = useState(null);
+  const [resettingUser, setResettingUser] = useState(null);
 
   const createUser = useCreateUser();
   const disableUser = useDisableUser();
@@ -141,6 +143,7 @@ export default function UsersListPage() {
                 ) : (
                   <Button variant="ghost" style={smallBtnStyle} onClick={() => handleEnable(u.id)}>Enable</Button>
                 )}
+                <Button variant="ghost" style={smallBtnStyle} onClick={() => setResettingUser(u)}>Reset Password</Button>
                 <Button variant="ghost" style={smallBtnStyle} onClick={() => handleRevoke(u.id)}>Revoke Sessions</Button>
               </div>
             </td>
@@ -149,6 +152,7 @@ export default function UsersListPage() {
       </DataTable>
 
       <UserEditModal open={!!editingUser} user={editingUser} onClose={() => setEditingUser(null)} />
+      <UserResetPasswordModal open={!!resettingUser} user={resettingUser} onClose={() => setResettingUser(null)} />
     </div>
   );
 }
