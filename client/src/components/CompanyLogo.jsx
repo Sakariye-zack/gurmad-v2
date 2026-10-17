@@ -15,7 +15,7 @@ export default function CompanyLogo({ fallback, height = 32, style }) {
   if (failed) return fallback;
   return (
     <img
-      src="/api/v2/settings/company/logo"
+      src="/api/v2/settings/company/logo-trimmed"
       alt="Company logo"
       height={height}
       style={{ display: 'block', maxWidth: '160px', objectFit: 'contain', ...style }}

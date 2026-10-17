@@ -78,6 +78,44 @@ router.get('/company/name', async (req, res) => {
 // the static icons in that case, never a broken icon.
 const ICON_SIZES = [64, 180, 192, 512];
 const iconCache = new Map();
+
+// Company logos are often a wordmark floating in a large padded square, which
+// renders tiny in a 26px header or a launcher icon. Trim the uniform background
+// border off first (colour sampled from the logo's own corner), then callers
+// re-add whatever margin they want.
+async function trimmedLogo(filePath) {
+  const flat = await sharp(filePath).flatten({ background: { r: 255, g: 255, b: 255 } }).toBuffer();
+  const corner = await sharp(flat).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+  const bg = { r: corner[0], g: corner[1], b: corner[2], alpha: 1 };
+  const trimmed = await sharp(flat).trim({ background: bg, threshold: 40 }).toBuffer();
+  return { buffer: trimmed, bg };
+}
+
+// Public like /company/logo: the same logo with its empty padding trimmed, for
+// small in-app placements (headers, login medallion).
+const trimCache = new Map();
+router.get('/company/logo-trimmed', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT logo_storage_path FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
+    const stored = result.rows[0]?.logo_storage_path;
+    if (!stored) return res.status(404).json({ error: { message: 'No company logo is set.', code: 'NOT_FOUND' } });
+    const filePath = path.join(UPLOAD_DIR, stored);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Logo file not found.', code: 'NOT_FOUND' } });
+    let png = trimCache.get(stored);
+    if (!png) {
+      const { buffer, bg } = await trimmedLogo(filePath);
+      const pad = 6;
+      png = await sharp(buffer).extend({ top: pad, bottom: pad, left: pad, right: pad, background: bg }).png().toBuffer();
+      if (trimCache.size > 5) trimCache.clear();
+      trimCache.set(stored, png);
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(png);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to build trimmed logo.', code: 'INTERNAL' } });
+  }
+});
 router.get('/company/icon/:size.png', async (req, res) => {
   const size = parseInt(req.params.size, 10);
   if (!ICON_SIZES.includes(size)) return res.status(404).json({ error: { message: 'Unsupported icon size.', code: 'NOT_FOUND' } });
@@ -93,16 +131,13 @@ router.get('/company/icon/:size.png', async (req, res) => {
     const cacheKey = `${stored}:${size}`;
     let png = iconCache.get(cacheKey);
     if (!png) {
-      const margin = Math.round(size * 0.14);
+      const margin = Math.round(size * 0.1);
       const inner = size - margin * 2;
-      const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
       // A JPEG logo's "white" is rarely pure #fff (compression + a slightly
       // tinted background) — padding with literal white leaves a faintly
       // visible box around the logo. Sampling the logo's own top-left
       // pixel as the fill color makes the margin blend in seamlessly.
-      const flat = await sharp(filePath).flatten({ background: WHITE }).toBuffer();
-      const corner = await sharp(flat).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
-      const bg = { r: corner[0], g: corner[1], b: corner[2], alpha: 1 };
+      const { buffer: flat, bg } = await trimmedLogo(filePath);
       png = await sharp(flat)
         .resize(inner, inner, { fit: 'contain', background: bg })
         .extend({ top: margin, bottom: margin, left: margin, right: margin, background: bg })
