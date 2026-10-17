@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Phone, MapPin, ChevronLeft } from 'lucide-react';
 import { Button, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
@@ -10,7 +10,8 @@ import { getCachedAssignments } from '../lib/collectorStore.js';
 // response now includes the customer's lat/lng for exactly this (see
 // routes/collectionSync.js's own comment on why that's not the "no raw
 // GPS fed back" boundary this file's sibling screens rely on elsewhere).
-import MapCanvas from '../../pages/map/MapCanvas.jsx';
+// The map library is ~1.8MB — load it only when this screen actually shows a map.
+const MapCanvas = lazy(() => import('../../pages/map/MapCanvas.jsx'));
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Screen 6.3 (Decisions §17). Purely a focused render of ALREADY-FETCHED,
@@ -51,7 +52,7 @@ export default function CustomerDetailScreen() {
 
       {Number.isFinite(Number(customer.lat)) && Number.isFinite(Number(customer.lng)) ? (
         <div style={{ height: '220px', marginBottom: '24px' }}>
-          <MapCanvas points={[customer]} />
+          <Suspense fallback={null}><MapCanvas points={[customer]} /></Suspense>
         </div>
       ) : (
         <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-muted)', fontSize: '13px', marginBottom: '24px' }}>

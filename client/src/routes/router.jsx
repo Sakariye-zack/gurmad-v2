@@ -1,121 +1,121 @@
-import React from 'react';
+import React, { lazy } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import AppShell from '../layout/AppShell.jsx';
-import Login from '../pages/Login.jsx';
-import Dashboard from '../pages/Dashboard.jsx';
-import ZonesListPage from '../pages/zones/ZonesListPage.jsx';
-import ZoneDetailPage from '../pages/zones/ZoneDetailPage.jsx';
+const AppShell = lazy(() => import('../layout/AppShell.jsx'));
+const Login = lazy(() => import('../pages/Login.jsx'));
+const Dashboard = lazy(() => import('../pages/Dashboard.jsx'));
+const ZonesListPage = lazy(() => import('../pages/zones/ZonesListPage.jsx'));
+const ZoneDetailPage = lazy(() => import('../pages/zones/ZoneDetailPage.jsx'));
 // Group & Group-Based Collection — Change Request.
-import GroupsListPage from '../pages/groups/GroupsListPage.jsx';
-import GroupDetailPage from '../pages/groups/GroupDetailPage.jsx';
+const GroupsListPage = lazy(() => import('../pages/groups/GroupsListPage.jsx'));
+const GroupDetailPage = lazy(() => import('../pages/groups/GroupDetailPage.jsx'));
 // Audit & Security Center.
-import AuditCenterListPage from '../pages/audit/AuditCenterListPage.jsx';
+const AuditCenterListPage = lazy(() => import('../pages/audit/AuditCenterListPage.jsx'));
 // System Settings.
-import SettingsPage from '../pages/settings/SettingsPage.jsx';
+const SettingsPage = lazy(() => import('../pages/settings/SettingsPage.jsx'));
 // Staff Notifications — additive route, in-app only.
-import NotificationsListPage from '../pages/notifications/NotificationsListPage.jsx';
+const NotificationsListPage = lazy(() => import('../pages/notifications/NotificationsListPage.jsx'));
 // Operational Calendar — additive route, read-only projection of batches.
-import CalendarPage from '../pages/calendar/CalendarPage.jsx';
+const CalendarPage = lazy(() => import('../pages/calendar/CalendarPage.jsx'));
 // Route & GIS / Map — additive route, read-only projection of customer
 // coordinates + Group/Route membership, rendered via Mapbox GL JS.
-import MapPage from '../pages/map/MapPage.jsx';
+const MapPage = lazy(() => import('../pages/map/MapPage.jsx'));
 // Master Functional Completion Program — Phase 1: HR & Payroll. Additive
 // routes only — no Sidebar/MobileNavDrawer/AppShell/MobileTabBar change
 // (CLOSED/FROZEN); nav entries are a documented future CR (Spec §18).
-import AttendanceListPage from '../pages/hr/AttendanceListPage.jsx';
-import HrReportsPage from '../pages/hr/HrReportsPage.jsx';
-import LeaveTypesPage from '../pages/hr/LeaveTypesPage.jsx';
-import LeaveRequestsListPage from '../pages/hr/LeaveRequestsListPage.jsx';
-import PayrollPeriodsListPage from '../pages/payroll/PayrollPeriodsListPage.jsx';
-import PayrollPeriodDetailPage from '../pages/payroll/PayrollPeriodDetailPage.jsx';
-import PayrollRecordDetailPage from '../pages/payroll/PayrollRecordDetailPage.jsx';
-import PayrollHistoryPage from '../pages/payroll/PayrollHistoryPage.jsx';
+const AttendanceListPage = lazy(() => import('../pages/hr/AttendanceListPage.jsx'));
+const HrReportsPage = lazy(() => import('../pages/hr/HrReportsPage.jsx'));
+const LeaveTypesPage = lazy(() => import('../pages/hr/LeaveTypesPage.jsx'));
+const LeaveRequestsListPage = lazy(() => import('../pages/hr/LeaveRequestsListPage.jsx'));
+const PayrollPeriodsListPage = lazy(() => import('../pages/payroll/PayrollPeriodsListPage.jsx'));
+const PayrollPeriodDetailPage = lazy(() => import('../pages/payroll/PayrollPeriodDetailPage.jsx'));
+const PayrollRecordDetailPage = lazy(() => import('../pages/payroll/PayrollRecordDetailPage.jsx'));
+const PayrollHistoryPage = lazy(() => import('../pages/payroll/PayrollHistoryPage.jsx'));
 // Master Functional Completion Program — Phase 2: Fleet Management.
 // Additive only — Trucks pages/Sidebar untouched (CLOSED/FROZEN); nav
 // entries are a documented future CR.
-import FleetMaintenanceListPage from '../pages/fleet/FleetMaintenanceListPage.jsx';
-import FleetFuelListPage from '../pages/fleet/FleetFuelListPage.jsx';
-import FleetExpiryPage from '../pages/fleet/FleetExpiryPage.jsx';
+const FleetMaintenanceListPage = lazy(() => import('../pages/fleet/FleetMaintenanceListPage.jsx'));
+const FleetFuelListPage = lazy(() => import('../pages/fleet/FleetFuelListPage.jsx'));
+const FleetExpiryPage = lazy(() => import('../pages/fleet/FleetExpiryPage.jsx'));
 // Master Functional Completion Program — Phase 3: Procurement.
-import SuppliersListPage from '../pages/procurement/SuppliersListPage.jsx';
-import SupplierDetailPage from '../pages/procurement/SupplierDetailPage.jsx';
-import ProcurementRequestsListPage from '../pages/procurement/ProcurementRequestsListPage.jsx';
-import ProcurementRequestDetailPage from '../pages/procurement/ProcurementRequestDetailPage.jsx';
-import PurchaseOrdersListPage from '../pages/procurement/PurchaseOrdersListPage.jsx';
-import PurchaseOrderDetailPage from '../pages/procurement/PurchaseOrderDetailPage.jsx';
-import InventoryItemsListPage from '../pages/inventory/InventoryItemsListPage.jsx';
-import InventoryItemDetailPage from '../pages/inventory/InventoryItemDetailPage.jsx';
-import InventoryStoresListPage from '../pages/inventory/InventoryStoresListPage.jsx';
-import InventoryStoreDetailPage from '../pages/inventory/InventoryStoreDetailPage.jsx';
-import InventoryMovementsPage from '../pages/inventory/InventoryMovementsPage.jsx';
-import InventoryAdjustmentsPage from '../pages/inventory/InventoryAdjustmentsPage.jsx';
-import AssetsListPage from '../pages/inventory/AssetsListPage.jsx';
-import AssetDetailPage from '../pages/inventory/AssetDetailPage.jsx';
-import DocumentsListPage from '../pages/documents/DocumentsListPage.jsx';
-import DocumentDetailPage from '../pages/documents/DocumentDetailPage.jsx';
-import MasterDataImportPage from '../pages/masterData/MasterDataImportPage.jsx';
-import MasterDataExportPage from '../pages/masterData/MasterDataExportPage.jsx';
-import CustomersListPage from '../pages/customers/CustomersListPage.jsx';
-import CustomerDetailPage from '../pages/customers/CustomerDetailPage.jsx';
-import EmployeesListPage from '../pages/employees/EmployeesListPage.jsx';
-import EmployeeDetailPage from '../pages/employees/EmployeeDetailPage.jsx';
-import TrucksListPage from '../pages/trucks/TrucksListPage.jsx';
-import TruckDetailPage from '../pages/trucks/TruckDetailPage.jsx';
-import CyclesListPage from '../pages/collection/CyclesListPage.jsx';
-import BatchesListPage from '../pages/collection/BatchesListPage.jsx';
-import BatchDetailPage from '../pages/collection/BatchDetailPage.jsx';
-import InvoicesListPage from '../pages/financial/InvoicesListPage.jsx';
-import InvoiceDetailPage from '../pages/financial/InvoiceDetailPage.jsx';
-import BillingView from '../pages/financial/BillingView.jsx';
-import DebtsView from '../pages/financial/DebtsView.jsx';
-import CashoutsListPage from '../pages/financial/CashoutsListPage.jsx';
-import ReportsPage from '../pages/reports/ReportsPage.jsx';
-import CashoutDetailPage from '../pages/financial/CashoutDetailPage.jsx';
-import ExchangeRatesPage from '../pages/financial/ExchangeRatesPage.jsx';
-import ComplaintsListPage from '../pages/complaints/ComplaintsListPage.jsx';
-import ComplaintDetailPage from '../pages/complaints/ComplaintDetailPage.jsx';
-import UsersListPage from '../pages/users/UsersListPage.jsx';
-import RolesPermissionsPage from '../pages/roles/RolesPermissionsPage.jsx';
-import TasksPage from '../pages/tasks/TasksPage.jsx';
-import AccountSecurity from '../pages/account/AccountSecurity.jsx';
-import MyHrPage from '../pages/account/MyHrPage.jsx';
+const SuppliersListPage = lazy(() => import('../pages/procurement/SuppliersListPage.jsx'));
+const SupplierDetailPage = lazy(() => import('../pages/procurement/SupplierDetailPage.jsx'));
+const ProcurementRequestsListPage = lazy(() => import('../pages/procurement/ProcurementRequestsListPage.jsx'));
+const ProcurementRequestDetailPage = lazy(() => import('../pages/procurement/ProcurementRequestDetailPage.jsx'));
+const PurchaseOrdersListPage = lazy(() => import('../pages/procurement/PurchaseOrdersListPage.jsx'));
+const PurchaseOrderDetailPage = lazy(() => import('../pages/procurement/PurchaseOrderDetailPage.jsx'));
+const InventoryItemsListPage = lazy(() => import('../pages/inventory/InventoryItemsListPage.jsx'));
+const InventoryItemDetailPage = lazy(() => import('../pages/inventory/InventoryItemDetailPage.jsx'));
+const InventoryStoresListPage = lazy(() => import('../pages/inventory/InventoryStoresListPage.jsx'));
+const InventoryStoreDetailPage = lazy(() => import('../pages/inventory/InventoryStoreDetailPage.jsx'));
+const InventoryMovementsPage = lazy(() => import('../pages/inventory/InventoryMovementsPage.jsx'));
+const InventoryAdjustmentsPage = lazy(() => import('../pages/inventory/InventoryAdjustmentsPage.jsx'));
+const AssetsListPage = lazy(() => import('../pages/inventory/AssetsListPage.jsx'));
+const AssetDetailPage = lazy(() => import('../pages/inventory/AssetDetailPage.jsx'));
+const DocumentsListPage = lazy(() => import('../pages/documents/DocumentsListPage.jsx'));
+const DocumentDetailPage = lazy(() => import('../pages/documents/DocumentDetailPage.jsx'));
+const MasterDataImportPage = lazy(() => import('../pages/masterData/MasterDataImportPage.jsx'));
+const MasterDataExportPage = lazy(() => import('../pages/masterData/MasterDataExportPage.jsx'));
+const CustomersListPage = lazy(() => import('../pages/customers/CustomersListPage.jsx'));
+const CustomerDetailPage = lazy(() => import('../pages/customers/CustomerDetailPage.jsx'));
+const EmployeesListPage = lazy(() => import('../pages/employees/EmployeesListPage.jsx'));
+const EmployeeDetailPage = lazy(() => import('../pages/employees/EmployeeDetailPage.jsx'));
+const TrucksListPage = lazy(() => import('../pages/trucks/TrucksListPage.jsx'));
+const TruckDetailPage = lazy(() => import('../pages/trucks/TruckDetailPage.jsx'));
+const CyclesListPage = lazy(() => import('../pages/collection/CyclesListPage.jsx'));
+const BatchesListPage = lazy(() => import('../pages/collection/BatchesListPage.jsx'));
+const BatchDetailPage = lazy(() => import('../pages/collection/BatchDetailPage.jsx'));
+const InvoicesListPage = lazy(() => import('../pages/financial/InvoicesListPage.jsx'));
+const InvoiceDetailPage = lazy(() => import('../pages/financial/InvoiceDetailPage.jsx'));
+const BillingView = lazy(() => import('../pages/financial/BillingView.jsx'));
+const DebtsView = lazy(() => import('../pages/financial/DebtsView.jsx'));
+const CashoutsListPage = lazy(() => import('../pages/financial/CashoutsListPage.jsx'));
+const ReportsPage = lazy(() => import('../pages/reports/ReportsPage.jsx'));
+const CashoutDetailPage = lazy(() => import('../pages/financial/CashoutDetailPage.jsx'));
+const ExchangeRatesPage = lazy(() => import('../pages/financial/ExchangeRatesPage.jsx'));
+const ComplaintsListPage = lazy(() => import('../pages/complaints/ComplaintsListPage.jsx'));
+const ComplaintDetailPage = lazy(() => import('../pages/complaints/ComplaintDetailPage.jsx'));
+const UsersListPage = lazy(() => import('../pages/users/UsersListPage.jsx'));
+const RolesPermissionsPage = lazy(() => import('../pages/roles/RolesPermissionsPage.jsx'));
+const TasksPage = lazy(() => import('../pages/tasks/TasksPage.jsx'));
+const AccountSecurity = lazy(() => import('../pages/account/AccountSecurity.jsx'));
+const MyHrPage = lazy(() => import('../pages/account/MyHrPage.jsx'));
 import RequireAuth from './RequireAuth.jsx';
-import RequirePortalAuth from '../portal/RequirePortalAuth.jsx';
-import PortalShell from '../portal/PortalShell.jsx';
-import PortalLogin from '../portal/pages/PortalLogin.jsx';
-import PortalForgotPassword from '../portal/pages/PortalForgotPassword.jsx';
-import PortalResetPassword from '../portal/pages/PortalResetPassword.jsx';
-import PortalDashboard from '../portal/pages/PortalDashboard.jsx';
-import PortalCollections from '../portal/pages/PortalCollections.jsx';
-import PortalCollectionDetail from '../portal/pages/collections/PortalCollectionDetail.jsx';
-import PortalInvoices from '../portal/pages/PortalInvoices.jsx';
-import PortalInvoiceDetail from '../portal/pages/PortalInvoiceDetail.jsx';
-import PortalPayments from '../portal/pages/PortalPayments.jsx';
-import PortalBalance from '../portal/pages/PortalBalance.jsx';
-import PortalAccountProfile from '../portal/pages/account/PortalAccountProfile.jsx';
-import PortalAccountSecurity from '../portal/pages/account/PortalAccountSecurity.jsx';
-import PortalNotifications from '../portal/pages/notifications/PortalNotifications.jsx';
-import PortalComplaints from '../portal/pages/complaints/PortalComplaints.jsx';
-import PortalComplaintDetail from '../portal/pages/complaints/PortalComplaintDetail.jsx';
-import PortalComplaintSubmit from '../portal/pages/complaints/PortalComplaintSubmit.jsx';
+const RequirePortalAuth = lazy(() => import('../portal/RequirePortalAuth.jsx'));
+const PortalShell = lazy(() => import('../portal/PortalShell.jsx'));
+const PortalLogin = lazy(() => import('../portal/pages/PortalLogin.jsx'));
+const PortalForgotPassword = lazy(() => import('../portal/pages/PortalForgotPassword.jsx'));
+const PortalResetPassword = lazy(() => import('../portal/pages/PortalResetPassword.jsx'));
+const PortalDashboard = lazy(() => import('../portal/pages/PortalDashboard.jsx'));
+const PortalCollections = lazy(() => import('../portal/pages/PortalCollections.jsx'));
+const PortalCollectionDetail = lazy(() => import('../portal/pages/collections/PortalCollectionDetail.jsx'));
+const PortalInvoices = lazy(() => import('../portal/pages/PortalInvoices.jsx'));
+const PortalInvoiceDetail = lazy(() => import('../portal/pages/PortalInvoiceDetail.jsx'));
+const PortalPayments = lazy(() => import('../portal/pages/PortalPayments.jsx'));
+const PortalBalance = lazy(() => import('../portal/pages/PortalBalance.jsx'));
+const PortalAccountProfile = lazy(() => import('../portal/pages/account/PortalAccountProfile.jsx'));
+const PortalAccountSecurity = lazy(() => import('../portal/pages/account/PortalAccountSecurity.jsx'));
+const PortalNotifications = lazy(() => import('../portal/pages/notifications/PortalNotifications.jsx'));
+const PortalComplaints = lazy(() => import('../portal/pages/complaints/PortalComplaints.jsx'));
+const PortalComplaintDetail = lazy(() => import('../portal/pages/complaints/PortalComplaintDetail.jsx'));
+const PortalComplaintSubmit = lazy(() => import('../portal/pages/complaints/PortalComplaintSubmit.jsx'));
 // Field Collector Mobile — a fully separate route tree, outside the staff
 // desktop AppShell (its own mobile-first shell), reusing the existing
 // staff AuthContext/JWT exactly as-is (NOT a new auth system, unlike the
 // Customer Portal's own separate identity system above).
-import CollectorApp from '../collector/CollectorApp.jsx';
+const CollectorApp = lazy(() => import('../collector/CollectorApp.jsx'));
 import CollectorRequireAuth from '../collector/CollectorRequireAuth.jsx';
-import CollectorShell from '../collector/CollectorShell.jsx';
-import CollectorLoginScreen from '../collector/screens/LoginScreen.jsx';
-import CollectorHomeScreen from '../collector/screens/HomeScreen.jsx';
-import CollectorAssignmentsScreen from '../collector/screens/AssignmentsScreen.jsx';
-import CollectorCustomerDetailScreen from '../collector/screens/CustomerDetailScreen.jsx';
-import CollectorCollectionActionScreen from '../collector/screens/CollectionActionScreen.jsx';
-import CollectorSyncCenterScreen from '../collector/screens/SyncCenterScreen.jsx';
+const CollectorShell = lazy(() => import('../collector/CollectorShell.jsx'));
+const CollectorLoginScreen = lazy(() => import('../collector/screens/LoginScreen.jsx'));
+const CollectorHomeScreen = lazy(() => import('../collector/screens/HomeScreen.jsx'));
+const CollectorAssignmentsScreen = lazy(() => import('../collector/screens/AssignmentsScreen.jsx'));
+const CollectorCustomerDetailScreen = lazy(() => import('../collector/screens/CustomerDetailScreen.jsx'));
+const CollectorCollectionActionScreen = lazy(() => import('../collector/screens/CollectionActionScreen.jsx'));
+const CollectorSyncCenterScreen = lazy(() => import('../collector/screens/SyncCenterScreen.jsx'));
 // Note: NotificationsListPage is already imported above (desktop
 // /notifications route) — reused as-is here too (Phase 10), plain
 // content with no desktop-shell dependency, already self-scoped to the
 // authenticated caller server-side.
-import CollectorAccountScreen from '../collector/screens/AccountScreen.jsx';
+const CollectorAccountScreen = lazy(() => import('../collector/screens/AccountScreen.jsx'));
 
 // Real client-side routing — Information_Architecture.md §2: replaces the
 // current system's activeTab-state pattern (no per-page URLs, no deep
