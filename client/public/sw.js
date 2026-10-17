@@ -12,7 +12,7 @@
 // explicitly approved" — nothing was approved, so nothing beyond the
 // static shell is cached.
 
-const CACHE_NAME = 'gurmad-portal-shell-v1';
+const CACHE_NAME = 'gurmad-portal-shell-v2'; // bumped: purges the old cache-first shell
 const APP_SHELL_URLS = [
   '/portal',
   '/manifest.webmanifest',
@@ -43,6 +43,9 @@ self.addEventListener('fetch', (event) => {
   if (!APP_SHELL_URLS.includes(url.pathname)) return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    // network-first: latest shell when online, cache only as the offline fallback
+      fetch(event.request)
+        .then((res) => { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(event.request, copy)).catch(() => {}); return res; })
+        .catch(() => caches.match(event.request))
   );
 });
