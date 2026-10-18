@@ -9,6 +9,7 @@ import {
 } from '../components/dispatchAuthKit.jsx';
 import LanguageToggle from '../components/LanguageToggle.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
+import { useCompanyName } from '../hooks/useSettings.js';
 
 // "Fleet dispatch manifest" design — refactored to share its visual kit
 // (dispatchAuthKit.jsx) with PortalLogin.jsx and collector/screens/
@@ -21,6 +22,8 @@ export default function Login() {
   const toast = useToast();
   const navigate = useNavigate();
   const { t } = useI18n();
+  const { data: companyNameData } = useCompanyName();
+  const companyName = companyNameData?.data?.company_name || 'Gurmad';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState('');
@@ -150,10 +153,10 @@ export default function Login() {
                 <DispatchMedallion fallback={<Shield size={24} color="var(--brand)" />} />
                 <div>
                   <h1 style={{ fontFamily: DISPLAY_FONT, fontSize: '26px', fontWeight: 700, letterSpacing: '0.01em', textTransform: 'uppercase', lineHeight: 1.05, color: 'var(--text)' }}>
-                    Gurmad
+                    {companyName}
                   </h1>
                   <div style={{ fontFamily: MONO_FONT, fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px', letterSpacing: '0.04em' }}>
-                    Foundation build — staging
+                    {t('login.staffPortal')}
                   </div>
                 </div>
               </div>
