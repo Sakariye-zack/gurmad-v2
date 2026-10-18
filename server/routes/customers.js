@@ -40,11 +40,17 @@ async function resolveUserZoneId(user) {
   return r.rows[0]?.id ?? null;
 }
 
+// Next free automatic number. Numbers can also be entered by hand, so skip any
+// sequence value that is already taken instead of failing on the unique index.
 async function generateCustomerNumber(client) {
-  const seq = await client.query(`SELECT nextval('customer_number_seq') AS n`);
-  const n = Number(seq.rows[0].n);
-  const width = Math.max(2, String(n).length);
-  return `C-${String(n).padStart(width, '0')}`;
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const seq = await client.query(`SELECT nextval('customer_number_seq') AS n`);
+    const n = Number(seq.rows[0].n);
+    const candidate = `C-${String(n).padStart(Math.max(2, String(n).length), '0')}`;
+    const taken = await client.query('SELECT 1 FROM customers WHERE customer_number = $1', [candidate]);
+    if (taken.rows.length === 0) return candidate;
+  }
+  throw new Error('No free customer number found');
 }
 
 function validateCustomerInput(body, { partial = false } = {}) {
@@ -376,10 +382,21 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   const groupRouteError = await validateGroupRoute(data, data.zone_id, data.group_id);
   if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
 
+  // Optional hand-entered Customer Number (same rules as the Edit Number endpoint);
+  // blank means "generate the next one automatically".
+  const rawNumber = typeof req.body?.customer_number === 'string' ? req.body.customer_number.trim().toUpperCase() : '';
+  if (rawNumber && !CUSTOMER_NUMBER_RE.test(rawNumber)) {
+    return res.status(400).json({ error: { message: 'Customer Number must look like C-01 (C- followed by 2 or more digits).', code: 'VALIDATION' } });
+  }
+  if (rawNumber) {
+    const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1', [rawNumber]);
+    if (dup.rows.length) return res.status(409).json({ error: { message: `Customer Number ${rawNumber} is already assigned to another customer.`, code: 'DUPLICATE' } });
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const customerNumber = await generateCustomerNumber(client);
+    const customerNumber = rawNumber || await generateCustomerNumber(client);
     const result = await client.query(
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
@@ -400,7 +417,7 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === '23505') {
-      return res.status(409).json({ error: { message: 'Customer Number collision — please retry.', code: 'DUPLICATE' } });
+      return res.status(409).json({ error: { message: 'That Customer Number is already assigned to another customer.', code: 'DUPLICATE' } });
     }
     // 23503 = FK violation — a zone_id that passed the strict-id format
     // check but doesn't reference a real zone. A client error, not a server

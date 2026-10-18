@@ -6,7 +6,7 @@ import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const EMPTY = {
-  customer_type: 'residential', name: '', business_name: '', phone: '', alternate_phone: '',
+  customer_type: 'residential', customer_number: '', name: '', business_name: '', phone: '', alternate_phone: '',
   whatsapp: '', email: '', address_line: '', zone_id: '', sub_zone: '', commercial_shift: '',
   collection_frequency: '', collection_mode: '', fee: '', notes: '',
   // Group & Group-Based Collection — Change Request, Spec §6. Both
@@ -116,6 +116,7 @@ function CustomerFormModalContent({ onClose, customer }) {
     const errs = {};
     if (!form.name.trim()) errs.name = 'Name is required.';
     if (!form.phone.trim()) errs.phone = 'Phone is required.';
+    if (!isEdit && form.customer_number.trim() && !/^C-\d{2,}$/i.test(form.customer_number.trim())) errs.customer_number = t('cust.m.numberFormat');
     if (!form.zone_id) errs.zone_id = 'Zone is required.';
     if (isCommercial && !form.business_name.trim()) errs.business_name = 'Business name is required for commercial customers.';
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = 'Enter a valid email address.';
@@ -141,6 +142,7 @@ function CustomerFormModalContent({ onClose, customer }) {
     }
 
     const payload = {
+      ...(!isEdit && form.customer_number.trim() ? { customer_number: form.customer_number.trim().toUpperCase() } : {}),
       customer_type: form.customer_type, name: form.name.trim(), phone: form.phone.trim(),
       zone_id: parseInt(form.zone_id, 10),
       business_name: isCommercial ? form.business_name.trim() : null,
@@ -207,6 +209,12 @@ function CustomerFormModalContent({ onClose, customer }) {
         {isCommercial && (
           <Field label={t('cust.business_name')} error={fieldErrors.business_name}>
             <input value={form.business_name} onChange={(e) => set('business_name', e.target.value)} style={inputStyle} />
+          </Field>
+        )}
+
+        {!isEdit && (
+          <Field label={t('cust.m.numberOptional')} hint={t('cust.m.numberHint')} error={fieldErrors.customer_number}>
+            <input value={form.customer_number} onChange={(e) => set('customer_number', e.target.value)} placeholder="C-105" style={inputStyle} />
           </Field>
         )}
 
