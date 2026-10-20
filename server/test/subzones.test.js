@@ -47,3 +47,17 @@ test('sub zone: deactivated collector still listed', async () => {
   assert.equal(row.collector_user_id, cid);
   assert.equal(row.collector_active, false);
 });
+
+test('sub zone: group detail returns collector name', async () => {
+  const w = await setupWorld();
+  const { group, route } = await mkRoute(w);
+  const cid = (await db.query(`SELECT id FROM v2_users WHERE username='t_collector'`)).rows[0].id;
+  const put = await api('PUT', '/routes/' + route.id, { token: w.tokens.admin, body: { collector_user_id: cid } });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  const get = await api('GET', '/groups/' + group.id, { token: w.tokens.admin });
+  assert.equal(get.status, 200, JSON.stringify(get.body));
+  const row = get.data.routes.find((r) => r.id === route.id);
+  assert.equal(row.collector_user_id, cid);
+  assert.ok(row.collector_name);
+  assert.equal(row.collector_active, true);
+});

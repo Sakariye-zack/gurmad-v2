@@ -81,6 +81,7 @@ function CustomerFormModalContent({ onClose, customer }) {
       if (field === 'group_id') { next.route_id = ''; }
       return next;
     });
+    if (fieldErrors[field]) setFieldErrors((fe) => ({ ...fe, [field]: undefined }));
     if (duplicateMatches) { setDuplicateMatches(null); setDuplicateAcknowledged(false); }
   }
 
@@ -130,6 +131,7 @@ function CustomerFormModalContent({ onClose, customer }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
+    setFieldErrors({});
     if (!validate()) return;
 
     if (!isEdit && duplicateMatches === null) {

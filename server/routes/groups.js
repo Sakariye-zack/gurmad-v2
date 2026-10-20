@@ -111,7 +111,7 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     }
     const customerCount = await pool.query(`SELECT COUNT(*)::int AS n FROM customers WHERE group_id = $1 AND status = 'active'`, [id]);
     const routeCount = await pool.query(`SELECT COUNT(*)::int AS n FROM routes WHERE group_id = $1`, [id]);
-    const routes = await pool.query(`SELECT r.*, (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count FROM routes r WHERE r.group_id = $1 ORDER BY r.code`, [id]);
+    const routes = await pool.query(`SELECT r.*, u.full_name AS collector_name, u.is_active AS collector_active, (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count FROM routes r LEFT JOIN v2_users u ON u.id = r.collector_user_id WHERE r.group_id = $1 ORDER BY r.code`, [id]);
     res.json({
       data: {
         ...group,

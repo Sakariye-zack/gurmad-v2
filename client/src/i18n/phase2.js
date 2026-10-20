@@ -518,5 +518,4 @@ export const PHASE2 = {
   "cust.door_col": { en: "Door #", so: "Albaab #" },
   "group.collector": { en: "Collector", so: "Ururiye" },
   "group.unassigned": { en: "Unassigned", so: "Aan loo xilsaarin" },
-  "group.no_collector": { en: "Unassigned", so: "Aan loo xilsaarin" },
 };
