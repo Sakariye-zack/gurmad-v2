@@ -1020,6 +1020,11 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_group_id ON customers(group_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_route_id ON customers(route_id);`);
 
+  // customers.door_number — per-customer door/route number. Optional (NULL
+  // allowed), unique system-wide when set.
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS door_number VARCHAR(20);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_door_number ON customers(door_number) WHERE door_number IS NOT NULL;`);
+
   // batches.group_id/route_id — the historical-integrity snapshot (Spec
   // §5, non-negotiable). Captured ONCE at batch-creation time by
   // routes/batches.js; NO route ever updates these columns after insert —

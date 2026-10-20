@@ -244,7 +244,7 @@ const EXPORT_ENTITIES = {
       { key: 'customer_number', label: 'Customer Number' }, { key: 'customer_type', label: 'Type' }, { key: 'name', label: 'Name' },
       { key: 'business_name', label: 'Business Name' }, { key: 'phone', label: 'Phone' }, { key: 'alternate_phone', label: 'Alternate Phone' },
       { key: 'whatsapp', label: 'WhatsApp' }, { key: 'email', label: 'Email' }, { key: 'address_line', label: 'Address' },
-      { key: 'sub_zone', label: 'Sub Zone' }, { key: 'lat', label: 'Lat' }, { key: 'lng', label: 'Lng' },
+      { key: 'sub_zone', label: 'Sub Zone' }, { key: 'door_number', label: 'Door Number' }, { key: 'lat', label: 'Lat' }, { key: 'lng', label: 'Lng' },
       { key: 'commercial_shift', label: 'Commercial Shift' }, { key: 'collection_frequency', label: 'Collection Frequency' },
       { key: 'collection_mode', label: 'Collection Mode' }, { key: 'fee', label: 'Fee' }, { key: 'status', label: 'Status' },
       { key: 'zone_name', label: 'Zone' }, { key: 'group_name', label: 'Group' },
@@ -256,7 +256,7 @@ const EXPORT_ENTITIES = {
       if (filters.status) { params.push(filters.status); where.push(`c.status = $${params.length}`); }
       if (filters.customer_type) { params.push(filters.customer_type); where.push(`c.customer_type = $${params.length}`); }
       const sql = `SELECT c.customer_number, c.customer_type, c.name, c.business_name, c.phone, c.alternate_phone, c.whatsapp, c.email,
-        c.address_line, c.sub_zone, c.lat, c.lng, c.commercial_shift, c.collection_frequency, c.collection_mode, c.fee, c.status,
+        c.address_line, c.sub_zone, c.door_number, c.lat, c.lng, c.commercial_shift, c.collection_frequency, c.collection_mode, c.fee, c.status,
         z.name AS zone_name, g.name AS group_name, r.name AS route_name, c.created_at
         FROM customers c LEFT JOIN zones z ON c.zone_id = z.id LEFT JOIN groups g ON c.group_id = g.id LEFT JOIN routes r ON c.route_id = r.id
         ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.name ASC`;
