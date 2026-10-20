@@ -1009,6 +1009,7 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_group_id ON routes(group_id);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS collector_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL;`);
 
   // customers.group_id/route_id — LOCKED §26-1: initially and indefinitely
   // NULLABLE. No default/fake Group or Route is ever assigned here or
