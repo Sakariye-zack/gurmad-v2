@@ -40,7 +40,7 @@ export const TRANSLATIONS = {
   'nav.group.documents': { en: 'Documents & Data', so: 'Dukumentiyada & Xogta' },
   'nav.group.administration': { en: 'Administration', so: 'Maamulka' },
   'nav.customers': { en: 'Customers', so: 'Macaamiisha' },
-  'nav.zones': { en: 'Zones', so: 'Zonaha' },
+  'nav.zones': { en: 'Districts', so: 'Degmooyinka' },
   'nav.groups': { en: 'Groups', so: 'Kooxaha' },
   'nav.collectionCycles': { en: 'Collection Cycles', so: 'Wareegyada Ururinta' },
   'nav.batches': { en: 'Batches', so: 'Kooxaha Shaqada' },

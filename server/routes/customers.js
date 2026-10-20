@@ -53,6 +53,18 @@ async function generateCustomerNumber(client) {
   throw new Error('No free customer number found');
 }
 
+// Door number (route #): trimmed; blank -> null; max 20 chars. Returns
+// { value } or { error }.
+function normaliseDoor(v) {
+  if (v === undefined || v === null) return { value: null };
+  if (typeof v !== 'string' && typeof v !== 'number') return { error: 'door_number must be a string or number.' };
+  const s = String(v).trim();
+  if (s === '') return { value: null };
+  if (s.length > 20) return { error: 'door_number must be at most 20 characters.' };
+  return { value: s };
+}
+const DOOR_DUP = { error: { message: 'That door number is already used by another customer.', code: 'DUPLICATE' } };
+
 function validateCustomerInput(body, { partial = false } = {}) {
   const errors = [];
   const out = {};
@@ -251,10 +263,11 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(zid);
       where.push(`c.zone_id = $${params.length}`);
     }
-    if (req.query.q) {
-      params.push(`%${req.query.q.trim()}%`);
+    const searchTerm = req.query.q || req.query.search;
+    if (typeof searchTerm === 'string' && searchTerm.trim()) {
+      params.push(`%${searchTerm.trim()}%`);
       const i = params.length;
-      where.push(`(c.customer_number ILIKE $${i} OR c.name ILIKE $${i} OR c.business_name ILIKE $${i} OR c.phone ILIKE $${i})`);
+      where.push(`(c.customer_number ILIKE $${i} OR c.name ILIKE $${i} OR c.business_name ILIKE $${i} OR c.phone ILIKE $${i} OR c.door_number ILIKE $${i})`);
     }
     // Group & Group-Based Collection — Change Request, Implementation Spec
     // §9/§16: reused by the Group-based batch-creation UI (client-side
@@ -371,6 +384,9 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   const { errors, data } = validateCustomerInput(req.body, { partial: false });
   if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
 
+  const door = normaliseDoor(req.body?.door_number);
+  if (door.error) return res.status(400).json({ error: { message: door.error, code: 'VALIDATION' } });
+
   const writable = await assertZoneWritable(req.user, data.zone_id);
   if (!writable) {
     return res.status(403).json({ error: { message: 'You cannot create a customer outside your assigned zone.', code: 'FORBIDDEN' } });
@@ -401,14 +417,14 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
          address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode,
-         fee, notes, registered_by, group_id, route_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         fee, notes, registered_by, group_id, route_id, door_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [customerNumber, data.customer_type, data.name, data.business_name ?? null, data.phone,
        data.alternate_phone ?? null, data.whatsapp ?? null, data.email ?? null, data.address_line ?? null,
        data.zone_id, data.sub_zone ?? null, data.lat ?? null, data.lng ?? null, data.commercial_shift ?? null,
        data.collection_frequency ?? null, data.collection_mode ?? null, data.fee ?? null, data.notes ?? null,
-       req.user.id, data.group_id ?? null, data.route_id ?? null]
+       req.user.id, data.group_id ?? null, data.route_id ?? null, door.value]
     );
     await client.query('COMMIT');
     const customer = result.rows[0];
@@ -417,6 +433,7 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === '23505') {
+      if (err.constraint === 'idx_customers_door_number') return res.status(409).json(DOOR_DUP);
       return res.status(409).json({ error: { message: 'That Customer Number is already assigned to another customer.', code: 'DUPLICATE' } });
     }
     // 23503 = FK violation — a zone_id that passed the strict-id format
@@ -440,6 +457,11 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
 
   const { errors, data } = validateCustomerInput(req.body, { partial: true });
   if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
+  if (req.body && 'door_number' in req.body) {
+    const door = normaliseDoor(req.body.door_number);
+    if (door.error) return res.status(400).json({ error: { message: door.error, code: 'VALIDATION' } });
+    data.door_number = door.value;
+  }
   if (Object.keys(data).length === 0) return res.status(400).json({ error: { message: 'No valid fields provided to update.', code: 'VALIDATION' } });
 
   try {
@@ -493,6 +515,7 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     }
     res.json({ data: customer });
   } catch (err) {
+    if (err.code === '23505' && err.constraint === 'idx_customers_door_number') return res.status(409).json(DOOR_DUP);
     if (err.code === '23503') {
       return res.status(400).json({ error: { message: 'zone_id does not reference an existing zone.', code: 'VALIDATION' } });
     }

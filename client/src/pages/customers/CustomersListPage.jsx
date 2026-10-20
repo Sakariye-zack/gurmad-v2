@@ -57,7 +57,7 @@ export default function CustomersListPage() {
         emptySubtitle={search ? t('cust.try_a_different_name_phone') : t('cust.create_the_first_customer_to')}
         columns={[
           { label: t('cust.customer') }, { label: t('common.name') }, { label: t('cust.type') }, { label: t('common.phone') },
-          { label: t('common.zone') }, { label: t('common.status') },
+          { label: t('common.zone') }, { label: t('cust.door_col', 'Door #') }, { label: t('common.status') },
         ]}
       >
         {customers.map((c) => (
@@ -67,6 +67,7 @@ export default function CustomersListPage() {
             <td style={cellStyle}><span style={{ textTransform: 'capitalize' }}>{t('cust.' + c.customer_type, c.customer_type)}</span></td>
             <td style={cellStyle} className="tabular-nums">{c.phone}</td>
             <td style={cellStyle}>{c.zone_name}</td>
+            <td style={cellStyle} className="tabular-nums">{c.door_number || '—'}</td>
             <td style={cellStyle}><StatusBadge status={c.status} /></td>
           </tr>
         ))}

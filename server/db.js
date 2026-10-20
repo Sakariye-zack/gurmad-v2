@@ -1009,6 +1009,7 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_group_id ON routes(group_id);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS collector_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL;`);
 
   // customers.group_id/route_id — LOCKED §26-1: initially and indefinitely
   // NULLABLE. No default/fake Group or Route is ever assigned here or
@@ -1019,6 +1020,11 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_group_id ON customers(group_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_route_id ON customers(route_id);`);
+
+  // customers.door_number — per-customer door/route number. Optional (NULL
+  // allowed), unique system-wide when set.
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS door_number VARCHAR(20);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_door_number ON customers(door_number) WHERE door_number IS NOT NULL;`);
 
   // batches.group_id/route_id — the historical-integrity snapshot (Spec
   // §5, non-negotiable). Captured ONCE at batch-creation time by
