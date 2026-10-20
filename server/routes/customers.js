@@ -57,6 +57,7 @@ async function generateCustomerNumber(client) {
 // { value } or { error }.
 function normaliseDoor(v) {
   if (v === undefined || v === null) return { value: null };
+  if (typeof v !== 'string' && typeof v !== 'number') return { error: 'door_number must be a string or number.' };
   const s = String(v).trim();
   if (s === '') return { value: null };
   if (s.length > 20) return { error: 'door_number must be at most 20 characters.' };

@@ -169,7 +169,9 @@ function CustomerFormModalContent({ onClose, customer }) {
       }
       onClose();
     } catch (err) {
-      if (err.status === 409) setFieldErrors((fe) => ({ ...fe, door_number: err.message }));
+      const msg = String(err.message || '');
+      if (err.status === 409 && /door number/i.test(msg)) setFieldErrors((fe) => ({ ...fe, door_number: err.message }));
+      else if (err.status === 409 && /Customer Number/i.test(msg)) setFieldErrors((fe) => ({ ...fe, customer_number: err.message }));
       else toast.error(err.message || t('common.somethingWrong'));
     }
   }

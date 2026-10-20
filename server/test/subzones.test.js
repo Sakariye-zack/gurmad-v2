@@ -61,3 +61,13 @@ test('sub zone: group detail returns collector name', async () => {
   assert.ok(row.collector_name);
   assert.equal(row.collector_active, true);
 });
+
+test('sub zone: collector from another zone rejected', async () => {
+  const w = await setupWorld();
+  const { route } = await mkRoute(w);
+  const cid = await insertUser('t_collector_b', 'collector', w.zoneB.name);
+  const put = await api('PUT', '/routes/' + route.id, { token: w.tokens.admin, body: { collector_user_id: cid } });
+  assert.equal(put.status, 400, JSON.stringify(put.body));
+  const post = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: route.group_id, code: 'SZY' + (++seq), collector_user_id: cid } });
+  assert.equal(post.status, 400, JSON.stringify(post.body));
+});

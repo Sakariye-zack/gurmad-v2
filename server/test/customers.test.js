@@ -92,3 +92,9 @@ test('door number: searchable', async () => {
   assert.equal(r.status, 200);
   assert.ok(r.data.some((c) => c.id === a.data.id));
 });
+
+test('door number: non-scalar type rejected', async () => {
+  const w = await setupWorld();
+  const r = await api('POST', '/customers', { token: w.tokens.admin, body: body(w, { door_number: {} }) });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+});

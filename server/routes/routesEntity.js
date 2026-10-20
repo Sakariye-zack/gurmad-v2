@@ -132,10 +132,15 @@ function validateRouteInput(body, { partial = false } = {}) {
   return { errors, data: out };
 }
 
-async function collectorError(collectorId) {
+async function collectorError(collectorId, groupZoneId) {
   if (collectorId === undefined || collectorId === null) return null;
-  const r = await pool.query('SELECT role FROM v2_users WHERE id = $1', [collectorId]);
+  // v2_users stores the zone by name (column "zone"), not by id.
+  const r = await pool.query(
+    'SELECT u.role, z.id AS zone_id FROM v2_users u LEFT JOIN zones z ON z.name = u.zone WHERE u.id = $1',
+    [collectorId]
+  );
   if (r.rows.length === 0 || r.rows[0].role !== 'collector') return 'collector_user_id must reference a user with the collector role.';
+  if (r.rows[0].zone_id === null || Number(r.rows[0].zone_id) !== Number(groupZoneId)) return 'That collector does not work in this district.';
   return null;
 }
 
@@ -150,7 +155,7 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (!(await assertZoneAccess(req.user, groupRes.rows[0].zone_id))) {
       return res.status(403).json({ error: { message: 'You cannot create a route under a group outside your assigned zone.', code: 'FORBIDDEN' } });
     }
-    const cErr = await collectorError(data.collector_user_id);
+    const cErr = await collectorError(data.collector_user_id, groupRes.rows[0].zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
     const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2', [data.group_id, data.code]);
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
@@ -185,7 +190,7 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     if (!(await assertZoneAccess(req.user, current.zone_id))) {
       return res.status(403).json({ error: { message: 'You do not have access to this route.', code: 'FORBIDDEN' } });
     }
-    const cErr = await collectorError(data.collector_user_id);
+    const cErr = await collectorError(data.collector_user_id, current.zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
     if (data.code) {
       const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2 AND id != $3', [current.group_id, data.code, id]);
