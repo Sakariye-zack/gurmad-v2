@@ -12,7 +12,7 @@ const EMPTY = {
   // Group & Group-Based Collection — Change Request, Spec §6. Both
   // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
   // §26-1: no forced/fake default, no required-field validation added).
-  group_id: '', route_id: '',
+  group_id: '', route_id: '', door_number: '',
   // Map location — the backend (routes/customers.js) has always validated
   // and stored lat/lng and the Map page (pages/map/MapPage.jsx) has always
   // read them; this form was the one gap in that chain — a customer could
@@ -32,7 +32,7 @@ function toFormState(customer) {
     address_line: customer.address_line || '', zone_id: String(customer.zone_id || ''), sub_zone: customer.sub_zone || '',
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
-    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '',
+    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', door_number: customer.door_number || '',
     lat: customer.lat ?? '', lng: customer.lng ?? '',
   };
 }
@@ -153,6 +153,7 @@ function CustomerFormModalContent({ onClose, customer }) {
       fee: form.fee === '' ? null : parseFloat(form.fee), notes: form.notes.trim() || null,
       group_id: form.group_id ? parseInt(form.group_id, 10) : null,
       route_id: form.route_id ? parseInt(form.route_id, 10) : null,
+      door_number: form.door_number.trim() || null,
       lat: form.lat === '' ? null : parseFloat(form.lat),
       lng: form.lng === '' ? null : parseFloat(form.lng),
     };
@@ -166,7 +167,8 @@ function CustomerFormModalContent({ onClose, customer }) {
       }
       onClose();
     } catch (err) {
-      toast.error(err.message || t('common.somethingWrong'));
+      if (err.status === 409) setFieldErrors((fe) => ({ ...fe, door_number: err.message }));
+      else toast.error(err.message || t('common.somethingWrong'));
     }
   }
 
@@ -293,6 +295,10 @@ function CustomerFormModalContent({ onClose, customer }) {
             </select>
           </Field>
         </div>
+
+        <Field label={t('cust.door_number', 'Door # (Route)')} error={fieldErrors.door_number}>
+          <input value={form.door_number} onChange={(e) => set('door_number', e.target.value)} placeholder="572" maxLength={20} style={inputStyle} />
+        </Field>
 
         {isCommercial && (
           <Field label={t('cust.commercial_shift')}>

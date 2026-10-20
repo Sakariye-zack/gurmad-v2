@@ -6,6 +6,8 @@ import RoleGate from '../../components/RoleGate.jsx';
 import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute, useUpdateRoute, useGroupCustomers } from '../../hooks/useGroups.js';
 import GroupFormModal from './GroupFormModal.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { useUsers } from '../../hooks/useUsers.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
 
 // Group Detail — Group & Group-Based Collection CR, Spec §8. Group
 // information, Zone, status, customer/route counts and lists, and current
@@ -94,6 +96,7 @@ export default function GroupDetailPage() {
               {group.routes.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 4px' }}><strong>{r.code}</strong>{r.name && r.name !== r.code ? ` — ${r.name}` : ''}</td>
+                  <td style={{ padding: '8px 4px', color: r.collector_name ? 'inherit' : 'var(--text-muted)' }}>{r.collector_name || t('group.unassigned', 'Unassigned')}</td>
                   <td style={{ padding: '8px 4px' }} className="tabular-nums">{t('group.m.nCustomers', undefined, { n: r.customer_count })}</td>
                   <td style={{ padding: '8px 4px' }}><StatusBadge status={r.status} /></td>
                   <td style={{ padding: '8px 4px', textAlign: 'right' }}>
@@ -166,12 +169,13 @@ function EditRouteModal({ route, onClose, onDone }) {
   const [code, setCode] = useState(route?.code || '');
   const [name, setName] = useState(route?.name || '');
   const [status, setStatus] = useState(route?.status || 'active');
+  const [collectorId, setCollectorId] = useState(route?.collector_user_id ? String(route.collector_user_id) : '');
   const [error, setError] = useState('');
   const update = useUpdateRoute(route?.id);
   const toast = useToast();
 
   React.useEffect(() => {
-    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setError(''); }
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setError(''); }
   }, [route]);
 
   if (!route) return null;
@@ -181,7 +185,7 @@ function EditRouteModal({ route, onClose, onDone }) {
     setError('');
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     try {
-      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status });
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null });
       toast.success(t('group.route_updated'));
       onDone?.();
       onClose();
@@ -209,6 +213,7 @@ function EditRouteModal({ route, onClose, onDone }) {
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.name_optional')}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         </label>
+        <CollectorSelect value={collectorId} onChange={setCollectorId} current={route} />
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('common.status')}</span>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
@@ -226,6 +231,7 @@ function RouteFormModal({ open, onClose, groupId }) {
   const { t } = useI18n();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
+  const [collectorId, setCollectorId] = useState('');
   const [error, setError] = useState('');
   const createRoute = useCreateRoute();
   const toast = useToast();
@@ -235,9 +241,9 @@ function RouteFormModal({ open, onClose, groupId }) {
     e.preventDefault();
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     try {
-      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null });
+      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null });
       toast.success(t('fin.m.created', undefined, { number: code }));
-      setCode(''); setName(''); setError('');
+      setCode(''); setName(''); setCollectorId(''); setError('');
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));
@@ -265,9 +271,38 @@ function RouteFormModal({ open, onClose, groupId }) {
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.name_optional')}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         </label>
+        <CollectorSelect value={collectorId} onChange={setCollectorId} />
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>
+  );
+}
+
+// Collector assignment for a Sub Zone. Lists active collectors; if the route's
+// current collector is inactive it is still shown so the value is not silently lost.
+// GET /v2/users is admin-only, so non-admins get a read-only display instead.
+function CollectorSelect({ value, onChange, current }) {
+  const { t } = useI18n();
+  const isAdmin = (useAuth().user?.role || '').toLowerCase() === 'admin';
+  const { data } = useUsers(isAdmin);
+  const collectors = (data?.data || []).filter((u) => (u.role || '').toLowerCase() === 'collector' && (u.is_active || String(u.id) === value));
+  const label = (u) => u.full_name || u.name || u.username || u.email || `#${u.id}`;
+  if (!isAdmin) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.collector', 'Collector')}</span>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{current?.collector_name || t('group.unassigned', 'Unassigned')}</span>
+      </div>
+    );
+  }
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.collector', 'Collector')}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={inputStyle}>
+        <option value="">{t('group.unassigned', 'Unassigned')}</option>
+        {collectors.map((u) => <option key={u.id} value={String(u.id)}>{label(u)}</option>)}
+      </select>
+    </label>
   );
 }
 

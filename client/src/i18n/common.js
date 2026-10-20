@@ -31,7 +31,7 @@ export const COMMON = {
   'common.description': { en: 'Description', so: 'Sharaxaad' },
   'common.reason': { en: 'Reason', so: 'Sabab' },
   'common.batch': { en: 'Batch', so: 'Koox-shaqo' },
-  'common.zone': { en: 'Zone', so: 'Zone' },
+  'common.zone': { en: 'District', so: 'Degmo' },
   'common.note': { en: 'Note', so: 'Xusuus' },
   'common.title': { en: 'Title', so: 'Cinwaan' },
   'common.priority': { en: 'Priority', so: 'Mudnaan' },

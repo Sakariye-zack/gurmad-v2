@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Users, Pencil, Hash, Archive, RotateCcw, Receipt, HandCoins, History } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import { useGroup } from '../../hooks/useGroups.js';
 import { useCustomer, useUpdateCustomerStatus, useCustomerCollectionHistory } from '../../hooks/useCustomers.js';
 import { useInvoices, useDebts } from '../../hooks/useFinancial.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
@@ -26,6 +27,7 @@ export default function CustomerDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useCustomer(id);
+  const { data: groupData } = useGroup(data?.data?.group_id);
   const [editOpen, setEditOpen] = useState(false);
   const [numberEditOpen, setNumberEditOpen] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
@@ -38,6 +40,10 @@ export default function CustomerDetailPage() {
   if (!customer) return null;
 
   const isArchived = customer.status === 'archived';
+  // District › Group › Sub Zone breadcrumb (group/route codes resolved from the group detail).
+  const grp = groupData?.data;
+  const rt = customer.route_id ? grp?.routes?.find((r) => r.id === customer.route_id) : null;
+  const breadcrumb = [customer.zone_name, grp?.code, rt?.code].filter(Boolean).join(' › ');
 
   async function handleArchiveToggle() {
     try {
@@ -80,7 +86,9 @@ export default function CustomerDetailPage() {
         { label: t('portal.account.customerNumber'), value: customer.customer_number, className: 'tabular-nums' },
         { label: t('common.status'), value: <StatusBadge status={customer.status} /> },
         { label: t('cust.type'), value: <span style={{ textTransform: 'capitalize' }}>{t('cust.' + customer.customer_type, customer.customer_type)}</span> },
-        { label: t('common.zone'), value: `${customer.zone_name}${customer.sub_zone ? ` — ${customer.sub_zone}` : ''}` },
+        { label: t('common.zone'), value: breadcrumb },
+        { label: t('cust.door_col', 'Door #'), value: customer.door_number || '—', className: 'tabular-nums' },
+        customer.sub_zone && { label: t('cust.sub_zone_area'), value: customer.sub_zone },
         { label: t('common.phone'), value: customer.phone, className: 'tabular-nums' },
         { label: t('cust.alternate_whatsapp'), value: customer.alternate_phone || customer.whatsapp || '—' },
         { label: t('cust.email'), value: customer.email || '—' },
