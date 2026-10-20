@@ -56,7 +56,7 @@ Zones-ka hadda jira (Farah Omar, Sheekh Bashiir) dhab ahaantii waa Degmooyin. Si
 - Groups iyo Routes-ka hadda jira (tusaale Group 1 / Route 1) waa **tijaabo, waana la tirtirayaa**.
 - Degmooyinka (Farah Omar, Sheekh Bashiir) iyo macaamiishooda waxba lagama beddelayo.
 - Macaamiisha hadda jira, albaabkoodu iyo Sub Zone-koodu waxay bannaan ahaanayaan ilaa la galiyo.
-- **[GO'AAN]** Ma la abuurayaa xogta tusaalaha (Group 2 Baarsiigo, Sub Zone 1, Caasha oo leh albaabka 572) nidaamka dhabta ah? Haa / Maya
+- **LA GO'AAMIYAY:** xogta tusaalaha waa la abuurayaa nidaamka dhabta ah, kadib deploy-ga: Group 2 (Baarsiigo, Farah Omar), Sub Zone 1, iyo Caasha oo leh albaabka 572. Taleefanka Caasha waxaa la weydiinayaa isticmaalaha.
 
 ### Shaashadaha
 - **Degmooyin:** bogga "Zones" ee hadda ayaa loo beddelayaa "Degmooyin".
