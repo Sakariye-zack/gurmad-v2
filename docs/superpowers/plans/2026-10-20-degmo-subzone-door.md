@@ -143,3 +143,97 @@ Test Groups and Routes rows are deleted once, by a one-off script, not by the mi
 - [ ] **Step 5: Create the example data on prod through the UI or API.**
   - Ask the user for Caasha's phone number first.
   - Create Group 2 (Baarsiigo, Farah Omar), Sub Zone 1, and Caasha with door 572.
+
+---
+
+## Update 2026-11-05: Customer # = C- + door (spec section "CUSBOONAYSIIN")
+
+The hierarchy is Degmo → Group → Sub Zone → Customer. The door is a customer field, not a level.
+
+### Task 5: Door required; Customer # derived from door
+
+**Files:**
+- Modify: `server/routes/customers.js`, POST `/`:
+  - Door is required and must match `/^\d+$/`.
+  - `customer_number = 'C-' + door.padStart(2, '0')`.
+  - If that number already exists, return 409 and roll back.
+  - Remove the manual `customer_number` input from POST.
+- Modify: `server/lib/masterDataEntities.js`: on CSV import, apply the same door rules (pending the [GO'AAN] in the spec).
+- Modify: `client/src/pages/customers/CustomerFormModal.jsx`:
+  - Remove the Customer # field from create.
+  - Make the door field required and digits-only, with a live preview "Customer #: C-572".
+- Test: `server/test/customers.test.js`, `server/test/helpers.js` (mkCustomer passes a door).
+
+**Tests (written, uncommitted, currently red → green after the code):**
+- `customer number is C- plus the door number` (door ' 9572 ' → C-9572)
+- `single-digit door is padded to two digits` (7 → C-07)
+- `door number is required on create` (missing / '' / '   ' → 400)
+- `door number must be digits` ('57A', '5-7', 'abc' → 400)
+- `door whose C- number is already taken is rejected with 409, nothing created` (9301 then 09301)
+- `changing the door later does not change the customer number`
+
+**Prod data step (needs user approval):** rename Caasha C-04 → C-572 via the existing Edit Number endpoint.
+
+### Task 6: Zone level between Group and Sub Zone; collector max 10 Sub Zones
+
+**Files:**
+- Modify: `server/db.js`
+  - `CREATE TABLE IF NOT EXISTS group_zones (id SERIAL PK, group_id INT NOT NULL REFERENCES groups(id) ON DELETE RESTRICT, code VARCHAR(30) NOT NULL, name VARCHAR(100), status VARCHAR(20) NOT NULL DEFAULT 'active', created_by INT, created_at, updated_at, UNIQUE (group_id, code))`
+  - `ALTER TABLE routes ADD COLUMN IF NOT EXISTS group_zone_id INTEGER REFERENCES group_zones(id) ON DELETE SET NULL`
+- Create: `server/routes/groupZones.js`, mounted at `/api/v2/group-zones`. Endpoints: GET `?group_id=`, GET `/:id` (with its Sub Zones), POST, PUT. Roles and zone-access checks are the same as `groups.js`.
+- Modify: `server/routes/routesEntity.js`
+  - POST/PUT accept `group_zone_id`, which must belong to the same group.
+  - Collector cap: if the collector already has 10 routes (excluding this one), return 400 "A collector can have at most 10 Sub Zones."
+- Modify: `server/routes/customers.js`: GET returns `group_zone_name`, via a join `routes → group_zones`.
+- Client:
+  - `useGroupZones` hook.
+  - GroupDetailPage: list Zones, and Sub Zones grouped under their Zone.
+  - Sub Zone form: Zone select.
+  - CustomerFormModal: District › Group › Zone › Sub Zone cascade.
+  - Customer breadcrumb `Group › District › Zone › Sub Zone`.
+  - i18n: en "Zone" / so "Zone".
+
+**Tests:**
+- `group zone: create under group, code unique per group` (same code in another group OK; duplicate in same group → 409)
+- `sub zone: group_zone_id from another group rejected` (400)
+- `collector: 11th sub zone rejected` (10 OK, 11th → 400)
+- `customer detail returns group_zone_name`
+
+**Display order (all pages):** `Group 2 › Farah Omar (Baarsiigo) › Zone A › Sub Zone 1 › Caasha (C-572)`
+
+### Task 7: Door / Customer # change needs admin approval; invoices snapshot the number
+
+Follows the existing request→approve pattern of `inventory_adjustment_requests`.
+
+**Files:**
+- Modify: `server/db.js`
+  - Create `customer_number_change_requests`:
+    - id, customer_id FK
+    - old_door, new_door, old_number, new_number
+    - status ('pending','approved','rejected')
+    - requested_by, decided_by, decided_at, reason, created_at
+  - Add a partial unique index allowing one pending request per customer.
+  - Add `invoices.customer_number_snapshot VARCHAR(20)`. Backfill it once from the current `customers.customer_number`, with `WHERE customer_number_snapshot IS NULL`.
+- Modify: `server/routes/customers.js`
+  - PUT with a changed `door_number` no longer writes it. It creates a pending request instead (409 if one is already pending, or if the new C-number or door is taken), and returns 202 with the request.
+  - The existing Edit Number endpoint also becomes a request.
+  - New endpoints:
+    - `GET /customers/number-requests?status=pending` (admin, gudoomiye)
+    - `POST /customers/number-requests/:id/approve` (admin only)
+    - `POST /customers/number-requests/:id/reject` (admin only)
+  - Approve re-checks uniqueness, then updates door and number in one transaction. Approve and reject are both written to the audit log.
+- Modify: invoice creation (`server/routes/invoices.js`, batch invoice creation in `batches.js`): write `customer_number_snapshot`. Invoice reads and PDFs show the snapshot.
+- Client:
+  - Customer detail shows the pending request with Approve / Reject for admin.
+  - Add an "Approvals" list (number requests) to the existing approvals area, or to the customer list as a filter.
+  - The door field on edit shows "Change needs admin approval".
+
+**Tests:**
+- `door change creates pending request, customer unchanged`
+- `second pending request for same customer → 409`
+- `gudoomiye cannot approve (403); admin approves → door and C-number updated`
+- `reject leaves customer unchanged`
+- `approve fails 409 if new number got taken meanwhile`
+- `invoice created before approval keeps old number; invoice after shows new number`
+
+**Ruling (default, user may change):** CSV import rejects rows without a door number. The admin is the approver.
