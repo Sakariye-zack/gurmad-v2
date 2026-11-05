@@ -7,6 +7,7 @@ const { pool, logAudit } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { rejectIfInfected } = require('../lib/virusScan');
+const { trimmedLogo } = require('../lib/companyBranding');
 
 const router = express.Router();
 
@@ -79,17 +80,8 @@ router.get('/company/name', async (req, res) => {
 const ICON_SIZES = [64, 180, 192, 512];
 const iconCache = new Map();
 
-// Company logos are often a wordmark floating in a large padded square, which
-// renders tiny in a 26px header or a launcher icon. Trim the uniform background
-// border off first (colour sampled from the logo's own corner), then callers
-// re-add whatever margin they want.
-async function trimmedLogo(filePath) {
-  const flat = await sharp(filePath).flatten({ background: { r: 255, g: 255, b: 255 } }).toBuffer();
-  const corner = await sharp(flat).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
-  const bg = { r: corner[0], g: corner[1], b: corner[2], alpha: 1 };
-  const trimmed = await sharp(flat).trim({ background: bg, threshold: 40 }).toBuffer();
-  return { buffer: trimmed, bg };
-}
+// trimmedLogo (lib/companyBranding.js): logos are often a wordmark floating in
+// a large padded square, which renders tiny in a 26px header or a launcher icon.
 
 // Public like /company/logo: the same logo with its empty padding trimmed, for
 // small in-app placements (headers, login medallion).

@@ -3,8 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { NAV, NAV_LABEL_KEYS } from './Sidebar.jsx';
 import RoleGate from '../components/RoleGate.jsx';
-import CompanyLogo from '../components/CompanyLogo.jsx';
-import { useCompanyName } from '../hooks/useSettings.js';
+import BrandMark from '../components/BrandMark.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
 // Sidebar / Navigation UX — Implementation Spec §7/§9/§13/§15. The mobile
@@ -23,8 +22,6 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
   // System name — user-requested ('meel kasta oo magaca system ku ka soo
   // muuqanayo waa in aan markan update gareeyo'): same fix as
   // Sidebar.jsx's own header, applied here too.
-  const { data: companyNameData } = useCompanyName();
-  const companyName = companyNameData?.data?.company_name || 'GURMAD V2';
   const { t } = useI18n();
 
   useEffect(() => {
@@ -101,7 +98,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
         }}
       >
         <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '18px', color: 'var(--brand)' }}>{companyName}</span>} height={28} />
+          <BrandMark logoHeight={28} />
           {/* QA Defect #1 fix: 44x44 clickable/touchable area (was 28x28,
               20px icon + 4px padding). Icon itself stays 20px — only the
               interactive hit area grows, via fixed width/height + flex
