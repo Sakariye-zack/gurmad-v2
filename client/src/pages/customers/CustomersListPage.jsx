@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, Plus } from 'lucide-react';
-import { PageHeader, Button, DataTable, StatusBadge, FilterBar } from '../../components/ui/index.js';
+import { PageHeader, Button, DataTable, StatusBadge, FilterBar, Card } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useCustomers } from '../../hooks/useCustomers.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
+import { useCustomers, useNumberRequests } from '../../hooks/useCustomers.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
@@ -21,6 +22,10 @@ export default function CustomersListPage() {
     customer_type: typeFilter || undefined,
   });
   const customers = data?.data || [];
+  const { user } = useAuth();
+  const canSeeRequests = ['admin', 'gudoomiye'].includes((user?.role || '').toLowerCase());
+  const { data: reqData } = useNumberRequests({ enabled: canSeeRequests });
+  const pendingRequests = reqData?.data || [];
 
   return (
     <div>
@@ -34,6 +39,18 @@ export default function CustomersListPage() {
           </RoleGate>
         }
       />
+
+      {pendingRequests.length > 0 && (
+        <Card style={{ padding: '12px 16px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '6px' }}>{t('cust.m.pendingChanges')} ({pendingRequests.length})</div>
+          {pendingRequests.map((r) => (
+            <div key={r.id} style={{ fontSize: '13px', padding: '2px 0' }} className="tabular-nums">
+              <a href={'/customers/' + r.customer_id} onClick={(e) => { e.preventDefault(); navigate('/customers/' + r.customer_id); }}>{r.customer_name}</a>
+              {' — '}{r.old_number} → {r.new_number}
+            </div>
+          ))}
+        </Card>
+      )}
 
       <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('cust.search_by_customer_number_name')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>

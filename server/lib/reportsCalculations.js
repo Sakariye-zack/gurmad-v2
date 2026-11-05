@@ -279,7 +279,7 @@ async function getInvoicesSummary({ zoneId = null, status = null, periodStart, p
   if (status) { params.push(status); clauses.push(`i.status = $${params.length}`); }
   params.push(limit, offset);
   const res = await client.query(
-    `SELECT i.id, i.invoice_number, i.invoice_total, i.status, i.created_at, c.name AS customer_name, c.customer_number
+    `SELECT i.id, i.invoice_number, i.invoice_total, i.status, i.created_at, c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number
      FROM invoices i JOIN customers c ON i.customer_id = c.id
      WHERE ${clauses.join(' AND ')} ORDER BY i.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params

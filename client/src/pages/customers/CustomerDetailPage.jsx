@@ -4,7 +4,7 @@ import { ArrowLeft, Users, Pencil, Hash, Archive, RotateCcw, Receipt, HandCoins,
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useGroup } from '../../hooks/useGroups.js';
-import { useCustomer, useUpdateCustomerStatus, useCustomerCollectionHistory } from '../../hooks/useCustomers.js';
+import { useCustomer, useUpdateCustomerStatus, useCustomerCollectionHistory, useNumberRequests, useDecideNumberRequest } from '../../hooks/useCustomers.js';
 import { useInvoices, useDebts } from '../../hooks/useFinancial.js';
 import CustomerFormModal from './CustomerFormModal.jsx';
 import CustomerNumberEditModal from './CustomerNumberEditModal.jsx';
@@ -82,6 +82,10 @@ export default function CustomerDetailPage() {
         }
       />
 
+      <RoleGate roles={['admin', 'gudoomiye']}>
+        <PendingNumberRequestCard customerId={customer.id} />
+      </RoleGate>
+
       <DetailGrid items={[
         { label: t('portal.account.customerNumber'), value: customer.customer_number, className: 'tabular-nums' },
         { label: t('common.status'), value: <StatusBadge status={customer.status} /> },
@@ -132,6 +136,44 @@ export default function CustomerDetailPage() {
         isLoading={updateStatus.isPending}
       />
     </div>
+  );
+}
+
+// Pending door / Customer # change for this customer. Approve / Reject are
+// admin-only (the server enforces it; RoleGate is presentation).
+function PendingNumberRequestCard({ customerId }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const { data } = useNumberRequests({ customer_id: customerId });
+  const decide = useDecideNumberRequest();
+  const req = data?.data?.[0];
+  if (!req) return null;
+
+  async function act(action) {
+    try {
+      await decide.mutateAsync({ id: req.id, action });
+      toast.success(t(action === 'approve' ? 'cust.m.requestApproved' : 'cust.m.requestRejected'));
+    } catch (err) {
+      toast.error(err.message || t('common.somethingWrong'));
+    }
+  }
+
+  return (
+    <Card style={{ ...cardPad, marginBottom: '16px', borderColor: 'var(--warning, #d97706)' }}>
+      <Label>{t('cust.m.pendingChange')}</Label>
+      <p style={{ margin: '6px 0 0', fontSize: '14px', fontWeight: 600 }} className="tabular-nums">
+        {t('cust.door_col', 'Door #')}: {req.old_door || '—'} → {req.new_door || '—'} · {req.old_number} → {req.new_number}
+      </p>
+      <p style={{ margin: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+        {t('cust.m.requestedBy', undefined, { name: req.requested_by_name || req.requested_by_username || '—', date: new Date(req.created_at).toLocaleDateString() })}
+      </p>
+      <RoleGate roles={['admin']}>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+          <Button onClick={() => act('approve')} disabled={decide.isPending}>{t('cust.m.approve')}</Button>
+          <Button variant="danger" onClick={() => act('reject')} disabled={decide.isPending}>{t('cust.m.reject')}</Button>
+        </div>
+      </RoleGate>
+    </Card>
   );
 }
 

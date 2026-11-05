@@ -50,6 +50,38 @@ function normaliseDoor(v) {
   if (s.length > 20) return { error: 'door_number must be at most 20 characters.' };
   return { value: s };
 }
+// Customer # is C- + door digits (leading zeros ignored, min 2 digits).
+function customerNumberFromDoor(door) {
+  return 'C-' + String(door).replace(/^0+(?=\d)/, '').padStart(2, '0');
+}
+
+// Creates a pending door/number change request after checking the one-pending
+// rule and uniqueness. Returns { request } or { status, error }.
+async function createNumberRequest(user, current, { newDoor, newNumber }) {
+  const pending = await pool.query(`SELECT id FROM customer_number_change_requests WHERE customer_id = $1 AND status = 'pending'`, [current.id]);
+  if (pending.rows.length) return { status: 409, error: { message: 'This customer already has a pending door/number change request.', code: 'PENDING_EXISTS' } };
+  const numDup = await pool.query('SELECT id FROM customers WHERE customer_number = $1 AND id != $2', [newNumber, current.id]);
+  if (numDup.rows.length) return { status: 409, error: { message: `Customer Number ${newNumber} is already assigned to another customer.`, code: 'DUPLICATE' } };
+  if (newDoor) {
+    const doorDup = await pool.query('SELECT id FROM customers WHERE door_number = $1 AND id != $2', [newDoor, current.id]);
+    if (doorDup.rows.length) return { status: 409, error: DOOR_DUP.error };
+  }
+  try {
+    const r = await pool.query(
+      `INSERT INTO customer_number_change_requests (customer_id, old_door, new_door, old_number, new_number, requested_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [current.id, current.door_number, newDoor, current.customer_number, newNumber, user.id]
+    );
+    const request = r.rows[0];
+    await logAudit({ actorId: user.id, actorUsername: user.username, action: 'customer.number_change_request', entityType: 'customer', entityId: current.id,
+      before: { door_number: current.door_number, customer_number: current.customer_number }, after: { door_number: newDoor, customer_number: newNumber, request_id: request.id } });
+    return { request };
+  } catch (err) {
+    if (err.code === '23505') return { status: 409, error: { message: 'This customer already has a pending door/number change request.', code: 'PENDING_EXISTS' } };
+    throw err;
+  }
+}
+
 const DOOR_DUP = { error: { message: 'That door number is already used by another customer.', code: 'DUPLICATE' } };
 
 function validateCustomerInput(body, { partial = false } = {}) {
@@ -320,6 +352,110 @@ router.get('/check-duplicate', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/v2/customers/number-requests — door/number change requests
+// (admin sees all; gudoomiye only their own zone). ?status=pending|approved|rejected|all, ?customer_id=
+router.get('/number-requests', authenticateToken, requireRole('admin', 'gudoomiye'), async (req, res) => {
+  try {
+    const where = [];
+    const params = [];
+    const status = req.query.status || 'pending';
+    if (status !== 'all') {
+      if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: { message: 'Invalid status filter.', code: 'VALIDATION' } });
+      params.push(status);
+      where.push(`r.status = $${params.length}`);
+    }
+    if (req.query.customer_id) {
+      const cid = parseStrictId(String(req.query.customer_id));
+      if (cid === null) return res.status(400).json({ error: { message: 'Invalid customer_id filter.', code: 'VALIDATION' } });
+      params.push(cid);
+      where.push(`r.customer_id = $${params.length}`);
+    }
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null) {
+      params.push(myZoneId);
+      where.push(`c.zone_id = $${params.length}`);
+    }
+    const result = await pool.query(
+      `SELECT r.*, c.name AS customer_name, c.zone_id, u.username AS requested_by_username, u.full_name AS requested_by_name
+       FROM customer_number_change_requests r
+       JOIN customers c ON c.id = r.customer_id
+       LEFT JOIN v2_users u ON u.id = r.requested_by
+       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       ORDER BY r.created_at DESC LIMIT 200`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to list number change requests.', code: 'INTERNAL' } });
+  }
+});
+
+// POST /api/v2/customers/number-requests/:id/approve — admin only. Re-checks
+// uniqueness, then updates door + customer number in one transaction.
+router.post('/number-requests/:id/approve', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid request id.', code: 'VALIDATION' } });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const rq = await client.query('SELECT * FROM customer_number_change_requests WHERE id = $1 FOR UPDATE', [id]);
+    if (rq.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Request not found.', code: 'NOT_FOUND' } }); }
+    const request = rq.rows[0];
+    if (request.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'This request has already been decided.', code: 'NOT_PENDING' } }); }
+    const cu = await client.query('SELECT * FROM customers WHERE id = $1 FOR UPDATE', [request.customer_id]);
+    const before = cu.rows[0];
+    const numDup = await client.query('SELECT id FROM customers WHERE customer_number = $1 AND id != $2', [request.new_number, request.customer_id]);
+    if (numDup.rows.length) { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: `Customer Number ${request.new_number} is now assigned to another customer.`, code: 'DUPLICATE' } }); }
+    if (request.new_door) {
+      const doorDup = await client.query('SELECT id FROM customers WHERE door_number = $1 AND id != $2', [request.new_door, request.customer_id]);
+      if (doorDup.rows.length) { await client.query('ROLLBACK'); return res.status(409).json(DOOR_DUP); }
+    }
+    const upd = await client.query(
+      `UPDATE customers SET door_number = $1, customer_number = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
+      [request.new_door, request.new_number, request.customer_id]
+    );
+    const done = await client.query(
+      `UPDATE customer_number_change_requests SET status = 'approved', decided_by = $1, decided_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+      [req.user.id, id]
+    );
+    await client.query('COMMIT');
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.number_change_approve', entityType: 'customer', entityId: request.customer_id,
+      before: { door_number: before.door_number, customer_number: before.customer_number }, after: { door_number: upd.rows[0].door_number, customer_number: upd.rows[0].customer_number, request_id: id } });
+    res.json({ data: done.rows[0], customer: upd.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'That door or Customer Number is already used by another customer.', code: 'DUPLICATE' } });
+    res.status(500).json({ error: { message: 'Failed to approve request.', code: 'INTERNAL' } });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/v2/customers/number-requests/:id/reject — admin only.
+router.post('/number-requests/:id/reject', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(400).json({ error: { message: 'Invalid request id.', code: 'VALIDATION' } });
+  const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim().slice(0, 500) : null;
+  try {
+    const r = await pool.query(
+      `UPDATE customer_number_change_requests SET status = 'rejected', decided_by = $1, decided_at = CURRENT_TIMESTAMP, reason = $2
+       WHERE id = $3 AND status = 'pending' RETURNING *`,
+      [req.user.id, reason, id]
+    );
+    if (r.rows.length === 0) {
+      const ex = await pool.query('SELECT status FROM customer_number_change_requests WHERE id = $1', [id]);
+      if (ex.rows.length === 0) return res.status(404).json({ error: { message: 'Request not found.', code: 'NOT_FOUND' } });
+      return res.status(409).json({ error: { message: 'This request has already been decided.', code: 'NOT_PENDING' } });
+    }
+    const request = r.rows[0];
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.number_change_reject', entityType: 'customer', entityId: request.customer_id,
+      before: { customer_number: request.old_number }, after: { requested_number: request.new_number, request_id: id, reason } });
+    res.json({ data: request });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to reject request.', code: 'INTERNAL' } });
+  }
+});
+
 // GET /api/v2/customers/:id
 router.get('/:id', authenticateToken, async (req, res) => {
   const id = parseStrictId(req.params.id);
@@ -393,7 +529,7 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   const groupRouteError = await validateGroupRoute(data, data.zone_id, data.group_id);
   if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
 
-  const customerNumber = 'C-' + door.value.replace(/^0+(?=\d)/, '').padStart(2, '0'); // leading zeros ignored: 09301 == 9301
+  const customerNumber = customerNumberFromDoor(door.value); // leading zeros ignored: 09301 == 9301
   const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1', [customerNumber]);
   if (dup.rows.length) return res.status(409).json({ error: { message: `Customer Number ${customerNumber} is already assigned to another customer — use a different door number.`, code: 'DUPLICATE' } });
 
@@ -444,12 +580,14 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
 
   const { errors, data } = validateCustomerInput(req.body, { partial: true });
   if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
+  // A changed door is never written here — it becomes an admin-approved request.
+  let requestedDoor; // undefined = door not in body
   if (req.body && 'door_number' in req.body) {
     const door = normaliseDoor(req.body.door_number);
     if (door.error) return res.status(400).json({ error: { message: door.error, code: 'VALIDATION' } });
-    data.door_number = door.value;
+    requestedDoor = door.value;
   }
-  if (Object.keys(data).length === 0) return res.status(400).json({ error: { message: 'No valid fields provided to update.', code: 'VALIDATION' } });
+  if (Object.keys(data).length === 0 && requestedDoor === undefined) return res.status(400).json({ error: { message: 'No valid fields provided to update.', code: 'VALIDATION' } });
 
   try {
     const existing = await pool.query('SELECT * FROM customers WHERE id = $1', [id]);
@@ -472,6 +610,22 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     const effectiveGroupId = data.group_id !== undefined ? data.group_id : current.group_id;
     const groupRouteError = await validateGroupRoute(data, effectiveZoneId, effectiveGroupId);
     if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+
+    // Door change (differs from current) -> pending request; other fields still apply.
+    let doorChange = false;
+    let numberRequest = null;
+    if (requestedDoor !== undefined && requestedDoor !== (current.door_number ?? null)) {
+      if (requestedDoor === null || !/^\d+$/.test(requestedDoor)) {
+        return res.status(400).json({ error: { message: 'door_number must contain digits only.', code: 'VALIDATION' } });
+      }
+      doorChange = true;
+      const made = await createNumberRequest(req.user, current, { newDoor: requestedDoor, newNumber: customerNumberFromDoor(requestedDoor) });
+      if (made.error) return res.status(made.status).json({ error: made.error });
+      numberRequest = made.request;
+    }
+    if (Object.keys(data).length === 0) {
+      return res.status(doorChange ? 202 : 200).json({ data: doorChange ? numberRequest : current });
+    }
 
     const fields = Object.keys(data);
     const setSql = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
@@ -500,7 +654,7 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     if (data.route_id !== undefined && data.route_id !== current.route_id) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.route_change', entityType: 'customer', entityId: customer.id, before: { route_id: current.route_id }, after: { route_id: customer.route_id } });
     }
-    res.json({ data: customer });
+    res.json(numberRequest ? { data: customer, number_request: numberRequest } : { data: customer });
   } catch (err) {
     if (err.code === '23505' && err.constraint === 'idx_customers_door_number') return res.status(409).json(DOOR_DUP);
     if (err.code === '23503') {
@@ -532,22 +686,13 @@ router.put('/:id/customer-number', authenticateToken, requireRole('admin', 'gudo
       return res.status(403).json({ error: { message: 'You do not have access to this customer.', code: 'FORBIDDEN' } });
     }
 
-    const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1 AND id != $2', [newNumber, id]);
-    if (dup.rows.length) {
-      return res.status(409).json({ error: { message: `Customer Number ${newNumber} is already assigned to another customer.`, code: 'DUPLICATE' } });
+    if (newNumber === current.customer_number) {
+      return res.status(400).json({ error: { message: 'That is already the current Customer Number.', code: 'VALIDATION' } });
     }
-
-    const result = await pool.query(
-      `UPDATE customers SET customer_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
-      [newNumber, id]
-    );
-    const customer = result.rows[0];
-    await logAudit({
-      actorId: req.user.id, actorUsername: req.user.username, action: 'customer.number_change',
-      entityType: 'customer', entityId: customer.id,
-      before: { customer_number: current.customer_number }, after: { customer_number: customer.customer_number },
-    });
-    res.json({ data: customer });
+    // Number changes need admin approval; the door is left as it is.
+    const made = await createNumberRequest(req.user, current, { newDoor: current.door_number ?? null, newNumber });
+    if (made.error) return res.status(made.status).json({ error: made.error });
+    return res.status(202).json({ data: made.request });
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: { message: `Customer Number ${newNumber} is already assigned to another customer.`, code: 'DUPLICATE' } });

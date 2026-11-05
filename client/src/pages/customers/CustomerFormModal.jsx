@@ -171,8 +171,9 @@ function CustomerFormModalContent({ onClose, customer }) {
     };
     try {
       if (isEdit) {
-        await updateCustomer.mutateAsync(payload);
-        toast.success(t('fin.m.updated', undefined, { name: payload.name }));
+        const result = await updateCustomer.mutateAsync(payload);
+        if (result?.number_request || result?.data?.new_number) toast.success(t('cust.m.sentForApproval'));
+        else toast.success(t('fin.m.updated', undefined, { name: payload.name }));
       } else {
         const result = await createCustomer.mutateAsync(payload);
         toast.success(t('cust.m.createdFull', undefined, { number: result.data.customer_number, name: payload.name }));
@@ -314,7 +315,7 @@ function CustomerFormModalContent({ onClose, customer }) {
         <Field
           label={t('cust.door_number', 'Door # (Route)')}
           error={fieldErrors.door_number}
-          hint={!isEdit && /^\d+$/.test(form.door_number.trim()) ? t('cust.m.numberPreview', undefined, { number: 'C-' + form.door_number.trim().padStart(2, '0') }) : undefined}
+          hint={isEdit ? t('cust.m.doorApprovalHint') : /^\d+$/.test(form.door_number.trim()) ? t('cust.m.numberPreview', undefined, { number: 'C-' + form.door_number.trim().padStart(2, '0') }) : undefined}
         >
           <input value={form.door_number} onChange={(e) => set('door_number', e.target.value)} placeholder="572" maxLength={20} inputMode={isEdit ? undefined : 'numeric'} style={inputStyle} />
         </Field>
