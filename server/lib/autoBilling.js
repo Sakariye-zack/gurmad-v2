@@ -66,7 +66,8 @@ async function recordedRun(kind, periodKey, triggeredBy, work) {
     const result = await work(client, createdBy);
     await client.query('COMMIT');
     let runId = null;
-    const first = (await pool.query(`SELECT 1 FROM billing_runs WHERE kind = $1 AND period_key = $2 LIMIT 1`, [kind, periodKey])).rows.length === 0;
+    // "First" means first SUCCESSFUL row: error rows must not suppress the first success record.
+    const first = (await pool.query(`SELECT 1 FROM billing_runs WHERE kind = $1 AND period_key = $2 AND error IS NULL LIMIT 1`, [kind, periodKey])).rows.length === 0;
     if (result.created > 0 || triggeredBy || first) {
       const ins = await pool.query(
         `INSERT INTO billing_runs (kind, period_key, started_at, finished_at, created_count, skipped, triggered_by) VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING id`,
@@ -77,8 +78,13 @@ async function recordedRun(kind, periodKey, triggeredBy, work) {
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
     try {
-      await pool.query(`INSERT INTO billing_runs (kind, period_key, started_at, finished_at, error, triggered_by) VALUES ($1,$2,$3,NOW(),$4,$5)`,
-        [kind, periodKey, startedAt, String(err.message || err), triggeredBy || null]);
+      // Repeated identical failures (hourly ticks x catch-up days) are recorded once, not every tick.
+      const msg = String(err.message || err);
+      const last = await pool.query(`SELECT error FROM billing_runs WHERE kind = $1 AND period_key = $2 ORDER BY id DESC LIMIT 1`, [kind, periodKey]);
+      if (triggeredBy || !(last.rows[0] && last.rows[0].error === msg)) {
+        await pool.query(`INSERT INTO billing_runs (kind, period_key, started_at, finished_at, error, triggered_by) VALUES ($1,$2,$3,NOW(),$4,$5)`,
+          [kind, periodKey, startedAt, msg, triggeredBy || null]);
+      }
     } catch (_) { /* ignore */ }
     throw err;
   } finally {
@@ -100,6 +106,15 @@ async function safeInsert(client, params) {
   }
 }
 
+// Go-live cutoff: daily auto-billing never bills visits before the local date the engine first ran,
+// so the first boot cannot retro-bill history that was already invoiced by hand.
+async function ensureDailyStartDate(tz) {
+  await pool.query(`INSERT INTO billing_settings (id, daily_start_date) VALUES (1, $1::date) ON CONFLICT (id) DO NOTHING`, [localParts(new Date(), tz).date]);
+  await pool.query(`UPDATE billing_settings SET daily_start_date = $1::date WHERE id = 1 AND daily_start_date IS NULL`, [localParts(new Date(), tz).date]);
+  const r = await pool.query(`SELECT to_char(daily_start_date, 'YYYY-MM-DD') AS d FROM billing_settings WHERE id = 1`);
+  return r.rows[0].d;
+}
+
 // manual=true ignores the day>=28 rule. period ('YYYY-MM') defaults to the local month of `now`.
 async function runMonthly({ now = new Date(), triggeredBy = null, manual = false, period = null } = {}) {
   const tz = await getTimezone();
@@ -112,6 +127,7 @@ async function runMonthly({ now = new Date(), triggeredBy = null, manual = false
     const custs = await client.query(
       `SELECT c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name,
          EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.status <> 'voided'
+           AND i.billing_period IS NULL AND i.batch_customer_id IS NULL
            AND to_char((i.created_at AT TIME ZONE 'UTC' AT TIME ZONE $2), 'YYYY-MM') = $1) AS already_invoiced
        FROM customers c LEFT JOIN zones z ON z.id = c.zone_id
        WHERE c.status = 'active' AND c.billing_type = 'monthly'
@@ -134,11 +150,15 @@ async function runMonthly({ now = new Date(), triggeredBy = null, manual = false
 async function runDaily({ date, triggeredBy = null } = {}) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('runDaily needs a date (YYYY-MM-DD).');
   const tz = await getTimezone();
+  const startDate = await ensureDailyStartDate(tz);
+  if (date < startDate) return { created: 0, skipped: [], before_go_live: true };
   return recordedRun('daily', date, triggeredBy, async (client, createdBy) => {
     // status_at is a naive UTC timestamp: convert to company-local time before taking the date.
     // Any existing invoice (even voided) blocks re-billing the visit: a deliberate void must stick.
     const rows = await client.query(
-      `SELECT bc.id AS bc_id, c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name
+      `SELECT bc.id AS bc_id, c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name,
+         EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.status <> 'voided' AND i.batch_customer_id IS NULL
+           AND (i.created_at AT TIME ZONE 'UTC' AT TIME ZONE $2)::date = $1::date) AS already_invoiced
        FROM batch_customers bc
        JOIN customers c ON c.id = bc.customer_id
        LEFT JOIN zones z ON z.id = c.zone_id
@@ -149,6 +169,7 @@ async function runDaily({ date, triggeredBy = null } = {}) {
     const skipped = [];
     for (const r of rows.rows) {
       if (!hasFee(r.fee)) { skipped.push(skipEntry(r, 'no_fee')); continue; }
+      if (r.already_invoiced) { skipped.push(skipEntry(r, 'already_invoiced')); continue; }
       const res = await safeInsert(client, { customerId: r.id, batchCustomerId: r.bc_id, total: r.fee, currency: r.fee_currency || 'USD',
         zoneNameSnapshot: r.zone_name, notes: `Daily service ${date} (auto-generated)`, createdBy, autoGenerated: true });
       if (res.error) skipped.push(skipEntry(r, 'error: ' + res.error));
@@ -186,6 +207,7 @@ async function schedulerTick(now = new Date()) {
 
 function startScheduler() {
   if (process.env.AUTO_BILLING === 'off') return null;
+  getTimezone().then(ensureDailyStartDate).catch((e) => console.error('auto-billing go-live date failed:', e && e.message));
   const safeTick = () => schedulerTick().catch((e) => console.error('auto-billing tick failed:', e && e.message));
   const first = setTimeout(safeTick, 30 * 1000);
   const timer = setInterval(safeTick, 60 * 60 * 1000);

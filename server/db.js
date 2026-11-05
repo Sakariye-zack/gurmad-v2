@@ -537,6 +537,7 @@ async function runMigrations() {
       triggered_by INTEGER
     );
   `);
+  await pool.query(`CREATE TABLE IF NOT EXISTS billing_settings (id INTEGER PRIMARY KEY CHECK (id = 1), daily_start_date DATE);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_runs_kind_period ON billing_runs(kind, period_key);`);
 
   // Door / Customer # changes go through an admin-approved request.

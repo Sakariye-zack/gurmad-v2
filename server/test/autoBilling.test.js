@@ -139,7 +139,8 @@ test('monthly: customer with a manual invoice in that local month is skipped as 
   const c = await mkCustomer(w, { billing_type: 'monthly', fee: 15 });
   const manual = await api('POST', '/invoices', { token: w.tokens.admin, body: { customer_id: c.id, invoice_total: 15 } });
   assert.equal(manual.status, 201);
-  const period = (await db.query(`SELECT to_char(NOW() AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Mogadishu', 'YYYY-MM') AS p`)).rows[0].p;
+  const period = '2031-08';
+  await db.query(`UPDATE invoices SET created_at = '2031-08-15 10:00:00' WHERE id = $1`, [manual.data.id]);
   const r = await runBilling(w, { kind: 'monthly', period });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal((await invoicesOf(c.id)).length, 1);
@@ -150,4 +151,33 @@ test('monthly: customer with a manual invoice in that local month is skipped as 
   const r2 = await runBilling(w, { kind: 'monthly', period });
   assert.ok(r2.data.created >= 1);
   assert.equal((await invoicesOf(c.id)).length, 2);
+});
+
+test('daily: go-live cutoff excludes earlier visits; same-day manual invoice blocks', async () => {
+  const w = await setupWorld();
+  const prev = (await db.query('SELECT daily_start_date FROM billing_settings WHERE id = 1')).rows[0];
+  const shop = (n) => mkCustomer(w, { customer_type: 'commercial', business_name: 'Cut' + n, commercial_shift: 'day', billing_type: 'daily', fee: 2 });
+  const early = await shop(1); const onDay = await shop(2); const manual = await shop(3);
+  const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom','2031-09-01','2031-09-30') RETURNING id`, [w.zoneA.id])).rows[0].id;
+  const batch = (await db.query(
+    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, commercial_shift, start_date) VALUES ($1,$2,$3,1,'commercial','day','2031-09-09') RETURNING id`,
+    ['ABC-' + Date.now(), w.zoneA.id, cyc])).rows[0].id;
+  const visit = (c, at) => db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced',$3)`, [batch, c.id, at]);
+  try {
+    await db.query(`INSERT INTO billing_settings (id, daily_start_date) VALUES (1, '2031-09-10') ON CONFLICT (id) DO UPDATE SET daily_start_date = '2031-09-10'`);
+    await visit(early, '2031-09-09 09:00:00');
+    await visit(onDay, '2031-09-10 09:00:00');
+    await visit(manual, '2031-09-11 09:00:00');
+    const m = await api('POST', '/invoices', { token: w.tokens.admin, body: { customer_id: manual.id, invoice_total: 2 } });
+    await db.query(`UPDATE invoices SET created_at = '2031-09-11 08:00:00' WHERE id = $1`, [m.data.id]);
+    assert.equal((await runBilling(w, { kind: 'daily', date: '2031-09-09' })).data.created, 0);
+    assert.equal((await invoicesOf(early.id)).length, 0);
+    assert.equal((await runBilling(w, { kind: 'daily', date: '2031-09-10' })).data.created, 1);
+    const r = await runBilling(w, { kind: 'daily', date: '2031-09-11' });
+    assert.equal(r.data.created, 0);
+    assert.equal((r.data.skipped.find((x) => x.customer_id === manual.id) || {}).reason, 'already_invoiced');
+  } finally {
+    if (prev) await db.query('UPDATE billing_settings SET daily_start_date = $1 WHERE id = 1', [prev.daily_start_date]);
+    else await db.query('DELETE FROM billing_settings WHERE id = 1');
+  }
 });
