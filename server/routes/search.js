@@ -55,10 +55,10 @@ router.get('/', authenticateToken, async (req, res) => {
     // Invoices — same role gate as invoices.js's own GET /.
     if (INVOICE_VIEW_ROLES.includes(role)) {
       const params = [like];
-      let where = `(i.invoice_number ILIKE $1 OR c.name ILIKE $1 OR c.customer_number ILIKE $1)`;
+      let where = `(i.invoice_number ILIKE $1 OR c.name ILIKE $1 OR c.customer_number ILIKE $1 OR i.customer_number_snapshot ILIKE $1)`;
       if (myZoneId !== null) { params.push(myZoneId); where += ` AND c.zone_id = $${params.length}`; }
       const r = await pool.query(
-        `SELECT i.id, i.invoice_number, i.status, i.invoice_total, c.name AS customer_name, c.customer_number
+        `SELECT i.id, i.invoice_number, i.status, i.invoice_total, c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number
          FROM invoices i JOIN customers c ON c.id = i.customer_id
          WHERE ${where} ORDER BY i.created_at DESC LIMIT 5`,
         params

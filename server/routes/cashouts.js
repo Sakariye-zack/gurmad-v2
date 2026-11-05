@@ -247,7 +247,7 @@ router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), a
     }
     const result = await pool.query(
       `SELECT payments.id, payments.amount, payments.currency, payments.method, payments.amount_usd, payments.created_at,
-              invoices.invoice_number, customers.name AS customer_name, customers.customer_number
+              invoices.invoice_number, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
        FROM payments
        JOIN invoices ON payments.invoice_id = invoices.id
        JOIN customers ON invoices.customer_id = customers.id

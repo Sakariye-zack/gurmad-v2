@@ -495,6 +495,33 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);`);
   await pool.query(`CREATE SEQUENCE IF NOT EXISTS invoice_number_seq;`);
 
+  // Customer # snapshot: invoices keep the number they were issued with even
+  // if the customer's door/number is later changed (admin-approved).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_number_snapshot VARCHAR(20);`);
+  // Idempotent backfill (only touches rows still NULL).
+  await pool.query(`UPDATE invoices SET customer_number_snapshot = customers.customer_number
+    FROM customers WHERE invoices.customer_id = customers.id AND invoices.customer_number_snapshot IS NULL;`);
+
+  // Door / Customer # changes go through an admin-approved request.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_number_change_requests (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      old_door VARCHAR(20),
+      new_door VARCHAR(20),
+      old_number VARCHAR(20) NOT NULL,
+      new_number VARCHAR(20) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      requested_by INTEGER NOT NULL,
+      decided_by INTEGER,
+      decided_at TIMESTAMP,
+      reason TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cnr_one_pending_per_customer ON customer_number_change_requests(customer_id) WHERE status = 'pending';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cnr_status ON customer_number_change_requests(status);`);
+
   // 3. payments — the money-movement ledger (OD-4). Append-oriented:
   // no DELETE route will ever be exposed. amount_usd is computed and
   // STORED at write time so a later exchange-rate change can never
@@ -1010,6 +1037,24 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_group_id ON routes(group_id);`);
   await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS collector_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL;`);
+
+  // Zone level between Group and Sub Zone (routes). Existing Sub Zones keep
+  // group_zone_id NULL ("No zone").
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_zones (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+      code VARCHAR(30) NOT NULL,
+      name VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (group_id, code)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_group_zones_group_id ON group_zones(group_id);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS group_zone_id INTEGER REFERENCES group_zones(id) ON DELETE SET NULL;`);
 
   // customers.group_id/route_id — LOCKED §26-1: initially and indefinitely
   // NULLABLE. No default/fake Group or Route is ever assigned here or

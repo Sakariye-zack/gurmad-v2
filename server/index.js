@@ -30,6 +30,7 @@ const staffTasksRouter = require('./routes/staffTasks');
 // Group & Group-Based Collection — Change Request. Additive routers only —
 // zero change to any existing router's mount line below.
 const groupsRouter = require('./routes/groups');
+const groupZonesRouter = require('./routes/groupZones');
 const routesEntityRouter = require('./routes/routesEntity');
 // Audit & Security Center — additive router, read-only over the existing
 // v2_audit_log. Admin-only (enforced inside the router itself).
@@ -153,6 +154,7 @@ app.use('/api/v2/users', usersRouter);
 app.use('/api/v2/roles', rolesRouter);
 app.use('/api/v2/staff-tasks', staffTasksRouter);
 app.use('/api/v2/groups', groupsRouter);
+app.use('/api/v2/group-zones', groupZonesRouter);
 app.use('/api/v2/routes', routesEntityRouter);
 app.use('/api/v2/audit', auditRouter);
 app.use('/api/v2/settings', settingsRouter);

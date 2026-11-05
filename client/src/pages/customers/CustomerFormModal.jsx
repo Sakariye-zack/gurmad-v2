@@ -3,16 +3,17 @@ import { AlertTriangle, MapPin, LocateFixed } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
+import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const EMPTY = {
-  customer_type: 'residential', customer_number: '', name: '', business_name: '', phone: '', alternate_phone: '',
+  customer_type: 'residential', name: '', business_name: '', phone: '', alternate_phone: '',
   whatsapp: '', email: '', address_line: '', zone_id: '', sub_zone: '', commercial_shift: '',
   collection_frequency: '', collection_mode: '', fee: '', notes: '',
   // Group & Group-Based Collection — Change Request, Spec §6. Both
   // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
   // §26-1: no forced/fake default, no required-field validation added).
-  group_id: '', route_id: '', door_number: '',
+  group_id: '', route_id: '', gz_filter: '', door_number: '',
   // Map location — the backend (routes/customers.js) has always validated
   // and stored lat/lng and the Map page (pages/map/MapPage.jsx) has always
   // read them; this form was the one gap in that chain — a customer could
@@ -32,7 +33,7 @@ function toFormState(customer) {
     address_line: customer.address_line || '', zone_id: String(customer.zone_id || ''), sub_zone: customer.sub_zone || '',
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
-    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', door_number: customer.door_number || '',
+    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', gz_filter: customer.group_zone_id ? String(customer.group_zone_id) : '', door_number: customer.door_number || '',
     lat: customer.lat ?? '', lng: customer.lng ?? '',
   };
 }
@@ -67,7 +68,12 @@ function CustomerFormModalContent({ onClose, customer }) {
   const { data: groupsData } = useGroups({ zone_id: form.zone_id || undefined, status: 'active' });
   const groups = form.zone_id ? (groupsData?.data || []) : [];
   const { data: routesData } = useRoutesForGroup(form.group_id || undefined);
-  const routes = form.group_id ? (routesData?.data || []).filter((r) => r.status === 'active') : [];
+  const { data: gzData } = useGroupZones(form.group_id || undefined);
+  const groupZones = form.group_id ? (gzData?.data || []).filter((z) => z.status === 'active') : [];
+  // Zone only filters the Sub Zone list; customers store route_id/group_id.
+  const routes = form.group_id
+    ? (routesData?.data || []).filter((r) => r.status === 'active' && (form.gz_filter === '' || (form.gz_filter === 'none' ? !r.group_zone_id : String(r.group_zone_id) === form.gz_filter)))
+    : [];
   const busy = createCustomer.isPending || updateCustomer.isPending;
   const isCommercial = form.customer_type === 'commercial';
 
@@ -77,8 +83,9 @@ function CustomerFormModalContent({ onClose, customer }) {
       // Changing Zone invalidates any previously-selected Group/Route;
       // changing Group invalidates any previously-selected Route — a
       // stale, no-longer-valid selection must never be silently submitted.
-      if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; }
-      if (field === 'group_id') { next.route_id = ''; }
+      if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; next.gz_filter = ''; }
+      if (field === 'group_id') { next.route_id = ''; next.gz_filter = ''; }
+      if (field === 'gz_filter') { next.route_id = ''; }
       return next;
     });
     if (fieldErrors[field]) setFieldErrors((fe) => ({ ...fe, [field]: undefined }));
@@ -117,7 +124,11 @@ function CustomerFormModalContent({ onClose, customer }) {
     const errs = {};
     if (!form.name.trim()) errs.name = 'Name is required.';
     if (!form.phone.trim()) errs.phone = 'Phone is required.';
-    if (!isEdit && form.customer_number.trim() && !/^C-\d{2,}$/i.test(form.customer_number.trim())) errs.customer_number = t('cust.m.numberFormat');
+    if (!isEdit) {
+      const door = form.door_number.trim();
+      if (!door) errs.door_number = t('cust.m.doorRequired');
+      else if (!/^\d+$/.test(door)) errs.door_number = t('cust.m.doorDigits');
+    }
     if (!form.zone_id) errs.zone_id = 'Zone is required.';
     if (isCommercial && !form.business_name.trim()) errs.business_name = 'Business name is required for commercial customers.';
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = 'Enter a valid email address.';
@@ -144,7 +155,6 @@ function CustomerFormModalContent({ onClose, customer }) {
     }
 
     const payload = {
-      ...(!isEdit && form.customer_number.trim() ? { customer_number: form.customer_number.trim().toUpperCase() } : {}),
       customer_type: form.customer_type, name: form.name.trim(), phone: form.phone.trim(),
       zone_id: parseInt(form.zone_id, 10),
       business_name: isCommercial ? form.business_name.trim() : null,
@@ -161,8 +171,9 @@ function CustomerFormModalContent({ onClose, customer }) {
     };
     try {
       if (isEdit) {
-        await updateCustomer.mutateAsync(payload);
-        toast.success(t('fin.m.updated', undefined, { name: payload.name }));
+        const result = await updateCustomer.mutateAsync(payload);
+        if (result?.number_request || result?.data?.new_number) toast.success(t('cust.m.sentForApproval'));
+        else toast.success(t('fin.m.updated', undefined, { name: payload.name }));
       } else {
         const result = await createCustomer.mutateAsync(payload);
         toast.success(t('cust.m.createdFull', undefined, { number: result.data.customer_number, name: payload.name }));
@@ -171,7 +182,7 @@ function CustomerFormModalContent({ onClose, customer }) {
     } catch (err) {
       const msg = String(err.message || '');
       if (err.status === 409 && /door number/i.test(msg)) setFieldErrors((fe) => ({ ...fe, door_number: err.message }));
-      else if (err.status === 409 && /Customer Number/i.test(msg)) setFieldErrors((fe) => ({ ...fe, customer_number: err.message }));
+      else if (err.status === 409 && /Customer Number/i.test(msg)) setFieldErrors((fe) => ({ ...fe, door_number: err.message }));
       else toast.error(err.message || t('common.somethingWrong'));
     }
   }
@@ -215,12 +226,6 @@ function CustomerFormModalContent({ onClose, customer }) {
         {isCommercial && (
           <Field label={t('cust.business_name')} error={fieldErrors.business_name}>
             <input value={form.business_name} onChange={(e) => set('business_name', e.target.value)} style={inputStyle} />
-          </Field>
-        )}
-
-        {!isEdit && (
-          <Field label={t('cust.m.numberOptional')} hint={t('cust.m.numberHint')} error={fieldErrors.customer_number}>
-            <input value={form.customer_number} onChange={(e) => set('customer_number', e.target.value)} placeholder="C-105" style={inputStyle} />
           </Field>
         )}
 
@@ -292,6 +297,13 @@ function CustomerFormModalContent({ onClose, customer }) {
               {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
             </select>
           </Field>
+          <Field label={t('group.zone', 'Zone')}>
+            <select value={form.gz_filter} onChange={(e) => set('gz_filter', e.target.value)} style={inputStyle} disabled={!form.group_id}>
+              <option value="">{form.group_id ? t('group.all_zones', 'All zones') : t('cust.select_a_group_first')}</option>
+              {groupZones.map((z) => <option key={z.id} value={String(z.id)}>{z.name ? `${z.code} — ${z.name}` : z.code}</option>)}
+              {form.group_id && <option value="none">{t('group.no_zone', 'No zone')}</option>}
+            </select>
+          </Field>
           <Field label={t('cust.route_optional')}>
             <select value={form.route_id} onChange={(e) => set('route_id', e.target.value)} style={inputStyle} disabled={!form.group_id}>
               <option value="">{form.group_id ? t('cust.no_route') : t('cust.select_a_group_first')}</option>
@@ -300,8 +312,12 @@ function CustomerFormModalContent({ onClose, customer }) {
           </Field>
         </div>
 
-        <Field label={t('cust.door_number', 'Door # (Route)')} error={fieldErrors.door_number}>
-          <input value={form.door_number} onChange={(e) => set('door_number', e.target.value)} placeholder="572" maxLength={20} style={inputStyle} />
+        <Field
+          label={t('cust.door_number', 'Door # (Route)')}
+          error={fieldErrors.door_number}
+          hint={isEdit ? t('cust.m.doorApprovalHint') : /^\d+$/.test(form.door_number.trim()) ? t('cust.m.numberPreview', undefined, { number: 'C-' + form.door_number.trim().replace(/^0+(?=\d)/, '').padStart(2, '0') }) : undefined}
+        >
+          <input value={form.door_number} onChange={(e) => set('door_number', e.target.value)} placeholder="572" maxLength={20} inputMode={isEdit ? undefined : 'numeric'} style={inputStyle} />
         </Field>
 
         {isCommercial && (

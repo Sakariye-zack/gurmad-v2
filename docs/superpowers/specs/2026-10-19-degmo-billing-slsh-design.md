@@ -18,7 +18,57 @@ Dhisiddu waxay u socon doontaa sida kala horreynta hoose. Qayb kasta waa la dhis
 
 ## Qaybta 1: Kala-qaybinta macaamiisha
 
-### Tusaale
+### CUSBOONAYSIIN (2026-11-05, ereyada isticmaalaha): kala-horreynta kama dambaysta ah
+
+> Isticmaaluhu wuxuu qoray: `Group 2 › Farah Omar (Baarsiigo) › zone › Sub Zone 1 › Caasha (C-572)`
+
+Heerarku waa **5**, albaabkuna wuxuu ka mid yahay xogta macmiilka:
+
+```
+Group 2                         ← heerka ugu sarreeya
+  └─ Degmo: Farah Omar  (aagga Baarsiigo)
+       └─ Zone
+            └─ Sub Zone 1
+                 └─ Macmiil: Caasha (C-572, albaab 572)
+```
+
+Tani way ka duwan tahay nidaamka hadda: Group-ku wuxuu ku jiraa Degmada gudaheeda, heerka "Zone" ee u dhexeeya Degmada iyo Sub Zone-kana ma jiro. Waa dib-u-dhisid, ma aha beddel magac oo keliya.
+
+- **LA GO'AAMIYAY (2026-11-05):** Group-yada waxaa laga samayn karaa Farah Omar iyo Sheekh Bashiir labadaba. Group kasta wuxuu ka tirsan yahay **hal degmo**. Laba degmo waxay yeelan karaan Group isku magac ah (tusaale "Group 2"), oo kala duwan. Nidaamka hadda sidan ayuu u shaqeeyaa: code-ka Group-ku wuxuu gaar u yahay degmada gudaheeda oo keliya. Sidaa darteed `Group 2 › Farah Omar` waa **qaabka qoraalka** oo keliya, Group-kuna wali Degmada ayuu ka hoos yimaadaa.
+- **[GO'AAN]** "Baarsiigo" ma magaca aagga Degmada ayuu yahay, mise waa magaca Group-ka?
+- **LA GO'AAMIYAY (2026-11-05):** bill collector-ka waxaa loo xilsaarayaa **Sub Zone-ka** (sidii hore).
+- **LA GO'AAMIYAY (2026-11-05):** Zone waa **heer cusub**. Wuxuu ka tirsan yahay hal Group, wuxuuna leeyahay Sub Zone-yo badan:
+  ```
+  Group 2 › Farah Omar (Baarsiigo)
+    └─ Zone A
+         ├─ Sub Zone 1  (collector: Ahmed)
+         └─ Sub Zone 2  (collector: Ahmed)
+  ```
+- **LA GO'AAMIYAY (2026-11-05):** Sub Zone kasta wuxuu leeyahay hal collector. Hal collector wuxuu yeelan karaa **ilaa 10 Sub Zone**. Sub Zone-ka 11-aad waa la diidayaa, fariin ayaana soo baxaysa.
+
+**Sida loo dhisayo (farsamo):**
+- Waxaa la abuurayaa miis cusub, `group_zones`: id, group_id, code, name, status. Code-ku wuxuu gaar u yahay Group-ka gudihiisa.
+  - Magaca `zones` lama isticmaali karo, maxaa yeelay wuxuu horeyba u yahay miiska Degmooyinka.
+- `routes` (Sub Zone) waxaa lagu darayaa `group_zone_id`. Sub Zone-yada hadda jira waxay bannaan ahaanayaan ilaa Zone loo doorto, kadibna Zone-ka ayaa noqonaya waalidkooda.
+- Foomka macmiilka: Degmo › Group › Zone › Sub Zone › albaab.
+- **[GO'AAN]** Groups-ka hadda jira (4 Group, oo batch-yo ku xidhan yihiin) maxaa lagu sameeyaa marka la rogo?
+
+Xeerarka cusub ee lambarka macmiilka:
+- **Albaabku waa qasab** marka macmiil cusub la diiwaangelinayo, waana **tirooyin oo keliya** (tusaale 572).
+- **Customer # = `C-` + albaabka.** Albaabka 572 wuxuu noqonayaa C-572. Albaab hal god ah waxaa lagu hormarinayaa eber: 7 wuxuu noqonayaa C-07.
+- Goobta Customer # ee gacanta lagu qori jiray waa laga saarayaa foomka abuurista.
+- Haddii C-<albaab> horay u jiro, waa la diidayaa (409), fariin ayaana sheegaysa in albaab kale la isticmaalo.
+- **LA GO'AAMIYAY (2026-11-05): beddelka albaabka iyo lambarka wuxuu u baahan yahay oggolaansho.**
+  - Marka albaabka macmiil la beddelo, isbeddelku **toos uma dhaco**. Waxaa la abuurayaa **codsi** (albaabka cusub iyo C-<albaab> cusub).
+  - **Admin**-ka ayaa oggolaanaya ama diidaya. Gudoomiyuhu wuu codsan karaa, laakiin ma oggolaan karo. Tani waa qiyaas; isticmaaluhu wuu beddeli karaa.
+  - Marka la oggolaado, albaabka iyo Customer #-ku way isbeddelayaan. **Invoice-yada cusub** waxaa ku qormaya lambarka cusub. Invoice-yadii hore waxay sii haystaan lambarkii hore ee lagu daabacay. (Invoice-yadu horeyba waxay keydiyaan magacyada xilliga la sameeyay; lambarka macmiilka waxaa lagu darayaa sidaas oo kale.)
+  - Codsiga, oggolaanshaha iyo diidmadaba waxaa lagu qorayaa audit log-ka.
+- Macaamiisha hadda jira (C-01, C-02…) waxba iskama beddelayaan. **Caasha C-04 waxaa loo beddelayaa C-572.**
+- Bogga macmiilka iyo liiska waxay muujinayaan `Degmo › Group › Sub Zone`, iyo Customer #-ka.
+- Import-ka CSV: macmiilka aan albaab lahayn waa la diidayaa, kan albaab leh wuxuu helayaa C-<albaab>.
+  - **[GO'AAN]** Ma sidan ayaad rabtaa, mise import-ku wuxuu sii wadayaa lambar toos ah haddii albaab la waayo?
+
+### Tusaale (qoraalkii hore)
 
 ```
 Degmo:   Farah Omar
@@ -95,6 +145,7 @@ Zones-ka hadda jira (Farah Omar, Sheekh Bashiir) dhab ahaantii waa Degmooyin. Si
   2. Keliya marka collector-ku calaamadiyo in loo shaqeeyay, sida batch-yada hadda.
 
 ### Bille
+- **LA GO'AAMIYAY (2026-11-05):** macmiil kasta oo **guri (residential)** ah wuxuu bishii helayaa **hal invoice oo keliya**. Invoice-ka waxaa ku qoran **maalmihii loo shaqeeyay** bishaas.
 - Invoice ayaa si toos ah u samaysmaya **1-da bisha**, macmiil kasta oo bille ah.
 - Invoice-ka waxaa ku qoran **4 toddobaad**. Toddobaad kasta waxaa lagu qorayaa **maalinta loo shaqeeyay**, oo ah taariikhda collector-ku calaamadiyay.
 - **[GO'AAN]** Haddii toddobaad aan loo shaqayn, maxaa dhacaya?

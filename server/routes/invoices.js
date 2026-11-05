@@ -71,12 +71,12 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       if (q.length >= 2) {
         params.push(`%${q}%`);
         const i = params.length;
-        where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i})`);
+        where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR invoices.customer_number_snapshot ILIKE $${i})`);
       }
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number, customers.phone AS customer_phone
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone
        FROM invoices JOIN customers ON invoices.customer_id = customers.id
        ${whereSql} ORDER BY invoices.created_at DESC`,
       params
@@ -92,7 +92,7 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   if (id === null) return res.status(400).json({ error: { message: 'Invalid invoice id.', code: 'VALIDATION' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number, customers.phone AS customer_phone, customers.zone_id
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone, customers.zone_id
        FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.id = $1`,
       [id]
     );
@@ -127,7 +127,7 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
   if (id === null) return res.status(400).json({ error: { message: 'Invalid invoice id.', code: 'VALIDATION' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number, customers.zone_id
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.zone_id
        FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.id = $1`,
       [id]
     );
@@ -201,8 +201,8 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     const invoiceNumber = await generateInvoiceNumber(client);
     const inserted = await client.query(
       `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status,
-        collector_name_snapshot, truck_name_snapshot, zone_name_snapshot, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'unpaid',$7,$8,$9,$10,$11) RETURNING *`,
+        collector_name_snapshot, truck_name_snapshot, zone_name_snapshot, notes, created_by, customer_number_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,'unpaid',$7,$8,$9,$10,$11,(SELECT customer_number FROM customers WHERE id = $2)) RETURNING *`,
       [invoiceNumber, custId, bcId, total, discount, currency || 'USD',
         collector_name_snapshot || null, truck_name_snapshot || null, zone_name_snapshot || null, notes || null, req.user.id]
     );
@@ -307,8 +307,8 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
       }
       const invoiceNumber = await generateInvoiceNumber(client);
       const inserted = await client.query(
-        `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status, zone_name_snapshot, notes, created_by)
-         VALUES ($1,$2,$3,$4,0,'USD','unpaid',$5,$6,$7) RETURNING *`,
+        `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status, zone_name_snapshot, notes, created_by, customer_number_snapshot)
+         VALUES ($1,$2,$3,$4,0,'USD','unpaid',$5,$6,$7,(SELECT customer_number FROM customers WHERE id = $2)) RETURNING *`,
         [invoiceNumber, row.customer_id, row.batch_customer_id, row.fee, batch.zone_name || null,
           `Auto-generated from batch ${batch.batch_code}`, req.user.id]
       );

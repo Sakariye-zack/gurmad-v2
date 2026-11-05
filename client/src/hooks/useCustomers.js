@@ -87,3 +87,23 @@ export function useZonesList() {
     queryFn: () => apiClient.get('/v2/zones?status=active'),
   });
 }
+
+// Door / Customer # change requests (admin-approved).
+export function useNumberRequests(params = {}) {
+  const qs = new URLSearchParams();
+  qs.set('status', params.status || 'pending');
+  if (params.customer_id) qs.set('customer_id', params.customer_id);
+  return useQuery({
+    queryKey: ['v2', 'customers', 'number-requests', params],
+    queryFn: () => apiClient.get(`/v2/customers/number-requests?${qs.toString()}`),
+    enabled: params.enabled !== false,
+  });
+}
+
+export function useDecideNumberRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }) => apiClient.post(`/v2/customers/number-requests/${id}/${action}`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'customers'] }),
+  });
+}

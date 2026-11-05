@@ -1,11 +1,21 @@
 // Shared strings used across the whole app: statuses, priorities, and the
 // everyday words that appear in the shared ui/* components and on every page.
 export const COMMON = {
+  'cust.m.doorApprovalHint': { en: 'Changing the door needs admin approval', so: 'Beddelka albaabka waxa uu u baahan yahay oggolaanshaha admin-ka' },
+  'cust.m.sentForApproval': { en: 'Sent for admin approval', so: 'Waxaa loo diray admin-ka si uu u oggolaado' },
+  'cust.m.pendingChange': { en: 'Pending door / number change', so: 'Beddelka albaabka / lambarka oo sugaya' },
+  'cust.m.pendingChanges': { en: 'Pending number changes', so: 'Beddelaadyada lambarka ee sugaya' },
+  'cust.m.requestedBy': { en: 'Requested by {name} on {date}', so: 'Waxaa codsaday {name} {date}' },
+  'cust.m.approve': { en: 'Approve', so: 'Oggolow' },
+  'cust.m.reject': { en: 'Reject', so: 'Diid' },
+  'cust.m.requestApproved': { en: 'Change approved', so: 'Beddelka waa la oggolaaday' },
+  'cust.m.requestRejected': { en: 'Change rejected', so: 'Beddelka waa la diiday' },
+
   // ---- generic UI ----
   'login.staffPortal': { en: 'Staff portal', so: 'Bogga shaqaalaha' },
-  'cust.m.numberOptional': { en: 'Customer # (optional)', so: 'Lambarka macmiilka (ikhtiyaari)' },
-  'cust.m.numberHint': { en: 'Leave blank to number automatically, or enter one like C-105.', so: 'Madhan ka dhig si si toos ah loo bixiyo, ama geli mid sida C-105.' },
-  'cust.m.numberFormat': { en: 'Must look like C-105 (C- followed by 2 or more digits).', so: 'Waa inuu u ekaadaa C-105 (C- iyo 2 lambar ama ka badan).' },
+  'cust.m.numberPreview': { en: 'Customer #: {number}', so: 'Lambarka macmiilka: {number}' },
+  'cust.m.doorRequired': { en: 'Door # is required.', so: 'Lambarka albaabka waa lagama maaarmaan.' },
+  'cust.m.doorDigits': { en: 'Door # must contain digits only.', so: 'Lambarka albaabka waa inuu ahaado tiro keliya.' },
   'common.loading': { en: 'Loading…', so: 'Waa la soo raraya…' },
   'common.refresh': { en: 'Refresh', so: 'Cusboonaysii' },
   'common.back': { en: 'Back', so: 'Dib u laabo' },

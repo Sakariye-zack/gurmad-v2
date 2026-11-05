@@ -24,7 +24,7 @@ function Content({ onClose, customer }) {
     setError('');
     try {
       await updateNumber.mutateAsync(value.trim());
-      toast.success(t('cust.m.numberUpdated', undefined, { number: value.trim().toUpperCase() }));
+      toast.success(t('cust.m.sentForApproval'));
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));

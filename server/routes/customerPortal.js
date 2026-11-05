@@ -515,7 +515,7 @@ router.get('/invoices/:id/document.docx', authenticateCustomerPortal, async (req
   if (id === null) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
        FROM invoices JOIN customers ON invoices.customer_id = customers.id
        WHERE invoices.id = $1 AND invoices.customer_id = $2`,
       [id, req.customerId]
@@ -544,7 +544,7 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
   if (id === null) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, customers.customer_number
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
        FROM invoices JOIN customers ON invoices.customer_id = customers.id
        WHERE invoices.id = $1 AND invoices.customer_id = $2`,
       [id, req.customerId]
