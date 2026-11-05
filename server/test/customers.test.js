@@ -85,14 +85,24 @@ test('edit-number endpoint creates a request instead of changing the number', as
   const p = await api('PUT', '/customers/' + a.data.id + '/customer-number', { token: w.tokens.gudoomiye, body: { customer_number: 'C-9499' } });
   assert.equal(p.status, 202, JSON.stringify(p.body));
   assert.equal(p.data.new_number, 'C-9499');
-  assert.equal(p.data.new_door, '9421');
+  assert.equal(p.data.new_door, '9499');
   const g = await api('GET', '/customers/' + a.data.id, { token: w.tokens.admin });
   assert.equal(g.data.customer_number, 'C-9421');
   const ap = await api('POST', `/customers/number-requests/${p.data.id}/approve`, { token: w.tokens.admin });
   assert.equal(ap.status, 200, JSON.stringify(ap.body));
   const g2 = await api('GET', '/customers/' + a.data.id, { token: w.tokens.admin });
   assert.equal(g2.data.customer_number, 'C-9499');
-  assert.equal(g2.data.door_number, '9421');
+  assert.equal(g2.data.door_number, '9499');
+});
+
+test('leading-zero door that derives the same number is not a change', async () => {
+  const w = await setupWorld();
+  const a = await api('POST', '/customers', { token: w.tokens.admin, body: body(w, { door_number: '9491' }) });
+  const p = await api('PUT', '/customers/' + a.data.id, { token: w.tokens.admin, body: { door_number: '09491' } });
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  assert.equal(p.data.door_number, '9491');
+  const l = await api('GET', '/customers/number-requests?status=pending&customer_id=' + a.data.id, { token: w.tokens.admin });
+  assert.equal(l.data.length, 0);
 });
 
 test('second pending request for same customer is 409', async () => {

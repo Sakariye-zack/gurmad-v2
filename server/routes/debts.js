@@ -53,7 +53,7 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       if (q.length >= 2) {
         params.push(`%${q}%`);
         const i = params.length;
-        where.push(`(customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i})`);
+        where.push(`(customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR EXISTS (SELECT 1 FROM invoices si WHERE si.id = debts.invoice_id AND si.customer_number_snapshot ILIKE $${i}))`);
       }
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -63,7 +63,7 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     // human-facing number ('INV-000021') every other screen in the app
     // uses to refer to an invoice. Additive LEFT JOIN only.
     const result = await pool.query(
-      `SELECT debts.*, customers.name AS customer_name, customers.customer_number, invoices.invoice_number
+      `SELECT debts.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, invoices.invoice_number
        FROM debts
        JOIN customers ON debts.customer_id = customers.id
        LEFT JOIN invoices ON debts.invoice_id = invoices.id

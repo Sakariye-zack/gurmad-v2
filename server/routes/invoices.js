@@ -71,7 +71,7 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       if (q.length >= 2) {
         params.push(`%${q}%`);
         const i = params.length;
-        where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i})`);
+        where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR invoices.customer_number_snapshot ILIKE $${i})`);
       }
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';

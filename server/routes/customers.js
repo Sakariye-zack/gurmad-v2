@@ -57,29 +57,32 @@ function customerNumberFromDoor(door) {
 
 // Creates a pending door/number change request after checking the one-pending
 // rule and uniqueness. Returns { request } or { status, error }.
-async function createNumberRequest(user, current, { newDoor, newNumber }) {
-  const pending = await pool.query(`SELECT id FROM customer_number_change_requests WHERE customer_id = $1 AND status = 'pending'`, [current.id]);
+async function createNumberRequest(user, current, { newDoor, newNumber }, db = pool) {
+  const pending = await db.query(`SELECT id FROM customer_number_change_requests WHERE customer_id = $1 AND status = 'pending'`, [current.id]);
   if (pending.rows.length) return { status: 409, error: { message: 'This customer already has a pending door/number change request.', code: 'PENDING_EXISTS' } };
-  const numDup = await pool.query('SELECT id FROM customers WHERE customer_number = $1 AND id != $2', [newNumber, current.id]);
+  const numDup = await db.query('SELECT id FROM customers WHERE customer_number = $1 AND id != $2', [newNumber, current.id]);
   if (numDup.rows.length) return { status: 409, error: { message: `Customer Number ${newNumber} is already assigned to another customer.`, code: 'DUPLICATE' } };
   if (newDoor) {
-    const doorDup = await pool.query('SELECT id FROM customers WHERE door_number = $1 AND id != $2', [newDoor, current.id]);
+    const doorDup = await db.query('SELECT id FROM customers WHERE door_number = $1 AND id != $2', [newDoor, current.id]);
     if (doorDup.rows.length) return { status: 409, error: DOOR_DUP.error };
   }
   try {
-    const r = await pool.query(
+    const r = await db.query(
       `INSERT INTO customer_number_change_requests (customer_id, old_door, new_door, old_number, new_number, requested_by)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
       [current.id, current.door_number, newDoor, current.customer_number, newNumber, user.id]
     );
     const request = r.rows[0];
-    await logAudit({ actorId: user.id, actorUsername: user.username, action: 'customer.number_change_request', entityType: 'customer', entityId: current.id,
-      before: { door_number: current.door_number, customer_number: current.customer_number }, after: { door_number: newDoor, customer_number: newNumber, request_id: request.id } });
     return { request };
   } catch (err) {
     if (err.code === '23505') return { status: 409, error: { message: 'This customer already has a pending door/number change request.', code: 'PENDING_EXISTS' } };
     throw err;
   }
+}
+
+function auditNumberRequest(user, current, request) {
+  return logAudit({ actorId: user.id, actorUsername: user.username, action: 'customer.number_change_request', entityType: 'customer', entityId: current.id,
+    before: { door_number: current.door_number, customer_number: current.customer_number }, after: { door_number: request.new_door, customer_number: request.new_number, request_id: request.id } });
 }
 
 const DOOR_DUP = { error: { message: 'That door number is already used by another customer.', code: 'DUPLICATE' } };
@@ -614,17 +617,30 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     // Door change (differs from current) -> pending request; other fields still apply.
     let doorChange = false;
     let numberRequest = null;
+    const hasOtherFields = Object.keys(data).length > 0;
+    let client = null;
     if (requestedDoor !== undefined && requestedDoor !== (current.door_number ?? null)) {
       if (requestedDoor === null || !/^\d+$/.test(requestedDoor)) {
         return res.status(400).json({ error: { message: 'door_number must contain digits only.', code: 'VALIDATION' } });
       }
-      doorChange = true;
-      const made = await createNumberRequest(req.user, current, { newDoor: requestedDoor, newNumber: customerNumberFromDoor(requestedDoor) });
-      if (made.error) return res.status(made.status).json({ error: made.error });
-      numberRequest = made.request;
+      // Same derived C-number (e.g. 09401 vs 9401) is not a change: keep the current door.
+      if (customerNumberFromDoor(requestedDoor) !== current.customer_number) {
+        doorChange = true;
+        // Request + other-field UPDATE share one transaction (no orphan pending request).
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const made = await createNumberRequest(req.user, current, { newDoor: requestedDoor, newNumber: customerNumberFromDoor(requestedDoor) }, client);
+        if (made.error) { await client.query('ROLLBACK'); client.release(); return res.status(made.status).json({ error: made.error }); }
+        numberRequest = made.request;
+        if (!hasOtherFields) {
+          await client.query('COMMIT'); client.release();
+          await auditNumberRequest(req.user, current, numberRequest);
+          return res.status(202).json({ data: numberRequest });
+        }
+      }
     }
-    if (Object.keys(data).length === 0) {
-      return res.status(doorChange ? 202 : 200).json({ data: doorChange ? numberRequest : current });
+    if (!hasOtherFields) {
+      return res.status(200).json({ data: current });
     }
 
     const fields = Object.keys(data);
@@ -632,10 +648,20 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     const values = fields.map((f) => data[f]);
     values.push(id);
 
-    const result = await pool.query(
-      `UPDATE customers SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
-      values
-    );
+    let result;
+    try {
+      result = await (client || pool).query(
+        `UPDATE customers SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
+        values
+      );
+      if (client) await client.query('COMMIT');
+    } catch (e) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      if (client) client.release();
+    }
+    if (numberRequest) await auditNumberRequest(req.user, current, numberRequest);
     const customer = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.update', entityType: 'customer', entityId: customer.id, before: current, after: customer });
     if (data.zone_id !== undefined && data.zone_id !== current.zone_id) {
@@ -686,12 +712,16 @@ router.put('/:id/customer-number', authenticateToken, requireRole('admin', 'gudo
       return res.status(403).json({ error: { message: 'You do not have access to this customer.', code: 'FORBIDDEN' } });
     }
 
-    if (newNumber === current.customer_number) {
+    // Customer # always equals C-<door>: derive the door from the number.
+    const newDoor = newNumber.slice(2);
+    const normalisedNumber = customerNumberFromDoor(newDoor);
+    if (normalisedNumber === current.customer_number) {
       return res.status(400).json({ error: { message: 'That is already the current Customer Number.', code: 'VALIDATION' } });
     }
-    // Number changes need admin approval; the door is left as it is.
-    const made = await createNumberRequest(req.user, current, { newDoor: current.door_number ?? null, newNumber });
+    // Number changes need admin approval.
+    const made = await createNumberRequest(req.user, current, { newDoor, newNumber: normalisedNumber });
     if (made.error) return res.status(made.status).json({ error: made.error });
+    await auditNumberRequest(req.user, current, made.request);
     return res.status(202).json({ data: made.request });
   } catch (err) {
     if (err.code === '23505') {
