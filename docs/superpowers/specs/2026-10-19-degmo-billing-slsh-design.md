@@ -144,6 +144,16 @@ Zones-ka hadda jira (Farah Omar, Sheekh Bashiir) dhab ahaantii waa Degmooyin. Si
   1. Maalin kasta si toos ah, xitaa haddii aan loo shaqayn.
   2. Keliya marka collector-ku calaamadiyo in loo shaqeeyay, sida batch-yada hadda.
 
+### LA GO'AAMIYAY (2026-11-06)
+- **Maalinle:** invoice waxaa la samaynayaa **marka loo shaqeeyo oo keliya**, macmiil kasta oo maalintaas collector-ku calaamadiyay serviced. Maalinta aan loo shaqayn, invoice ma jiro.
+- **Bille, macaamiisha lacag go'an leh** (tusaale 30,000 SLSH): invoice-ka waxaa si toos ah loo samaynayaa **28-ka bisha**, hal mar oo keliya bishii, waana lacagta go'an.
+  - 28 waxaa loo doortay maxaa yeelay bil kasta way leedahay, Febraayo-na ku jirto. Isticmaaluhu wuxuu yidhi "28 ilaa 29".
+- **LA GO'AAMIYAY:** qiimaha macmiil kasta waa **heshiis gaar ah**, oo la qoro marka la diiwaangelinayo (Fee + Lacagta). Invoice-ku had iyo jeer waa qiimahaas, lacagtaas.
+  - **SLSH go'an:** tusaale 30,000 SLSH. Isbeddelka sicirka ma taabanayo.
+  - **USD (sarif u fasax):** invoice-ku waa USD. Macmiilku wuxuu ku bixin karaa SLSH, iyadoo la adeegsanayo sicirka maalinta, sida hadda.
+  - Macmiil bille ah oo aan qiime lahayn: invoice looma samaynayo, waxaana lagu soo warramayaa liiska "maqan" si admin-ku u buuxiyo.
+- **LA GO'AAMIYAY:** macmiil bisha dhexdeeda la diiwaangeliyay wuxuu 28-ka helayaa **invoice bil buuxda**, qaybin ma jirto.
+
 ### Bille
 - **LA GO'AAMIYAY (2026-11-05):** macmiil kasta oo **guri (residential)** ah wuxuu bishii helayaa **hal invoice oo keliya**. Invoice-ka waxaa ku qoran **maalmihii loo shaqeeyay** bishaas.
 - Invoice ayaa si toos ah u samaysmaya **1-da bisha**, macmiil kasta oo bille ah.
@@ -186,3 +196,26 @@ Zones-ka hadda jira (Farah Omar, Sheekh Bashiir) dhab ahaantii waa Degmooyin. Si
 | 7 | Qaybta 3: invoice bille iyo maalinle oo toos u samaysma | hawl cusub oo server-ka ah, `invoices.js` |
 
 Qayb kasta: tijaabo → commit → adiga oo oggolaada → deploy.
+
+---
+
+## Qaybta 3: naqshadda la oggolaaday (2026-11-06)
+
+1. **Hawsha toos ah:** server-ka gudihiisa waxaa ku shaqaynaya saacad, saacad kasta hal mar. Maaha cron dibadda ah.
+   - **Bille:** 28-ka bisha (ama marka server-ku kaco haddii 28-ka la dhaafay), invoice ayaa loo samaynayaa macmiil kasta oo leh `status = active`, `billing_type = monthly` iyo fee. Invoice-ku waa fee-ga iyo lacagtiisa.
+     - Bil kasta hal invoice oo keliya: unique index `(customer_id, billing_period)`.
+   - **Maalinle:** habeen kasta 23:30 (wakhtiga shirkadda), invoice ayaa loo samaynayaa booqasho kasta oo `serviced` ah oo maalintaas ah, macaamiisha `billing_type = daily` oo fee leh. Invoice-ku wuxuu ku xidhan yahay `batch_customer_id`.
+     - Laba invoice isku booqasho uma samaysmaan.
+   - Macmiil aan fee lahayn waa la boodayaa, waxaana lagu darayaa liiska "skipped".
+   - Admin: badhanka **Generate now** (idempotent).
+2. **Invoice SLSH ah:** wixii la bixiyay waxaa lagu xisaabinayaa lacagta invoice-ka.
+   - Lacag SLSH ah = qaddarkeeda.
+   - Lacag USD ah = `amount_usd × sicirka lacag bixinta` (sicirka hadda jira haddii aan la hayn).
+   - Warbixinnada USD-ga ah: invoice SLSH ah ÷ sicirka hadda jira.
+3. **Invoice bille ah:** wuxuu muujinayaa shax toddobaadyo ah (1-7, 8-14, 15-21, 22-28/dhammaadka bisha). Toddobaad kasta waxaa ku qoran maalmihii serviced, laga soo qaaday `batch_customers.status_at`. Waxaa lagu muujinayaa bogga invoice-ka, .docx-ka iyo preview-ga.
+4. **Shaashadda:** bogga Invoices waxaa ku jira kaarka "Auto-billing", oo muujinaya:
+   - run-kii ugu dambeeyay
+   - macaamiisha la booday
+   - badhanka Generate now
+   
+   Invoice kasta waxaa ku qoran calaamad "Auto · Nov 2026" ama "Auto · daily".

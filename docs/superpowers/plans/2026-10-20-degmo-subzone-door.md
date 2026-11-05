@@ -237,3 +237,89 @@ Follows the existing request→approve pattern of `inventory_adjustment_requests
 - `invoice created before approval keeps old number; invoice after shows new number`
 
 **Ruling (default, user may change):** CSV import rejects rows without a door number. The admin is the approver.
+
+---
+
+## Part 3: Auto-billing (spec "Qaybta 3: naqshadda la oggolaaday")
+
+### Task 8: Currency-aware invoice balance (SLSH invoices)
+
+**Files:**
+- Modify: `server/lib/financialCalculations.js`
+  - Add `paidInInvoiceCurrency(invoiceId, currency, client)`:
+    - USD invoice: `SUM(amount_usd)`.
+    - SLSH invoice:
+      - SLSH payments: `SUM(amount)`.
+      - USD payments: `+ SUM(amount_usd × current rate)`.
+    - Look at the payments columns to choose the rate. If a payment stores `exchange_rate_id`, use that rate.
+  - Use it in `recalculateInvoiceStatus` and `getInvoiceBalance`. Both now return `currency`.
+- Modify: `server/routes/payments.js`: the overpayment checks (~lines 85-88 and 244-245) compare in the invoice's currency.
+  - A USD payment on an SLSH invoice converts at the current rate.
+  - An SLSH payment on a USD invoice keeps today's rule.
+- Modify: `server/lib/reportsCalculations.js:62` (outstanding) and any revenue/expected sums over `invoice_total`: convert SLSH invoices to USD at the current rate.
+
+**Tests:** `server/test/money.test.js` (extend):
+- `SLSH invoice paid fully in SLSH → paid`
+- `SLSH invoice part-paid in USD converts at payment rate`
+- `overpaying an SLSH invoice → 409`
+- `USD invoices unchanged` (existing tests stay green)
+
+### Task 9: Auto-billing engine + scheduler + admin endpoints
+
+**Files:**
+- Modify: `server/db.js`
+  - `invoices` gains:
+    - `billing_period VARCHAR(7)` ('YYYY-MM', monthly auto only)
+    - `auto_generated BOOLEAN NOT NULL DEFAULT FALSE`
+  - Indexes:
+    - Unique partial index `(customer_id, billing_period) WHERE billing_period IS NOT NULL AND status <> 'voided'`
+    - Unique partial index on `batch_customer_id WHERE batch_customer_id IS NOT NULL AND status <> 'voided'`. Before creating it, check prod has no duplicates. If it does, skip creating it and log a warning.
+  - Table `billing_runs`: id, kind ('monthly','daily'), period_key, started_at, finished_at, created_count, skipped JSONB, error TEXT, triggered_by INTEGER NULL.
+- Create: `server/lib/autoBilling.js`. It uses the company timezone from company_settings.timezone, with default 'Africa/Mogadishu'.
+  - `runMonthly({ now, triggeredBy })`
+    - Period = month of `now`. Runs only if day ≥ 28, or when called manually.
+    - Inserts one invoice per eligible customer: `currency = fee_currency`, `invoice_total = fee`, `auto_generated = true`, `billing_period`, `customer_number_snapshot`, `zone_name_snapshot`, and `created_by` = first admin id.
+    - `ON CONFLICT DO NOTHING`.
+  - `runDaily({ date, triggeredBy })`
+    - Takes serviced `batch_customers` with `status_at::date = date` for daily customers with a fee and no invoice.
+  - Both write a `billing_runs` row and return `{ created, skipped: [{customer_id, customer_number, name, reason}] }`.
+  - `startScheduler()`
+    - `setInterval` hourly (also once ~30 s after boot).
+    - Calls `runMonthly` when local day ≥ 28 and no successful monthly run exists for the period.
+    - Calls `runDaily` for yesterday and today when local time ≥ 23:30.
+    - Disabled when `process.env.AUTO_BILLING === 'off'`. The test runner sets it to 'off'.
+- Modify: `server/index.js`: call `startScheduler()` after the server listens.
+- Modify: `server/routes/invoices.js`
+  - `GET /invoices/auto-billing/status` (admin, gudoomiye, zone_accountant): last runs and the skipped list.
+  - `POST /invoices/auto-billing/run` (admin) `{ kind, period|date }`.
+  - Register both before `/:id`.
+- Modify: `server/test/run.js`: env `AUTO_BILLING=off`.
+
+**Tests:** new `server/test/autoBilling.test.js`, calling via the POST endpoint:
+- monthly creates exactly one invoice per active monthly customer with a fee, in its currency
+- second run creates 0
+- customer without a fee → in skipped
+- inactive or archived customer → not billed
+- daily creates one invoice per serviced visit that day and is idempotent
+- non-admin POST → 403
+
+### Task 10: Worked-days on monthly invoices + UI
+
+**Files:**
+- Modify: `server/routes/invoices.js` GET `/:id`. For an invoice with `billing_period`, add `worked_days`, built from serviced `batch_customers` of that customer in that month:
+  `[{ week: 1, range: '1–7', dates: ['2026-11-03'] }, …]`
+  - Weeks are 1–7, 8–14, 15–21, and 22–end of month.
+  - Also return `billing_period` and `auto_generated`.
+- Modify: `server/lib/documentGenerators.js`
+  - Add a "Service days" section to both the invoice .docx and the HTML preview when `billing_period` is set. It is a 4-row table: week, dates, or "—".
+  - Change "Waste collection service" to "Waste collection — Nov 2026".
+  - `customerPortal.js` and `invoices.js` document routes pass `worked_days` through. Put the computation in one shared helper, `lib/workedDays.js` `getWorkedDays(customerId, period)`.
+- Client:
+  - `InvoiceDetailPage.jsx`: Service days table and Auto badge.
+  - Invoices list page: "Auto-billing" card (last monthly/daily run, created count, skipped list with links to customers) and an admin "Generate now" button with kind select.
+  - Badge "Auto · <Mon YYYY>" / "Auto · daily".
+  - i18n keys in `common.js` (en + so).
+
+**Tests:**
+- `monthly invoice detail lists worked days by week` (create serviced batch_customers rows via db for dates in the period)
+- `.docx contains "SERVICE DAYS"`
