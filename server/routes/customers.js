@@ -615,31 +615,17 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
 
     // Door change (differs from current) -> pending request; other fields still apply.
-    let doorChange = false;
     let numberRequest = null;
     const hasOtherFields = Object.keys(data).length > 0;
-    let client = null;
+    let needRequest = false;
     if (requestedDoor !== undefined && requestedDoor !== (current.door_number ?? null)) {
-      if (requestedDoor === null || !/^\d+$/.test(requestedDoor)) {
+      if (requestedDoor === null || !/^[0-9]+$/.test(requestedDoor)) {
         return res.status(400).json({ error: { message: 'door_number must contain digits only.', code: 'VALIDATION' } });
       }
       // Same derived C-number (e.g. 09401 vs 9401) is not a change: keep the current door.
-      if (customerNumberFromDoor(requestedDoor) !== current.customer_number) {
-        doorChange = true;
-        // Request + other-field UPDATE share one transaction (no orphan pending request).
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const made = await createNumberRequest(req.user, current, { newDoor: requestedDoor, newNumber: customerNumberFromDoor(requestedDoor) }, client);
-        if (made.error) { await client.query('ROLLBACK'); client.release(); return res.status(made.status).json({ error: made.error }); }
-        numberRequest = made.request;
-        if (!hasOtherFields) {
-          await client.query('COMMIT'); client.release();
-          await auditNumberRequest(req.user, current, numberRequest);
-          return res.status(202).json({ data: numberRequest });
-        }
-      }
+      needRequest = customerNumberFromDoor(requestedDoor) !== current.customer_number;
     }
-    if (!hasOtherFields) {
+    if (!hasOtherFields && !needRequest) {
       return res.status(200).json({ data: current });
     }
 
@@ -647,21 +633,33 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     const setSql = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
     const values = fields.map((f) => data[f]);
     values.push(id);
+    const updateSql = `UPDATE customers SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`;
 
-    let result;
-    try {
-      result = await (client || pool).query(
-        `UPDATE customers SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
-        values
-      );
-      if (client) await client.query('COMMIT');
-    } catch (e) {
-      if (client) await client.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      if (client) client.release();
+    let result = null;
+    if (needRequest) {
+      // Request + other-field UPDATE share one transaction (no orphan pending request).
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const made = await createNumberRequest(req.user, current, { newDoor: requestedDoor, newNumber: customerNumberFromDoor(requestedDoor) }, client);
+        if (made.error) {
+          await client.query('ROLLBACK');
+          return res.status(made.status).json({ error: made.error });
+        }
+        numberRequest = made.request;
+        if (hasOtherFields) result = await client.query(updateSql, values);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+      await auditNumberRequest(req.user, current, numberRequest);
+      if (!hasOtherFields) return res.status(202).json({ data: numberRequest });
+    } else {
+      result = await pool.query(updateSql, values);
     }
-    if (numberRequest) await auditNumberRequest(req.user, current, numberRequest);
     const customer = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.update', entityType: 'customer', entityId: customer.id, before: current, after: customer });
     if (data.zone_id !== undefined && data.zone_id !== current.zone_id) {
