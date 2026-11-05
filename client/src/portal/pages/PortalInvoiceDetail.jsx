@@ -4,6 +4,7 @@ import { ArrowLeft, Download, Eye, X } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
 import { portalApiClient } from '../apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
 
 // Rebuild — Implementation Spec §11/§23 (OD-5/Invoice Preview): adds an
 // inline HTML preview alongside the existing, UNCHANGED .docx download —
@@ -65,11 +66,11 @@ export default function PortalInvoiceDetail() {
         }
       />
       <DetailGrid items={[
-        { label: t('common.total'), value: `${invoice.currency} ${parseFloat(invoice.invoice_total).toFixed(2)}` },
-        { label: t('portal.invoice.discount'), value: `${invoice.currency} ${parseFloat(invoice.discount_amount).toFixed(2)}` },
+        { label: t('common.total'), value: fmtMoney(invoice.invoice_total, invoice.currency) },
+        { label: t('portal.invoice.discount'), value: fmtMoney(invoice.discount_amount, invoice.currency) },
         { label: t('common.status'), value: <StatusBadge status={invoice.status} /> },
-        { label: t('portal.invoice.paid'), value: `$${invoice.balance.paid.toFixed(2)}` },
-        { label: t('portal.invoice.outstanding'), value: `$${invoice.balance.outstanding.toFixed(2)}` },
+        { label: t('portal.invoice.paid'), value: fmtMoney(invoice.balance.paid, invoice.currency) },
+        { label: t('portal.invoice.outstanding'), value: fmtMoney(invoice.balance.outstanding, invoice.currency) },
       ]} />
 
       {previewHtml !== null && (

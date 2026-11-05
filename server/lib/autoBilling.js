@@ -131,7 +131,7 @@ async function runMonthly({ now = new Date(), triggeredBy = null, manual = false
            AND to_char((i.created_at AT TIME ZONE 'UTC' AT TIME ZONE $2), 'YYYY-MM') = $1) AS already_invoiced
        FROM customers c LEFT JOIN zones z ON z.id = c.zone_id
        WHERE c.status = 'active' AND c.billing_type = 'monthly'
-         AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.billing_period = $1)
+         AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.billing_period = $1 AND i.status <> 'voided')
        ORDER BY c.id`, [periodKey, tz]);
     let created = 0;
     const skipped = [];

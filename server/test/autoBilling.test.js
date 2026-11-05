@@ -255,3 +255,44 @@ test('GET /invoices/:id returns usd/slsh/rate in balance for an SLSH invoice', a
   assert.ok(Math.abs(b.usd.netTotal - 30000 / b.rate.rate) < 1e-6);
   assert.equal(b.usd.paid, 0);
 });
+
+test('bulk-generate: monthly customer skipped, daily SLSH customer invoiced in SLSH', async () => {
+  const w = await setupWorld();
+  const mon = await mkCustomer(w, { billing_type: 'monthly', fee: 30000, fee_currency: 'SLSH' });
+  const day = await mkCustomer(w, { customer_type: 'commercial', business_name: 'BulkShop', commercial_shift: 'day', billing_type: 'daily', fee: 4000, fee_currency: 'SLSH' });
+  const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom','2034-01-01','2034-01-31') RETURNING id`, [w.zoneA.id])).rows[0].id;
+  const batch = (await db.query(
+    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, start_date) VALUES ($1,$2,$3,1,'residential','2034-01-10') RETURNING id`,
+    ['BG-' + Date.now(), w.zoneA.id, cyc])).rows[0].id;
+  for (const c of [mon, day]) await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced','2034-01-10 09:00:00')`, [batch, c.id]);
+  const r = await api('POST', '/invoices/bulk-generate', { token: w.tokens.admin, body: { batch_id: batch } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.data.created.length, 1);
+  assert.equal(r.data.created[0].currency, 'SLSH');
+  assert.equal(Number(r.data.created[0].invoice_total), 4000);
+  assert.deepEqual(r.data.skipped.map((s) => [s.customer_id, s.reason]), [[mon.id, 'monthly_customer']]);
+  assert.equal((await invoicesOf(mon.id)).length, 0);
+  assert.equal((await invoicesOf(day.id)).length, 1);
+});
+
+test('invoice numbering skips numbers already taken when the sequence lags', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w, { billing_type: 'monthly', fee: 5, fee_currency: 'USD' });
+  const max = (await db.query(`SELECT COALESCE(MAX(substring(invoice_number from 5)::int), 0) AS m FROM invoices WHERE invoice_number ~ '^INV-[0-9]+$'`)).rows[0].m;
+  await db.query(`SELECT setval('invoice_number_seq', GREATEST($1 - 3, 1))`, [max]);
+  const r = await runBilling(w, { kind: 'monthly', period: '2035-05' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await invoicesOf(c.id)).length, 1);
+  assert.ok(!r.data.skipped.some((s) => s.customer_id === c.id));
+});
+
+test('monthly regenerates after the invoice for that period was voided', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w, { billing_type: 'monthly', fee: 5, fee_currency: 'USD' });
+  await runBilling(w, { kind: 'monthly', period: '2035-06' });
+  await db.query(`UPDATE invoices SET status = 'voided' WHERE customer_id = $1`, [c.id]);
+  await runBilling(w, { kind: 'monthly', period: '2035-06' });
+  const rows = await invoicesOf(c.id);
+  assert.equal(rows.length, 2);
+  assert.equal(rows.filter((i) => i.status !== 'voided').length, 1);
+});

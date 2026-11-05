@@ -5,6 +5,7 @@ import { PageHeader, Button, Card, DataTable, StatusBadge, StatCard, LoadingStat
 import RoleGate from '../../components/RoleGate.jsx';
 import PrintLetterhead from '../../components/PrintLetterhead.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
 import {
   useExecutiveSummary, useCollectorPerformance, useZonePerformance, useTruckPerformance,
   useCollectionHistory, useRevenue, useInvoicesSummary, usePaymentsSummary, useDebtsSummary,
@@ -331,7 +332,7 @@ function InvoicesTab({ period, customStart, customEnd, onExport }) {
           <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{r.invoice_number}</td>
             <td style={cellStyle}>{r.customer_name}</td>
-            <td style={cellStyle} className="tabular-nums">${parseFloat(r.invoice_total).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{fmtMoney(r.invoice_total, r.currency)}</td>
             <td style={cellStyle}><StatusBadge status={r.status} map={{ unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' }} /></td>
             <td style={cellStyle}>{new Date(r.created_at).toLocaleDateString()}</td>
           </tr>
@@ -378,7 +379,7 @@ function DebtsTab({ period, customStart, customEnd, onExport }) {
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{r.customer_name || '—'}</td>
-            <td style={cellStyle} className="tabular-nums">${parseFloat(r.amount).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{fmtMoney(r.amount, r.currency)}</td>
             <td style={cellStyle}><StatusBadge status={r.status} map={{ unpaid: 'danger', paid: 'success' }} /></td>
             <td style={cellStyle}>{new Date(r.created_at).toLocaleDateString()}</td>
           </tr>

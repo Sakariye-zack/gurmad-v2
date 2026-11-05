@@ -3,7 +3,7 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
-const { generateInvoiceNumber } = require('../lib/invoiceInsert');
+const { generateInvoiceNumber, insertInvoice } = require('../lib/invoiceInsert');
 const autoBilling = require('../lib/autoBilling');
 const { getWorkedDays } = require('../lib/workedDays');
 
@@ -340,7 +340,7 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
     // the NOT EXISTS guard is what makes this endpoint safely re-runnable
     // (generate once, fix a missing fee, run again — only the gap fills in).
     const candidatesRes = await client.query(
-      `SELECT bc.id AS batch_customer_id, c.id AS customer_id, c.name AS customer_name, c.fee
+      `SELECT bc.id AS batch_customer_id, c.id AS customer_id, c.name AS customer_name, c.fee, c.fee_currency, c.billing_type
        FROM batch_customers bc
        JOIN customers c ON c.id = bc.customer_id
        WHERE bc.batch_id = $1 AND bc.status = 'serviced'
@@ -351,26 +351,27 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
 
     const created = [];
     const skippedNoFee = [];
+    const skipped = [];
     for (const row of candidatesRes.rows) {
+      if (row.billing_type === 'monthly') {
+        skipped.push({ customer_id: row.customer_id, customer_name: row.customer_name, reason: 'monthly_customer' });
+        continue;
+      }
       if (row.fee === null || row.fee === undefined) {
         skippedNoFee.push({ customer_id: row.customer_id, customer_name: row.customer_name });
         continue;
       }
-      const invoiceNumber = await generateInvoiceNumber(client);
-      const inserted = await client.query(
-        `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status, zone_name_snapshot, notes, created_by, customer_number_snapshot)
-         VALUES ($1,$2,$3,$4,0,'USD','unpaid',$5,$6,$7,(SELECT customer_number FROM customers WHERE id = $2)) RETURNING *`,
-        [invoiceNumber, row.customer_id, row.batch_customer_id, row.fee, batch.zone_name || null,
-          `Auto-generated from batch ${batch.batch_code}`, req.user.id]
-      );
-      created.push(inserted.rows[0]);
+      const inv = await insertInvoice(client, { customerId: row.customer_id, batchCustomerId: row.batch_customer_id,
+        total: row.fee, currency: row.fee_currency || 'USD', zoneNameSnapshot: batch.zone_name || null,
+        notes: `Auto-generated from batch ${batch.batch_code}`, createdBy: req.user.id });
+      if (inv) created.push(inv);
     }
 
     await client.query('COMMIT');
     for (const invoice of created) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.create', entityType: 'invoice', entityId: invoice.id, before: null, after: invoice });
     }
-    res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 } });
+    res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, skipped, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 && skipped.length === 0 } });
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === '23505') return res.status(409).json({ error: { message: 'One of these visits was invoiced concurrently (possibly by auto-billing). Please retry.', code: 'CONFLICT' } });
