@@ -99,7 +99,9 @@ export default function CustomerDetailPage() {
         { label: t('common.address'), value: customer.address_line || '—' },
         customer.customer_type === 'commercial' && { label: t('cust.commercial_shift'), value: <span style={{ textTransform: 'capitalize' }}>{customer.commercial_shift || t('cust.not_set')}</span> },
         { label: t('portal.account.collection'), value: `${customer.collection_frequency || '—'}${customer.collection_mode ? ` (${customer.collection_mode})` : ''}` },
-        { label: t('cust.fee'), value: customer.fee != null ? customer.fee : '—', className: 'tabular-nums' },
+        { label: t('cust.fee_fixed'), value: customer.fee != null ? `${Number(customer.fee).toLocaleString()} ${customer.fee_currency || 'USD'}` : '—', className: 'tabular-nums' },
+        { label: t('cust.billing_type'), value: customer.billing_type ? t(customer.billing_type === 'daily' ? 'cust.billing_daily' : 'cust.billing_monthly') : '—' },
+        { label: t('cust.work_days'), value: Array.isArray(customer.work_days) && customer.work_days.length ? customer.work_days.map((d) => t('cust.day_' + d)).join(', ') : '—' },
       ]} />
 
       {customer.notes && (

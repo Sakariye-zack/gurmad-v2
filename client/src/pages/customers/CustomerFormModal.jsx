@@ -6,10 +6,14 @@ import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
+const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
+
 const EMPTY = {
   customer_type: 'residential', name: '', business_name: '', phone: '', alternate_phone: '',
   whatsapp: '', email: '', address_line: '', zone_id: '', sub_zone: '', commercial_shift: '',
   collection_frequency: '', collection_mode: '', fee: '', notes: '',
+  // Billing: '' lets the server pick the default (house → monthly, business → daily).
+  billing_type: '', fee_currency: 'USD', work_days: [],
   // Group & Group-Based Collection — Change Request, Spec §6. Both
   // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
   // §26-1: no forced/fake default, no required-field validation added).
@@ -33,6 +37,8 @@ function toFormState(customer) {
     address_line: customer.address_line || '', zone_id: String(customer.zone_id || ''), sub_zone: customer.sub_zone || '',
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
+    billing_type: customer.billing_type || '', fee_currency: customer.fee_currency || 'USD',
+    work_days: Array.isArray(customer.work_days) ? customer.work_days : [],
     group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', gz_filter: customer.group_zone_id ? String(customer.group_zone_id) : '', door_number: customer.door_number || '',
     lat: customer.lat ?? '', lng: customer.lng ?? '',
   };
@@ -163,6 +169,8 @@ function CustomerFormModalContent({ onClose, customer }) {
       sub_zone: form.sub_zone.trim() || null, commercial_shift: isCommercial ? (form.commercial_shift || null) : null,
       collection_frequency: form.collection_frequency.trim() || null, collection_mode: form.collection_mode.trim() || null,
       fee: form.fee === '' ? null : parseFloat(form.fee), notes: form.notes.trim() || null,
+      ...(form.billing_type ? { billing_type: form.billing_type } : {}),
+      fee_currency: form.fee_currency, work_days: form.work_days,
       group_id: form.group_id ? parseInt(form.group_id, 10) : null,
       route_id: form.route_id ? parseInt(form.route_id, 10) : null,
       door_number: form.door_number.trim() || null,
@@ -334,10 +342,42 @@ function CustomerFormModalContent({ onClose, customer }) {
           <Field label={t('cust.collection_frequency')}>
             <input value={form.collection_frequency} onChange={(e) => set('collection_frequency', e.target.value)} style={inputStyle} placeholder={t('cust.e_g_weekly')} />
           </Field>
-          <Field label={t('cust.fee')}>
-            <input type="number" value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} />
+          <Field label={t('cust.billing_type')}>
+            <select value={form.billing_type || (isCommercial ? 'daily' : 'monthly')} onChange={(e) => set('billing_type', e.target.value)} style={inputStyle}>
+              <option value="monthly">{t('cust.billing_monthly')}</option>
+              <option value="daily">{t('cust.billing_daily')}</option>
+            </select>
           </Field>
         </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px' }}>
+          <Field label={t('cust.fee_currency')}>
+            <select value={form.fee_currency} onChange={(e) => set('fee_currency', e.target.value)} style={inputStyle}>
+              <option value="USD">USD ($)</option>
+              <option value="SLSH">SLSH (Somaliland shilling)</option>
+            </select>
+          </Field>
+          <Field label={t('cust.fee_fixed')} hint={t('cust.fee_fixed_hint')}>
+            <input type="number" min="0" value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} placeholder={form.fee_currency === 'SLSH' ? '30000' : '5'} />
+          </Field>
+        </div>
+
+        <Field label={t('cust.work_days')}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {WEEK_DAYS.map((d) => {
+              const on = form.work_days.includes(d);
+              return (
+                <button key={d} type="button" aria-pressed={on}
+                  onClick={() => set('work_days', on ? form.work_days.filter((x) => x !== d) : [...form.work_days, d])}
+                  style={{ padding: '6px 12px', borderRadius: '999px', fontSize: '13px', cursor: 'pointer',
+                    border: '1px solid ' + (on ? 'var(--accent, #4ade80)' : 'var(--border, #333)'),
+                    background: on ? 'var(--accent-soft, rgba(74,222,128,0.15))' : 'transparent', color: 'inherit' }}>
+                  {t('cust.day_' + d)}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
 
         <Field label={t('cust.notes')} hint={t('cust.optional_operational_notes_only_not')}>
           <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} maxLength={2000} />
