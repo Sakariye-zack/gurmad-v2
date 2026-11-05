@@ -3,6 +3,7 @@ import { AlertTriangle, MapPin, LocateFixed } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
+import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const EMPTY = {
@@ -12,7 +13,7 @@ const EMPTY = {
   // Group & Group-Based Collection — Change Request, Spec §6. Both
   // OPTIONAL — a customer can be created/left Zone-only (Locked Decision
   // §26-1: no forced/fake default, no required-field validation added).
-  group_id: '', route_id: '', door_number: '',
+  group_id: '', route_id: '', gz_filter: '', door_number: '',
   // Map location — the backend (routes/customers.js) has always validated
   // and stored lat/lng and the Map page (pages/map/MapPage.jsx) has always
   // read them; this form was the one gap in that chain — a customer could
@@ -67,7 +68,12 @@ function CustomerFormModalContent({ onClose, customer }) {
   const { data: groupsData } = useGroups({ zone_id: form.zone_id || undefined, status: 'active' });
   const groups = form.zone_id ? (groupsData?.data || []) : [];
   const { data: routesData } = useRoutesForGroup(form.group_id || undefined);
-  const routes = form.group_id ? (routesData?.data || []).filter((r) => r.status === 'active') : [];
+  const { data: gzData } = useGroupZones(form.group_id || undefined);
+  const groupZones = form.group_id ? (gzData?.data || []).filter((z) => z.status === 'active') : [];
+  // Zone only filters the Sub Zone list; customers store route_id/group_id.
+  const routes = form.group_id
+    ? (routesData?.data || []).filter((r) => r.status === 'active' && (form.gz_filter === '' || (form.gz_filter === 'none' ? !r.group_zone_id : String(r.group_zone_id) === form.gz_filter)))
+    : [];
   const busy = createCustomer.isPending || updateCustomer.isPending;
   const isCommercial = form.customer_type === 'commercial';
 
@@ -77,8 +83,9 @@ function CustomerFormModalContent({ onClose, customer }) {
       // Changing Zone invalidates any previously-selected Group/Route;
       // changing Group invalidates any previously-selected Route — a
       // stale, no-longer-valid selection must never be silently submitted.
-      if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; }
-      if (field === 'group_id') { next.route_id = ''; }
+      if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; next.gz_filter = ''; }
+      if (field === 'group_id') { next.route_id = ''; next.gz_filter = ''; }
+      if (field === 'gz_filter') { next.route_id = ''; }
       return next;
     });
     if (fieldErrors[field]) setFieldErrors((fe) => ({ ...fe, [field]: undefined }));
@@ -287,6 +294,13 @@ function CustomerFormModalContent({ onClose, customer }) {
             <select value={form.group_id} onChange={(e) => set('group_id', e.target.value)} style={inputStyle} disabled={!form.zone_id}>
               <option value="">{form.zone_id ? t('cust.no_group') : t('cust.select_a_zone_first')}</option>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
+            </select>
+          </Field>
+          <Field label={t('group.zone', 'Zone')}>
+            <select value={form.gz_filter} onChange={(e) => set('gz_filter', e.target.value)} style={inputStyle} disabled={!form.group_id}>
+              <option value="">{form.group_id ? t('group.all_zones', 'All zones') : t('cust.select_a_group_first')}</option>
+              {groupZones.map((z) => <option key={z.id} value={String(z.id)}>{z.name ? `${z.code} — ${z.name}` : z.code}</option>)}
+              {form.group_id && <option value="none">{t('group.no_zone', 'No zone')}</option>}
             </select>
           </Field>
           <Field label={t('cust.route_optional')}>

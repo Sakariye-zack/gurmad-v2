@@ -1011,6 +1011,24 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_group_id ON routes(group_id);`);
   await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS collector_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL;`);
 
+  // Zone level between Group and Sub Zone (routes). Existing Sub Zones keep
+  // group_zone_id NULL ("No zone").
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_zones (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+      code VARCHAR(30) NOT NULL,
+      name VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_by INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (group_id, code)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_group_zones_group_id ON group_zones(group_id);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS group_zone_id INTEGER REFERENCES group_zones(id) ON DELETE SET NULL;`);
+
   // customers.group_id/route_id — LOCKED §26-1: initially and indefinitely
   // NULLABLE. No default/fake Group or Route is ever assigned here or
   // anywhere else — every existing customer keeps group_id/route_id = NULL

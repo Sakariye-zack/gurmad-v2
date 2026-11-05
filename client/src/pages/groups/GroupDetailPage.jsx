@@ -4,6 +4,7 @@ import { ArrowLeft, Boxes, Pencil, Plus } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, StatCard, LoadingState, ErrorState, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useGroup, useGroupSummary, useGroupCollectorPerformance, useCreateRoute, useUpdateRoute, useGroupCustomers } from '../../hooks/useGroups.js';
+import { useCreateGroupZone, useUpdateGroupZone } from '../../hooks/useGroupZones.js';
 import GroupFormModal from './GroupFormModal.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { useUsers } from '../../hooks/useUsers.js';
@@ -34,11 +35,18 @@ export default function GroupDetailPage() {
   // /v2/routes/:id), but nothing here ever called it — Add Route existed,
   // a typo'd code or a status change on an existing route did not.
   const [editRouteTarget, setEditRouteTarget] = useState(null);
+  const [zoneFormTarget, setZoneFormTarget] = useState(null); // null closed, {} new, row = edit
   const group = data?.data;
   const summary = summaryData?.data;
   const performance = perfData?.data || [];
+  const zones = group?.zones || [];
   const customers = customersData?.data || [];
   const customersMeta = customersData?.meta;
+
+  const routeSections = [
+    ...zones.map((z) => ({ key: 'z' + z.id, label: z.name ? `${z.code} — ${z.name}` : z.code, routes: (group?.routes || []).filter((r) => r.group_zone_id === z.id) })),
+    { key: 'none', label: t('group.no_zone', 'No zone'), routes: (group?.routes || []).filter((r) => !r.group_zone_id) },
+  ].filter((sec) => sec.routes.length > 0);
 
   if (isLoading) return <LoadingState label={t('group.loading_group')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
@@ -82,6 +90,34 @@ export default function GroupDetailPage() {
 
       <Card style={{ padding: '16px', marginTop: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <strong style={{ fontSize: '13px' }}>{t('group.zones', 'Zones')} ({zones.length})</strong>
+          <RoleGate roles={['admin', 'gudoomiye']}>
+            <Button variant="secondary" icon={Plus} onClick={() => setZoneFormTarget({})}>{t('group.add_zone', 'Add Zone')}</Button>
+          </RoleGate>
+        </div>
+        {zones.length === 0 && <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('group.no_zone', 'No zone')}</p>}
+        {zones.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <tbody>
+              {zones.map((z) => (
+                <tr key={z.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '8px 4px' }}><strong>{z.code}</strong>{z.name && z.name !== z.code ? ` — ${z.name}` : ''}</td>
+                  <td style={{ padding: '8px 4px' }} className="tabular-nums">{z.route_count} {t('group.routes')}</td>
+                  <td style={{ padding: '8px 4px' }}><StatusBadge status={z.status} /></td>
+                  <td style={{ padding: '8px 4px', textAlign: 'right' }}>
+                    <RoleGate roles={['admin', 'gudoomiye']}>
+                      <Button variant="ghost" icon={Pencil} style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => setZoneFormTarget(z)}>{t('group.edit')}</Button>
+                    </RoleGate>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card style={{ padding: '16px', marginTop: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
           <strong style={{ fontSize: '13px' }}>{t('group.m.routesN', undefined, { n: group.routes?.length || 0 })}</strong>
           <RoleGate roles={['admin', 'gudoomiye']}>
             <Button variant="secondary" icon={Plus} onClick={() => setRouteFormOpen(true)}>{t('group.add_route')}</Button>
@@ -93,7 +129,10 @@ export default function GroupDetailPage() {
         {group.routes && group.routes.length > 0 && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <tbody>
-              {group.routes.map((r) => (
+              {routeSections.map((sec) => (
+                <React.Fragment key={sec.key}>
+                  <tr><td colSpan={5} style={{ padding: '10px 4px 4px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{sec.label}</td></tr>
+                  {sec.routes.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 4px' }}><strong>{r.code}</strong>{r.name && r.name !== r.code ? ` — ${r.name}` : ''}</td>
                   <td style={{ padding: '8px 4px', color: r.collector_name ? 'inherit' : 'var(--text-muted)' }}>{r.collector_name || t('group.unassigned', 'Unassigned')}</td>
@@ -105,6 +144,8 @@ export default function GroupDetailPage() {
                     </RoleGate>
                   </td>
                 </tr>
+                  ))}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -158,24 +199,26 @@ export default function GroupDetailPage() {
       </p>
 
       <GroupFormModal open={editOpen} onClose={() => setEditOpen(false)} group={group} />
-      <RouteFormModal open={routeFormOpen} onClose={() => setRouteFormOpen(false)} groupId={group.id} />
-      <EditRouteModal route={editRouteTarget} onClose={() => setEditRouteTarget(null)} onDone={refetch} />
+      <RouteFormModal open={routeFormOpen} onClose={() => setRouteFormOpen(false)} groupId={group.id} zones={zones} />
+      <EditRouteModal route={editRouteTarget} zones={zones} onClose={() => setEditRouteTarget(null)} onDone={refetch} />
+      {zoneFormTarget && <ZoneFormModal groupId={group.id} zone={zoneFormTarget.id ? zoneFormTarget : null} onClose={() => setZoneFormTarget(null)} />}
     </div>
   );
 }
 
-function EditRouteModal({ route, onClose, onDone }) {
+function EditRouteModal({ route, zones, onClose, onDone }) {
   const { t } = useI18n();
   const [code, setCode] = useState(route?.code || '');
   const [name, setName] = useState(route?.name || '');
   const [status, setStatus] = useState(route?.status || 'active');
   const [collectorId, setCollectorId] = useState(route?.collector_user_id ? String(route.collector_user_id) : '');
+  const [zoneId, setZoneId] = useState(route?.group_zone_id ? String(route.group_zone_id) : '');
   const [error, setError] = useState('');
   const update = useUpdateRoute(route?.id);
   const toast = useToast();
 
   React.useEffect(() => {
-    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setError(''); }
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setError(''); }
   }, [route]);
 
   if (!route) return null;
@@ -185,7 +228,7 @@ function EditRouteModal({ route, onClose, onDone }) {
     setError('');
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     try {
-      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null });
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null });
       toast.success(t('group.route_updated'));
       onDone?.();
       onClose();
@@ -213,6 +256,7 @@ function EditRouteModal({ route, onClose, onDone }) {
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.name_optional')}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         </label>
+        <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} current={route} />
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('common.status')}</span>
@@ -227,11 +271,12 @@ function EditRouteModal({ route, onClose, onDone }) {
   );
 }
 
-function RouteFormModal({ open, onClose, groupId }) {
+function RouteFormModal({ open, onClose, groupId, zones }) {
   const { t } = useI18n();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [collectorId, setCollectorId] = useState('');
+  const [zoneId, setZoneId] = useState('');
   const [error, setError] = useState('');
   const createRoute = useCreateRoute();
   const toast = useToast();
@@ -241,9 +286,9 @@ function RouteFormModal({ open, onClose, groupId }) {
     e.preventDefault();
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     try {
-      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null });
+      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null });
       toast.success(t('fin.m.created', undefined, { number: code }));
-      setCode(''); setName(''); setCollectorId(''); setError('');
+      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setError('');
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));
@@ -271,7 +316,79 @@ function RouteFormModal({ open, onClose, groupId }) {
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.name_optional')}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         </label>
+        <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} />
+        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
+      </form>
+    </Modal>
+  );
+}
+
+function ZoneSelect({ value, onChange, zones }) {
+  const { t } = useI18n();
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.zone', 'Zone')}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={inputStyle}>
+        <option value="">{t('group.no_zone', 'No zone')}</option>
+        {(zones || []).filter((z) => z.status === 'active' || String(z.id) === value).map((z) => <option key={z.id} value={String(z.id)}>{z.name ? `${z.code} — ${z.name}` : z.code}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function ZoneFormModal({ groupId, zone, onClose }) {
+  const { t } = useI18n();
+  const [code, setCode] = useState(zone?.code || '');
+  const [name, setName] = useState(zone?.name || '');
+  const [status, setStatus] = useState(zone?.status || 'active');
+  const [error, setError] = useState('');
+  const create = useCreateGroupZone();
+  const update = useUpdateGroupZone(zone?.id);
+  const toast = useToast();
+  const busy = create.isPending || update.isPending;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!code.trim()) { setError(t('group.zone_code_required', 'Zone code is required.')); return; }
+    try {
+      if (zone) await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status });
+      else await create.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null });
+      toast.success(t('group.zone', 'Zone'));
+      onClose();
+    } catch (err) {
+      setError(err.message || t('common.somethingWrong'));
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={busy ? () => {} : onClose}
+      title={zone ? t('group.edit_zone', 'Edit Zone') : t('group.add_zone', 'Add Zone')}
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={busy}>{t('common.cancel')}</Button>
+        <Button type="submit" form="zone-form" disabled={busy}>{busy ? t('common.saving') : t('group.save_changes')}</Button>
+      </>}
+    >
+      <form id="zone-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.zone', 'Zone')}</span>
+          <input value={code} onChange={(e) => setCode(e.target.value)} style={inputStyle} placeholder="e.g. Zone A" />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('group.name_optional')}</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        </label>
+        {zone && (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('common.status')}</span>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
+              <option value="active">{t('status.active')}</option>
+              <option value="inactive">{t('status.inactive')}</option>
+            </select>
+          </label>
+        )}
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>

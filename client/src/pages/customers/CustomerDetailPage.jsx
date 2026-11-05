@@ -40,10 +40,10 @@ export default function CustomerDetailPage() {
   if (!customer) return null;
 
   const isArchived = customer.status === 'archived';
-  // District › Group › Sub Zone breadcrumb (group/route codes resolved from the group detail).
+  // Group › District › Zone › Sub Zone breadcrumb (group/route codes resolved from the group detail).
   const grp = groupData?.data;
   const rt = customer.route_id ? grp?.routes?.find((r) => r.id === customer.route_id) : null;
-  const breadcrumb = [customer.zone_name, grp?.code, rt?.code].filter(Boolean).join(' › ');
+  const breadcrumb = [grp?.code, customer.zone_name, customer.group_zone_name, rt?.code].filter(Boolean).join(' › ');
 
   async function handleArchiveToggle() {
     try {

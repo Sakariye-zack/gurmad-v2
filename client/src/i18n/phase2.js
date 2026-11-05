@@ -518,4 +518,11 @@ export const PHASE2 = {
   "cust.door_col": { en: "Door #", so: "Albaab #" },
   "group.collector": { en: "Collector", so: "Ururiye" },
   "group.unassigned": { en: "Unassigned", so: "Aan loo xilsaarin" },
+  "group.zone": { en: "Zone", so: "Zone" },
+  "group.zones": { en: "Zones", so: "Zone-yada" },
+  "group.add_zone": { en: "Add Zone", so: "Ku dar Zone" },
+  "group.edit_zone": { en: "Edit Zone", so: "Wax ka beddel Zone" },
+  "group.no_zone": { en: "No zone", so: "Zone la aan" },
+  "group.all_zones": { en: "All zones", so: "Dhammaan Zone-yada" },
+  "group.zone_code_required": { en: "Zone code is required.", so: "Koodhka Zone waa loo baahan yahay." },
 };

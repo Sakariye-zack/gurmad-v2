@@ -67,11 +67,12 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT r.*, g.code AS group_code, g.zone_id,
+      `SELECT r.*, g.code AS group_code, g.zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
         u.full_name AS collector_name, u.is_active AS collector_active,
         (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count
        FROM routes r JOIN groups g ON r.group_id = g.id
        LEFT JOIN v2_users u ON u.id = r.collector_user_id
+       LEFT JOIN group_zones gz ON gz.id = r.group_zone_id
        ${whereSql} ORDER BY g.code, r.code`,
       params
     );
@@ -129,7 +130,32 @@ function validateRouteInput(body, { partial = false } = {}) {
       else out.collector_user_id = cid;
     }
   }
+  if (body.group_zone_id !== undefined) {
+    if (body.group_zone_id === null) out.group_zone_id = null;
+    else {
+      const zid = parseStrictId(String(body.group_zone_id));
+      if (zid === null) errors.push('group_zone_id must be a valid zone id or null.');
+      else out.group_zone_id = zid;
+    }
+  }
   return { errors, data: out };
+}
+
+// The Zone (group_zones) must belong to the route's own group.
+async function groupZoneError(groupZoneId, groupId) {
+  if (groupZoneId === undefined || groupZoneId === null) return null;
+  const r = await pool.query('SELECT group_id FROM group_zones WHERE id = $1', [groupZoneId]);
+  if (r.rows.length === 0) return 'group_zone_id does not reference an existing zone.';
+  if (Number(r.rows[0].group_id) !== Number(groupId)) return 'The selected zone does not belong to this group.';
+  return null;
+}
+
+const MAX_SUBZONES_PER_COLLECTOR = 10;
+async function collectorCapError(collectorId, excludeRouteId) {
+  if (collectorId === undefined || collectorId === null) return null;
+  const r = await pool.query('SELECT COUNT(*)::int AS n FROM routes WHERE collector_user_id = $1 AND id != $2', [collectorId, excludeRouteId ?? 0]);
+  if (r.rows[0].n >= MAX_SUBZONES_PER_COLLECTOR) return `A collector can have at most ${MAX_SUBZONES_PER_COLLECTOR} Sub Zones.`;
+  return null;
 }
 
 async function collectorError(collectorId, groupZoneId) {
@@ -157,12 +183,16 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     }
     const cErr = await collectorError(data.collector_user_id, groupRes.rows[0].zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
+    const capErr = await collectorCapError(data.collector_user_id, null);
+    if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
+    const gzErr = await groupZoneError(data.group_zone_id, data.group_id);
+    if (gzErr) return res.status(400).json({ error: { message: gzErr, code: 'VALIDATION' } });
     const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2', [data.group_id, data.code]);
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
 
     const result = await pool.query(
-      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null]
+      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null]
     );
     const route = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'route.create', entityType: 'route', entityId: route.id, before: null, after: route });
@@ -192,6 +222,10 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     }
     const cErr = await collectorError(data.collector_user_id, current.zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
+    const capErr = await collectorCapError(data.collector_user_id, id);
+    if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
+    const gzErr = await groupZoneError(data.group_zone_id, current.group_id);
+    if (gzErr) return res.status(400).json({ error: { message: gzErr, code: 'VALIDATION' } });
     if (data.code) {
       const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2 AND id != $3', [current.group_id, data.code, id]);
       if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
