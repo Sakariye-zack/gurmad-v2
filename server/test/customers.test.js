@@ -221,3 +221,19 @@ test('door number: non-scalar type rejected', async () => {
   const r = await api('POST', '/customers', { token: w.tokens.admin, body: body(w, { door_number: {} }) });
   assert.equal(r.status, 400, JSON.stringify(r.body));
 });
+
+test('legacy customer with NULL door and matching number can save a door', async () => {
+  const w = await setupWorld();
+  for (const raw of [false, true]) {
+    const n = String(10000 + Math.floor(Math.random() * 80000));
+    const sent = raw ? '0' + n : n;
+    const a = await api('POST', '/customers', { token: w.tokens.admin, body: body(w, { door_number: String(8000 + (++seq)) }) });
+    await db.query("UPDATE customers SET door_number = NULL, customer_number = $2 WHERE id = $1", [a.data.id, 'C-' + n]);
+    const p = await api('PUT', '/customers/' + a.data.id, { token: w.tokens.admin, body: { door_number: sent } });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.equal(p.data.door_number, sent);
+    assert.equal(p.data.customer_number, 'C-' + n);
+    const l = await api('GET', '/customers/number-requests?status=pending&customer_id=' + a.data.id, { token: w.tokens.admin });
+    assert.equal(l.data.length, 0);
+  }
+});

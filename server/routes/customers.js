@@ -616,7 +616,6 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
 
     // Door change (differs from current) -> pending request; other fields still apply.
     let numberRequest = null;
-    const hasOtherFields = Object.keys(data).length > 0;
     let needRequest = false;
     if (requestedDoor !== undefined && requestedDoor !== (current.door_number ?? null)) {
       if (requestedDoor === null || !/^[0-9]+$/.test(requestedDoor)) {
@@ -624,7 +623,10 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
       }
       // Same derived C-number (e.g. 09401 vs 9401) is not a change: keep the current door.
       needRequest = customerNumberFromDoor(requestedDoor) !== current.customer_number;
+      // Legacy customer with no door whose number already matches: just record the door.
+      if (!needRequest && current.door_number == null) data.door_number = requestedDoor;
     }
+    const hasOtherFields = Object.keys(data).length > 0;
     if (!hasOtherFields && !needRequest) {
       return res.status(200).json({ data: current });
     }

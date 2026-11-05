@@ -315,7 +315,7 @@ function CustomerFormModalContent({ onClose, customer }) {
         <Field
           label={t('cust.door_number', 'Door # (Route)')}
           error={fieldErrors.door_number}
-          hint={isEdit ? t('cust.m.doorApprovalHint') : /^\d+$/.test(form.door_number.trim()) ? t('cust.m.numberPreview', undefined, { number: 'C-' + form.door_number.trim().padStart(2, '0') }) : undefined}
+          hint={isEdit ? t('cust.m.doorApprovalHint') : /^\d+$/.test(form.door_number.trim()) ? t('cust.m.numberPreview', undefined, { number: 'C-' + form.door_number.trim().replace(/^0+(?=\d)/, '').padStart(2, '0') }) : undefined}
         >
           <input value={form.door_number} onChange={(e) => set('door_number', e.target.value)} placeholder="572" maxLength={20} inputMode={isEdit ? undefined : 'numeric'} style={inputStyle} />
         </Field>

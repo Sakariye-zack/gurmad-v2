@@ -497,13 +497,10 @@ async function runMigrations() {
 
   // Customer # snapshot: invoices keep the number they were issued with even
   // if the customer's door/number is later changed (admin-approved).
-  const snapCol = await pool.query(`SELECT 1 FROM information_schema.columns WHERE table_name = 'invoices' AND column_name = 'customer_number_snapshot'`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_number_snapshot VARCHAR(20);`);
-  if (snapCol.rows.length === 0) {
-    // One-time backfill: only when the column was just added.
-    await pool.query(`UPDATE invoices SET customer_number_snapshot = customers.customer_number
-      FROM customers WHERE invoices.customer_id = customers.id AND invoices.customer_number_snapshot IS NULL;`);
-  }
+  // Idempotent backfill (only touches rows still NULL).
+  await pool.query(`UPDATE invoices SET customer_number_snapshot = customers.customer_number
+    FROM customers WHERE invoices.customer_id = customers.id AND invoices.customer_number_snapshot IS NULL;`);
 
   // Door / Customer # changes go through an admin-approved request.
   await pool.query(`
