@@ -111,12 +111,13 @@ const IMPORT_ENTITIES = {
       }
       const r = await client.query(
         `INSERT INTO customers (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
-           address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode, fee, registered_by, group_id, route_id, door_number)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+           address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode, fee, registered_by, group_id, route_id, door_number, billing_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
         [customerNumber, row.customer_type, row.name, row.business_name || null, row.phone, row.alternate_phone || null,
          row.whatsapp || null, row.email || null, row.address_line || null, ctx.zoneId, row.sub_zone || null,
          row.lat || null, row.lng || null, row.commercial_shift || null, row.collection_frequency || null,
-         row.collection_mode || null, row.fee || null, ctx.actorId, gr.groupId, gr.routeId, door]
+         row.collection_mode || null, row.fee || null, ctx.actorId, gr.groupId, gr.routeId, door,
+         row.customer_type === 'commercial' ? 'daily' : 'monthly']
       );
       return { ok: true, id: r.rows[0].id };
     },

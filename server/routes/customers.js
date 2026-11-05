@@ -12,6 +12,9 @@ const router = express.Router();
 const VALID_TYPES = ['residential', 'commercial'];
 const VALID_STATUSES = ['active', 'suspended', 'archived'];
 const VALID_SHIFTS = ['day', 'night'];
+const BILLING_TYPES = ['monthly', 'daily'];
+const FEE_CURRENCIES = ['USD', 'SLSH'];
+const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
 const CUSTOMER_NUMBER_RE = /^C-\d{2,}$/;
 // Matches reports.js's own OPERATIONAL_ROLES exactly — this endpoint
 // exposes the identical data reports.js's collection-history route
@@ -178,6 +181,19 @@ function validateCustomerInput(body, { partial = false } = {}) {
     } else {
       out.fee = body.fee;
     }
+  }
+  if (body.billing_type !== undefined) {
+    if (body.billing_type !== null && !BILLING_TYPES.includes(body.billing_type)) errors.push(`billing_type must be one of: ${BILLING_TYPES.join(', ')}.`);
+    else out.billing_type = body.billing_type;
+  }
+  if (body.fee_currency !== undefined) {
+    if (!FEE_CURRENCIES.includes(body.fee_currency)) errors.push(`fee_currency must be one of: ${FEE_CURRENCIES.join(', ')}.`);
+    else out.fee_currency = body.fee_currency;
+  }
+  if (body.work_days !== undefined) {
+    if (body.work_days === null) out.work_days = null;
+    else if (!Array.isArray(body.work_days) || body.work_days.some((d) => !WEEK_DAYS.includes(d))) errors.push(`work_days must be a list of: ${WEEK_DAYS.join(', ')}.`);
+    else out.work_days = JSON.stringify(WEEK_DAYS.filter((d) => body.work_days.includes(d)));
   }
   if (body.notes !== undefined) {
     const notes = body.notes ? String(body.notes) : '';
@@ -543,14 +559,17 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
          address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode,
-         fee, notes, registered_by, group_id, route_id, door_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+         fee, notes, registered_by, group_id, route_id, door_number, billing_type, fee_currency, work_days)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        RETURNING *`,
       [customerNumber, data.customer_type, data.name, data.business_name ?? null, data.phone,
        data.alternate_phone ?? null, data.whatsapp ?? null, data.email ?? null, data.address_line ?? null,
        data.zone_id, data.sub_zone ?? null, data.lat ?? null, data.lng ?? null, data.commercial_shift ?? null,
        data.collection_frequency ?? null, data.collection_mode ?? null, data.fee ?? null, data.notes ?? null,
-       req.user.id, data.group_id ?? null, data.route_id ?? null, door.value]
+       req.user.id, data.group_id ?? null, data.route_id ?? null, door.value,
+       // Houses are billed once a month; businesses per working day.
+       data.billing_type ?? (data.customer_type === 'commercial' ? 'daily' : 'monthly'),
+       data.fee_currency ?? 'USD', data.work_days ?? null]
     );
     await client.query('COMMIT');
     const customer = result.rows[0];

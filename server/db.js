@@ -1071,6 +1071,14 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS door_number VARCHAR(20);`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_door_number ON customers(door_number) WHERE door_number IS NOT NULL;`);
 
+  // Billing fields on the customer: monthly/daily invoicing, the currency
+  // of the fixed fee (customers.fee is the amount), and the weekdays the
+  // customer is served. Nullable for existing rows; the API fills defaults
+  // on create.
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS billing_type VARCHAR(10) CHECK (billing_type IN ('monthly', 'daily'));`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS fee_currency VARCHAR(4) NOT NULL DEFAULT 'USD' CHECK (fee_currency IN ('USD', 'SLSH'));`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS work_days JSONB;`);
+
   // batches.group_id/route_id — the historical-integrity snapshot (Spec
   // §5, non-negotiable). Captured ONCE at batch-creation time by
   // routes/batches.js; NO route ever updates these columns after insert —
