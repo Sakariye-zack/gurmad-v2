@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { api, db, setupWorld } = require('./helpers');
+const { api, db, setupWorld, createInvoice } = require('./helpers');
 
 let seq = 0;
 async function mkCustomer(w, extra = {}) {
@@ -180,4 +180,78 @@ test('daily: go-live cutoff excludes earlier visits; same-day manual invoice blo
     if (prev) await db.query('UPDATE billing_settings SET daily_start_date = $1 WHERE id = 1', [prev.daily_start_date]);
     else await db.query('DELETE FROM billing_settings WHERE id = 1');
   }
+});
+
+// ---- Task 10: service days + dual-currency invoice views ----
+async function monthlyWithVisits(w, period, dates, extra = {}) {
+  const c = await mkCustomer(w, { billing_type: 'monthly', fee: 12, fee_currency: 'USD', ...extra });
+  const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom',$2,$3) RETURNING id`, [w.zoneA.id, period + '-01', period + '-28'])).rows[0].id;
+  let n = 0;
+  const visit = async (status, at) => {
+    n += 1;
+    const batch = (await db.query(
+      `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, start_date) VALUES ($1,$2,$3,$4,'residential',$5) RETURNING id`,
+      ['WD-' + Date.now() + '-' + c.id + '-' + n, w.zoneA.id, cyc, n, period + '-01'])).rows[0].id;
+    await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,$3,$4)`, [batch, c.id, status, at]);
+  };
+  for (const d of dates) await visit('serviced', d);
+  await visit('missed', period + '-05 09:00:00'); // a missed visit must not count
+  const r = await runBilling(w, { kind: 'monthly', period });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return { c, inv: (await invoicesOf(c.id))[0] };
+}
+
+test('monthly invoice detail lists worked days by week', async () => {
+  const w = await setupWorld();
+  // 22:30 UTC on the 7th is the 8th local (UTC+3) => week 2
+  const { inv } = await monthlyWithVisits(w, '2032-11', ['2032-11-03 08:00:00', '2032-11-03 09:00:00', '2032-11-07 22:30:00', '2032-11-29 07:00:00']);
+  const r = await api('GET', '/invoices/' + inv.id, { token: w.tokens.admin });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.data.billing_period, '2032-11');
+  assert.equal(r.data.auto_generated, true);
+  const wd = r.data.worked_days;
+  assert.equal(wd.length, 4);
+  assert.deepEqual(wd.map((x) => x.range), ['1–7', '8–14', '15–21', '22–30']);
+  assert.deepEqual(wd[0].dates, ['2032-11-03']);
+  assert.deepEqual(wd[1].dates, ['2032-11-08']);
+  assert.deepEqual(wd[2].dates, []);
+  assert.deepEqual(wd[3].dates, ['2032-11-29']);
+});
+
+test('non-monthly invoice has no worked_days', async () => {
+  const w = await setupWorld();
+  const inv = await createInvoice(w.tokens.admin, w.custA, 5);
+  const r = await api('GET', '/invoices/' + inv.id, { token: w.tokens.admin });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.worked_days, undefined);
+});
+
+test('invoice documents contain SERVICE DAYS and the month line; both currencies and rate shown', async () => {
+  const w = await setupWorld();
+  const { inv } = await monthlyWithVisits(w, '2032-12', ['2032-12-02 08:00:00']);
+  const res = await fetch(process.env.TEST_BASE + `/api/v2/invoices/${inv.id}/document.docx`, { headers: { Authorization: 'Bearer ' + w.tokens.admin } });
+  assert.equal(res.status, 200);
+  const JSZip = require('jszip');
+  const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+  const xml = await zip.file('word/document.xml').async('string');
+  assert.match(xml, /SERVICE DAYS/);
+  assert.match(xml, /Waste collection — Dec 2032/);
+  assert.match(xml, /2032-12-02|02 Dec/);
+  assert.match(xml, /Exchange rate/);
+  assert.match(xml, /SLSH/);
+});
+
+test('GET /invoices/:id returns usd/slsh/rate in balance for an SLSH invoice', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w, { billing_type: 'monthly', fee: 30000, fee_currency: 'SLSH' });
+  await runBilling(w, { kind: 'monthly', period: '2033-01' });
+  const inv = (await invoicesOf(c.id))[0];
+  const r = await api('GET', '/invoices/' + inv.id, { token: w.tokens.admin });
+  assert.equal(r.status, 200);
+  const b = r.data.balance;
+  assert.equal(b.currency, 'SLSH');
+  assert.equal(b.slsh.netTotal, 30000);
+  assert.ok(b.rate && b.rate.rate > 0);
+  assert.ok(Math.abs(b.usd.netTotal - 30000 / b.rate.rate) < 1e-6);
+  assert.equal(b.usd.paid, 0);
 });

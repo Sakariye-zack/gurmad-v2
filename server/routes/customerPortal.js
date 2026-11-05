@@ -12,6 +12,8 @@ const { authenticateCustomerPortal, issuePortalToken } = require('../middleware/
 const { getInvoiceBalance, getCurrentExchangeRate } = require('../lib/financialCalculations');
 const { getCollectionHistory, getCollectionDetail } = require('../lib/reportsCalculations');
 const { buildInvoiceDocx, buildInvoiceHtml } = require('../lib/documentGenerators');
+const { getWorkedDays } = require('../lib/workedDays');
+const { getTimezone } = require('../lib/autoBilling');
 const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
 // Phase 5 — Complaints now exists: createComplaint/getComplaintsForCustomer/
 // getComplaintDetail are imported directly from the ONE shared service
@@ -529,7 +531,8 @@ router.get('/invoices/:id/document.docx', authenticateCustomerPortal, async (req
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await getTimezone()) : undefined;
+    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows, worked_days });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.docx"`);
     return res.send(buffer);
@@ -558,7 +561,8 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const html = await buildInvoiceHtml({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await getTimezone()) : undefined;
+    const html = await buildInvoiceHtml({ ...invoice, balance, payments: payments.rows, worked_days });
     return res.json({ data: { html } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to generate preview.', code: 'INTERNAL' } });

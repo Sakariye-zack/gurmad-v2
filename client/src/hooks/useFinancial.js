@@ -104,3 +104,15 @@ export function useSetExchangeRate() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (rate) => apiClient.post('/v2/exchange-rates', { rate }), onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'exchange-rates'] }) });
 }
+
+// Automatic invoicing: last runs + skipped customers, and the admin-only manual trigger.
+export function useAutoBillingStatus(enabled = true) {
+  return useQuery({ queryKey: ['v2', 'invoices', 'auto-billing-status'], queryFn: () => apiClient.get('/v2/invoices/auto-billing/status'), enabled });
+}
+export function useRunAutoBilling() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => apiClient.post('/v2/invoices/auto-billing/run', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'invoices'] }),
+  });
+}

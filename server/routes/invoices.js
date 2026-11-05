@@ -5,6 +5,7 @@ const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
 const { generateInvoiceNumber } = require('../lib/invoiceInsert');
 const autoBilling = require('../lib/autoBilling');
+const { getWorkedDays } = require('../lib/workedDays');
 
 const router = express.Router();
 
@@ -157,7 +158,9 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     );
     const debt = await pool.query(`SELECT * FROM debts WHERE invoice_id = $1`, [id]);
 
-    res.json({ data: { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null } });
+    const out = { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null };
+    if (invoice.billing_period) out.worked_days = await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone());
+    res.json({ data: out });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load invoice.', code: 'INTERNAL' } });
   }
@@ -187,7 +190,8 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone()) : undefined;
+    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows, worked_days });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.docx"`);
     res.send(buffer);
