@@ -223,7 +223,10 @@ const PORT = process.env.PORT || 5001;
 
 runMigrations()
   .then(() => {
-    app.listen(PORT, () => console.log(`gurmad-v2-server listening on :${PORT}`));
+    app.listen(PORT, () => {
+      console.log(`gurmad-v2-server listening on :${PORT}`);
+      require('./lib/autoBilling').startScheduler();
+    });
   })
   .catch((err) => {
     console.error('FATAL: V2 migrations failed to run.', err);

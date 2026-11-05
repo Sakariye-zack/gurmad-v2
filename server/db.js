@@ -502,6 +502,43 @@ async function runMigrations() {
   await pool.query(`UPDATE invoices SET customer_number_snapshot = customers.customer_number
     FROM customers WHERE invoices.customer_id = customers.id AND invoices.customer_number_snapshot IS NULL;`);
 
+  // Automatic billing (monthly on the 28th / daily per serviced visit).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_period VARCHAR(7);`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // The unique indexes are the hard idempotency guarantee. This runs on live
+  // data, so never fail boot: if pre-existing duplicates would block an
+  // index, skip it with a warning (the engine's NOT EXISTS checks still hold).
+  const dupMonthly = await pool.query(`SELECT 1 FROM invoices WHERE billing_period IS NOT NULL AND status <> 'voided'
+    GROUP BY customer_id, billing_period HAVING COUNT(*) > 1 LIMIT 1`);
+  if (dupMonthly.rows.length === 0) {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_customer_billing_period
+      ON invoices (customer_id, billing_period) WHERE billing_period IS NOT NULL AND status <> 'voided';`);
+  } else {
+    console.warn('WARNING: duplicate non-voided (customer_id, billing_period) invoices exist; skipping uq_invoices_customer_billing_period.');
+  }
+  const dupBc = await pool.query(`SELECT 1 FROM invoices WHERE batch_customer_id IS NOT NULL AND status <> 'voided'
+    GROUP BY batch_customer_id HAVING COUNT(*) > 1 LIMIT 1`);
+  if (dupBc.rows.length === 0) {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_batch_customer
+      ON invoices (batch_customer_id) WHERE batch_customer_id IS NOT NULL AND status <> 'voided';`);
+  } else {
+    console.warn('WARNING: duplicate non-voided invoices per batch_customer_id exist; skipping uq_invoices_batch_customer.');
+  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS billing_runs (
+      id SERIAL PRIMARY KEY,
+      kind VARCHAR(10) NOT NULL CHECK (kind IN ('monthly', 'daily')),
+      period_key VARCHAR(10) NOT NULL,
+      started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TIMESTAMP,
+      created_count INTEGER NOT NULL DEFAULT 0,
+      skipped JSONB NOT NULL DEFAULT '[]',
+      error TEXT,
+      triggered_by INTEGER
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_runs_kind_period ON billing_runs(kind, period_key);`);
+
   // Door / Customer # changes go through an admin-approved request.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS customer_number_change_requests (

@@ -3,6 +3,8 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
+const { generateInvoiceNumber } = require('../lib/invoiceInsert');
+const autoBilling = require('../lib/autoBilling');
 
 const router = express.Router();
 
@@ -35,11 +37,53 @@ async function resolveUserZoneId(user) {
   return r.rows[0]?.id ?? null;
 }
 
-async function generateInvoiceNumber(client) {
-  const seq = await client.query(`SELECT nextval('invoice_number_seq') AS n`);
-  const n = Number(seq.rows[0].n);
-  return `INV-${String(n).padStart(6, '0')}`;
-}
+// ---- Auto-billing admin endpoints (registered before '/:id') ----
+router.get('/auto-billing/status', authenticateToken, requireRole('admin', 'gudoomiye', 'zone_accountant'), async (req, res) => {
+  try {
+    const runs = (await pool.query(
+      `SELECT id, kind, period_key, started_at, finished_at, created_count, jsonb_array_length(skipped) AS skipped_count, error, triggered_by
+       FROM billing_runs ORDER BY id DESC LIMIT 20`)).rows;
+    const myZoneId = await resolveUserZoneId(req.user);
+    const latest = {};
+    for (const kind of ['monthly', 'daily']) {
+      const r = await pool.query(`SELECT id, period_key, skipped FROM billing_runs WHERE kind = $1 AND finished_at IS NOT NULL AND error IS NULL ORDER BY id DESC LIMIT 1`, [kind]);
+      let skipped = r.rows[0]?.skipped || [];
+      if (myZoneId !== null && skipped.length) {
+        const ok = await pool.query(`SELECT id FROM customers WHERE id = ANY($1::int[]) AND zone_id = $2`, [skipped.map((s) => s.customer_id), myZoneId]);
+        const allowed = new Set(ok.rows.map((x) => x.id));
+        skipped = skipped.filter((s) => allowed.has(s.customer_id));
+      }
+      latest[kind] = { run_id: r.rows[0]?.id || null, period_key: r.rows[0]?.period_key || null, skipped };
+    }
+    res.json({ data: { runs, latest_skipped: latest } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load auto-billing status.', code: 'INTERNAL' } });
+  }
+});
+
+router.post('/auto-billing/run', authenticateToken, requireRole('admin'), async (req, res) => {
+  const { kind, period, date } = req.body || {};
+  if (kind !== 'monthly' && kind !== 'daily') return res.status(400).json({ error: { message: "kind must be 'monthly' or 'daily'.", code: 'VALIDATION' } });
+  try {
+    let result;
+    if (kind === 'monthly') {
+      if (period !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(period))) return res.status(400).json({ error: { message: 'period must be YYYY-MM.', code: 'VALIDATION' } });
+      result = await autoBilling.runMonthly({ triggeredBy: req.user.id, manual: true, period: period || null });
+    } else {
+      let d = date;
+      if (d === undefined) d = autoBilling.localParts(new Date(), await autoBilling.getTimezone()).date;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || isNaN(new Date(d + 'T00:00:00Z').getTime()) || new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) !== d) {
+        return res.status(400).json({ error: { message: 'date must be a valid YYYY-MM-DD.', code: 'VALIDATION' } });
+      }
+      result = await autoBilling.runDaily({ date: d, triggeredBy: req.user.id });
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.auto_billing_run', entityType: 'billing_run', entityId: result.run_id || null, before: null,
+      after: { kind, period: period || null, date: date || null, created: result.created, skipped: result.skipped.length } });
+    res.json({ data: result });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Auto-billing run failed: ' + err.message, code: 'INTERNAL' } });
+  }
+});
 
 // GET / — list, zone-scoped via the customer's own zone_id (invoices have
 // no zone_id of their own; joining to customers is the same pattern the
