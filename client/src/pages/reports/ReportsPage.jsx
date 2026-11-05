@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { BarChart3, Printer, Download } from 'lucide-react';
 import { PageHeader, Button, Card, DataTable, StatusBadge, StatCard, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import PrintLetterhead from '../../components/PrintLetterhead.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import {
   useExecutiveSummary, useCollectorPerformance, useZonePerformance, useTruckPerformance,
@@ -66,6 +67,7 @@ export default function ReportsPage() {
 
   return (
     <div>
+      <PrintLetterhead title="Report" subtitle={TABS.find((x) => x.key === tab)?.label} />
       <PageHeader icon={BarChart3} title="Reports" subtitle="Collection performance and financial reporting across V2." />
 
       <Card style={{ padding: '12px 16px', marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }} className="no-print">

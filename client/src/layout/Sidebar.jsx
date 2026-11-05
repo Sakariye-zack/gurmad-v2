@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
-import CompanyLogo from '../components/CompanyLogo.jsx';
+import BrandMark from '../components/BrandMark.jsx';
 import { useCompanyName } from '../hooks/useSettings.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
@@ -287,19 +287,10 @@ export default function Sidebar() {
         .gv2-sidebar-nav::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
       `}</style>
 
-      {/* User-requested ('magaca systemkana halkaa ka soo muuji... logadana
-          iga qurxi'): CompanyLogo only ever rendered the wordmark TEXT as
-          a fallback for when the logo image itself fails to load — once a
-          real logo image is set (Settings > Company Information), the
-          system's name never appeared anywhere next to it. Text is now
-          always shown alongside the mark, not conditionally on failure. */}
+      {/* Logo on a white tile with the company name and tagline beside it
+          (user-requested: 'logadana iga qurxi'). */}
       <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
-          <CompanyLogo fallback={<span style={{ fontWeight: 900, fontSize: '17px', color: 'var(--brand)' }}>{companyName}</span>} height={26} style={{ flexShrink: 0 }} />
-          <span style={{ fontWeight: 800, fontSize: '15px', letterSpacing: '-0.01em', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {companyName}
-          </span>
-        </div>
+        <BrandMark />
       </div>
 
       {/* Sidebar / Navigation UX — Hardening. overflowY:auto + minHeight:0

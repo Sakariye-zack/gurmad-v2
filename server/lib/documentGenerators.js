@@ -1,37 +1,43 @@
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType,
-  ShadingType, BorderStyle, HeadingLevel, AlignmentType,
+  ShadingType, BorderStyle, AlignmentType, ImageRun, VerticalAlign,
 } = require('docx');
 const { pool } = require('../db');
+const { getCompanyBranding } = require('./companyBranding');
 
-// Generates real, downloadable .docx files for the two document-like V2
-// outputs (Cashout, Invoice) — per explicit user request, additive to
-// both modules, no schema/API-shape change to either. One shared style
-// vocabulary so both documents look like the same company's paperwork,
-// not two different tools.
+// Generates the downloadable company paperwork (Invoice .docx, Cashout
+// .docx, and the Customer Portal's HTML invoice preview). Every document
+// shares one letterhead: the uploaded logo, company name, tagline and
+// contact lines (Settings > Company Information), in the logo's own
+// green/orange.
 
-const BRAND_GREEN = '2E7D32';
+const BRAND_GREEN = '3DAA35';
+const BRAND_ORANGE = 'F5A623';
+const INK = '1B1F16';
 const MUTED = '6B7280';
-const BORDER = 'D0D5DD';
+const BORDER = 'E3E8E1';
+const SOFT = 'F3F8F1';
+const NONE = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+const NO_BORDERS = { top: NONE, bottom: NONE, left: NONE, right: NONE, insideHorizontal: NONE, insideVertical: NONE };
+// Sans-serif to match the on-screen preview (Word's default is a serif).
+const DOC_STYLES = { default: { document: { run: { font: 'Segoe UI', size: 19, color: INK } } } };
+const PAGE = { page: { margin: { top: 720, bottom: 720, left: 900, right: 900 } } };
 
-function hairline() {
-  return new Paragraph({
-    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: BRAND_GREEN } },
-    spacing: { after: 200 },
-  });
+function hairline(color = BRAND_GREEN, size = 12) {
+  return new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size, color } }, spacing: { after: 200 } });
 }
 function sectionTitle(text) {
   return new Paragraph({
-    children: [new TextRun({ text: text.toUpperCase(), bold: true, color: BRAND_GREEN, size: 20 })],
-    spacing: { before: 240, after: 100 },
+    children: [new TextRun({ text: text.toUpperCase(), bold: true, color: BRAND_GREEN, size: 18, characterSpacing: 40 })],
+    spacing: { before: 280, after: 100 },
   });
 }
-function cell(text, { bold = false, width = 25, shaded = false } = {}) {
+function cell(text, { bold = false, width = 25, shaded = false, align = AlignmentType.LEFT, color = INK } = {}) {
   return new TableCell({
     width: { size: width, type: WidthType.PERCENTAGE },
-    shading: shaded ? { type: ShadingType.CLEAR, fill: 'F2F4F7' } : undefined,
-    margins: { top: 80, bottom: 80, left: 100, right: 100 },
-    children: [new Paragraph({ children: [new TextRun({ text: String(text ?? '—'), bold })] })],
+    shading: shaded ? { type: ShadingType.CLEAR, fill: SOFT } : undefined,
+    margins: { top: 90, bottom: 90, left: 120, right: 120 },
+    children: [new Paragraph({ alignment: align, children: [new TextRun({ text: String(text ?? '—'), bold, color, size: 19 })] })],
   });
 }
 function kvTable(rows) {
@@ -42,72 +48,106 @@ function kvTable(rows) {
     const pair2 = rows[i + 1];
     trs.push(new TableRow({
       children: [
-        cell(l1, { bold: true, width: 20, shaded: true }), cell(v1, { width: 30 }),
-        ...(pair2 ? [cell(pair2[0], { bold: true, width: 20, shaded: true }), cell(pair2[1], { width: 30 })] : [cell('', { width: 20 }), cell('', { width: 30 })]),
+        cell(l1, { bold: true, width: 20, shaded: true, color: MUTED }), cell(v1, { width: 30 }),
+        ...(pair2 ? [cell(pair2[0], { bold: true, width: 20, shaded: true, color: MUTED }), cell(pair2[1], { width: 30 })] : [cell('', { width: 20 }), cell('', { width: 30 })]),
       ],
     }));
   }
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: trs });
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE }, rows: trs,
+    borders: { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE },
+  });
 }
-function money(n) {
-  return `$${parseFloat(n || 0).toFixed(2)}`;
+function money(n, currency = 'USD') {
+  const v = parseFloat(n || 0);
+  return currency === 'SLSH' ? `${Math.round(v).toLocaleString('en-US')} SLSH` : `$${v.toFixed(2)}`;
+}
+function fmtDate(d) {
+  return d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 }
 
-// Company name — user-requested ('meel kasta oo magaca system ku ka soo
-// muuqanayo waa in aan markan update gareeyo'): every generated document
-// (Invoice .docx, Cashout .docx, the Customer Portal's own invoice HTML
-// preview) had 'GURMAD' baked in as a literal string — a customer-facing
-// letterhead is exactly the surface a stale hardcoded name matters most
-// on. Queried once per document build, defaulting to 'GURMAD' only if no
-// company_name was ever set — same fallback every other surface uses.
-async function getCompanyNameForDocument() {
-  try {
-    const r = await pool.query('SELECT company_name FROM company_settings WHERE id = 1');
-    return r.rows[0]?.company_name || 'GURMAD';
-  } catch {
-    return 'GURMAD'; // never block document generation on this lookup failing
+const STATUS_COLORS = { paid: BRAND_GREEN, partial: BRAND_ORANGE, unpaid: 'D14343', voided: MUTED };
+
+// Letterhead: logo + company block on the left, document title block on the right.
+function letterhead(branding, { title, number, lines = [], status }) {
+  const left = [];
+  if (branding.logo) {
+    const h = 56;
+    const w = Math.round((branding.logo.width / branding.logo.height) * h);
+    left.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: branding.logo.png, transformation: { width: Math.min(w, 220), height: h } })], spacing: { after: 80 } }));
   }
-}
+  left.push(new Paragraph({ children: [new TextRun({ text: branding.name, bold: true, size: 30, color: INK })] }));
+  left.push(new Paragraph({ children: [new TextRun({ text: branding.tagline, size: 17, color: BRAND_GREEN })] }));
+  for (const line of branding.contact) left.push(new Paragraph({ children: [new TextRun({ text: line, size: 16, color: MUTED })] }));
 
-function header(title, docNumber, meta, companyName) {
+  const right = [
+    new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: title.toUpperCase(), bold: true, size: 40, color: BRAND_GREEN, characterSpacing: 60 })] }),
+    new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: number, bold: true, size: 22, color: INK })], spacing: { after: 60 } }),
+    ...lines.map((l) => new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: l, size: 17, color: MUTED })] })),
+  ];
+  if (status) {
+    right.push(new Paragraph({
+      alignment: AlignmentType.RIGHT, spacing: { before: 80 },
+      children: [new TextRun({ text: ` ${status.toUpperCase()} `, bold: true, size: 18, color: 'FFFFFF', shading: { type: ShadingType.CLEAR, fill: STATUS_COLORS[status] || MUTED } })],
+    }));
+  }
   return [
-    new Paragraph({
-      children: [new TextRun({ text: companyName, bold: true, size: 40, color: BRAND_GREEN })],
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE }, borders: NO_BORDERS,
+      rows: [new TableRow({ children: [
+        new TableCell({ width: { size: 55, type: WidthType.PERCENTAGE }, borders: NO_BORDERS, verticalAlign: VerticalAlign.TOP, children: left }),
+        new TableCell({ width: { size: 45, type: WidthType.PERCENTAGE }, borders: NO_BORDERS, verticalAlign: VerticalAlign.TOP, children: right }),
+      ] })],
     }),
-    new Paragraph({
-      children: [new TextRun({ text: title, bold: true, size: 24 })],
-      spacing: { after: 120 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: meta, size: 18, color: MUTED })],
-      spacing: { after: 60 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: docNumber, bold: true, size: 20 })],
-      alignment: AlignmentType.RIGHT,
-      spacing: { after: 40 },
-    }),
-    hairline(),
+    new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 18, color: BRAND_GREEN } }, spacing: { before: 160, after: 0 } }),
+    new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: BRAND_ORANGE } }, spacing: { after: 240 } }),
   ];
 }
 
-function footer(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 16, color: MUTED, italics: true })],
-    alignment: AlignmentType.CENTER,
-    spacing: { before: 300 },
-  });
+function footer(branding, text) {
+  return [
+    new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER } }, spacing: { before: 400, after: 120 } }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${branding.name} · ${branding.tagline}`, bold: true, size: 16, color: BRAND_GREEN })] }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text, size: 15, color: MUTED, italics: true })] }),
+  ];
+}
+
+// Customer details for the "Bill To" block: phone, door and the
+// Group › District › Zone › Sub Zone path. Optional — documents still
+// render if the lookup fails.
+async function customerContext(customerId) {
+  if (!customerId) return null;
+  try {
+    const r = await pool.query(
+      `SELECT c.phone, c.door_number, c.address_line, z.name AS district, g.name AS group_name, g.code AS group_code,
+              gz.name AS zone_name, gz.code AS zone_code, r.name AS route_name, r.code AS route_code
+         FROM customers c
+         LEFT JOIN zones z ON z.id = c.zone_id
+         LEFT JOIN groups g ON g.id = c.group_id
+         LEFT JOIN routes r ON r.id = c.route_id
+         LEFT JOIN group_zones gz ON gz.id = r.group_zone_id
+        WHERE c.id = $1`, [customerId]);
+    const row = r.rows[0];
+    if (!row) return null;
+    const pathParts = [row.group_name || row.group_code, row.district, row.zone_name || row.zone_code, row.route_name || row.route_code].filter(Boolean);
+    return { phone: row.phone, door: row.door_number, address: row.address_line, path: pathParts.join(' › ') };
+  } catch {
+    return null;
+  }
 }
 
 async function buildCashoutDocx(cashout, recon, shortage = null) {
-  const companyName = await getCompanyNameForDocument();
+  const branding = await getCompanyBranding();
   const children = [
-    ...header(
-      'Cashout & Cash Reconciliation',
-      cashout.cashout_number,
-      `${cashout.zone_name} · ${new Date(cashout.period_start).toLocaleDateString()} – ${new Date(cashout.period_end).toLocaleDateString()} · Prepared ${new Date(cashout.created_at).toLocaleString()}`,
-      companyName
-    ),
+    ...letterhead(branding, {
+      title: 'Cashout',
+      number: cashout.cashout_number,
+      lines: [
+        cashout.zone_name,
+        `${fmtDate(cashout.period_start)} – ${fmtDate(cashout.period_end)}`,
+        `Prepared ${new Date(cashout.created_at).toLocaleString()}`,
+      ],
+    }),
     sectionTitle('Collection Summary'),
     kvTable([
       ['Customers', recon.customerCount], ['Transactions', recon.transactionCount],
@@ -133,8 +173,8 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
       ['Difference Type', parseFloat(cashout.shortage) > 0 ? 'Shortage' : parseFloat(cashout.surplus) > 0 ? 'Surplus' : 'Exact Match'],
     ]),
     // Cashout Shortage — cashier accountability/reconciliation liability,
-    // explicitly NOT rendered as a "Customer Debt" (architecture decision,
-    // this pass). Only shown when a shortage record actually exists.
+    // explicitly NOT rendered as a "Customer Debt". Only shown when a
+    // shortage record actually exists.
     ...(shortage ? [
       new Paragraph({ children: [new TextRun({ text: 'Cashier Shortage', bold: true, color: BRAND_GREEN })], spacing: { before: 140, after: 60 } }),
       kvTable([
@@ -146,10 +186,8 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
     ] : []),
     ...(cashout.remarks ? [new Paragraph({ children: [new TextRun({ text: 'Remarks: ', bold: true }), new TextRun({ text: cashout.remarks })] })] : []),
     sectionTitle('Accountability'),
-    // User-reported gap (Phase 10 Billing audit, continued sweep): every
-    // row here read as a bare numeric id ('#33'). The route now joins
-    // each *_name — fall back to the id only if a user account was since
-    // deleted (name join came back null), never silently blank.
+    // Names come from the route's joins; fall back to the id only if a
+    // user account was since deleted, never silently blank.
     kvTable([
       ['Cashier', cashout.cashier_name || `#${cashout.cashier_id}`],
       ['Head of Cashiers', cashout.head_of_cashiers_name || `#${cashout.head_of_cashiers_id}`],
@@ -158,53 +196,96 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
     ]),
     sectionTitle('Signatures'),
     new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
+      width: { size: 100, type: WidthType.PERCENTAGE }, borders: NO_BORDERS,
       rows: [new TableRow({ children: [
         signatureCell('Cashier Signature'), signatureCell('Head of Cashiers Signature'), signatureCell('Collector Acknowledgement'),
       ] })],
     }),
-    footer(`${companyName} — System-generated Cashout document — ${cashout.cashout_number}`),
+    ...footer(branding, `System-generated cashout document · ${cashout.cashout_number}`),
   ];
-  const doc = new Document({ sections: [{ children }] });
+  const doc = new Document({ styles: DOC_STYLES, sections: [{ properties: PAGE, children }] });
   return Packer.toBuffer(doc);
 }
 
 function signatureCell(label) {
   return new TableCell({
     width: { size: 33, type: WidthType.PERCENTAGE },
-    margins: { top: 400, bottom: 100, left: 100, right: 100 },
+    borders: NO_BORDERS,
+    margins: { top: 500, bottom: 100, left: 120, right: 120 },
     children: [
-      new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '000000' } }, spacing: { after: 60 } }),
+      new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: INK } }, spacing: { after: 60 } }),
       new Paragraph({ children: [new TextRun({ text: label, size: 16, color: MUTED })] }),
     ],
   });
 }
 
-async function buildInvoiceDocx(invoice) {
+function invoiceFigures(invoice) {
   const balance = invoice.balance || {};
-  const companyName = await getCompanyNameForDocument();
+  const total = parseFloat(invoice.invoice_total || 0);
+  const discount = parseFloat(invoice.discount_amount || 0);
+  return { total, discount, paid: parseFloat(balance.paid || 0), outstanding: parseFloat(balance.outstanding ?? (total - discount)) };
+}
+
+async function buildInvoiceDocx(invoice) {
+  const branding = await getCompanyBranding();
+  const ctx = await customerContext(invoice.customer_id);
+  const cur = invoice.currency || 'USD';
+  const f = invoiceFigures(invoice);
+
+  const billTo = [
+    new Paragraph({ children: [new TextRun({ text: 'BILL TO', bold: true, size: 16, color: MUTED, characterSpacing: 40 })], spacing: { after: 60 } }),
+    new Paragraph({ children: [new TextRun({ text: invoice.customer_name || '—', bold: true, size: 26, color: INK })] }),
+    new Paragraph({ children: [new TextRun({ text: `Customer # ${invoice.customer_number}`, size: 19, color: BRAND_GREEN, bold: true })] }),
+    ...(ctx?.phone ? [new Paragraph({ children: [new TextRun({ text: ctx.phone, size: 18, color: MUTED })] })] : []),
+    ...(ctx?.path ? [new Paragraph({ children: [new TextRun({ text: ctx.path, size: 18, color: MUTED })] })] : []),
+    ...(ctx?.door ? [new Paragraph({ children: [new TextRun({ text: `Door # ${ctx.door}`, size: 18, color: MUTED })] })] : []),
+  ];
+  const dueBox = [
+    new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: 'AMOUNT DUE', bold: true, size: 16, color: MUTED, characterSpacing: 40 })] }),
+    new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: money(f.outstanding, cur), bold: true, size: 44, color: f.outstanding > 0 ? BRAND_GREEN : MUTED })] }),
+    new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: invoice.status === 'paid' ? 'Paid in full' : 'Balance outstanding', size: 16, color: MUTED })] }),
+  ];
+
+  const lineRows = [
+    ['Waste collection service', money(f.total, cur)],
+    ...(f.discount > 0 ? [['Discount', `− ${money(f.discount, cur)}`]] : []),
+    ['Paid to date', `− ${money(f.paid, cur)}`],
+  ];
+
   const children = [
-    ...header(
-      'Invoice',
-      invoice.invoice_number,
-      `${invoice.customer_name} (${invoice.customer_number}) · Issued ${new Date(invoice.created_at).toLocaleString()}`,
-      companyName
-    ),
-    sectionTitle('Invoice Summary'),
-    kvTable([
-      ['Invoice Total', money(invoice.invoice_total)], ['Discount', money(invoice.discount_amount)],
-      ['Currency', invoice.currency], ['Status', invoice.status.toUpperCase()],
-      ['Paid', money(balance.paid)], ['Outstanding', money(balance.outstanding)],
-    ]),
+    ...letterhead(branding, {
+      title: 'Invoice',
+      number: invoice.invoice_number,
+      lines: [`Issued ${fmtDate(invoice.created_at)}`],
+      status: invoice.status,
+    }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE }, borders: NO_BORDERS,
+      rows: [new TableRow({ children: [
+        new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, borders: NO_BORDERS, children: billTo }),
+        new TableCell({ width: { size: 40, type: WidthType.PERCENTAGE }, borders: NO_BORDERS, shading: { type: ShadingType.CLEAR, fill: SOFT }, margins: { top: 160, bottom: 160, left: 200, right: 200 }, verticalAlign: VerticalAlign.CENTER, children: dueBox }),
+      ] })],
+    }),
+    sectionTitle('Details'),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE },
+      rows: [
+        new TableRow({ children: [cell('Description', { bold: true, width: 70, shaded: true, color: MUTED }), cell('Amount', { bold: true, width: 30, shaded: true, color: MUTED, align: AlignmentType.RIGHT })] }),
+        ...lineRows.map(([d, a]) => new TableRow({ children: [cell(d, { width: 70 }), cell(a, { width: 30, align: AlignmentType.RIGHT })] })),
+        new TableRow({ children: [cell('Balance due', { bold: true, width: 70 }), cell(money(f.outstanding, cur), { bold: true, width: 30, align: AlignmentType.RIGHT, color: BRAND_GREEN })] }),
+      ],
+    }),
     sectionTitle('Payment History'),
     ...(!invoice.payments || invoice.payments.length === 0
-      ? [new Paragraph({ children: [new TextRun({ text: 'No payments recorded yet.', italics: true, color: MUTED })] })]
+      ? [new Paragraph({ children: [new TextRun({ text: 'No payments recorded yet.', italics: true, color: MUTED, size: 18 })] })]
       : [new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE },
           rows: [
-            new TableRow({ children: [cell('Amount', { bold: true, shaded: true }), cell('Method', { bold: true, shaded: true }), cell('USD Value', { bold: true, shaded: true }), cell('Status', { bold: true, shaded: true }), cell('Date', { bold: true, shaded: true })] }),
+            new TableRow({ children: ['Date', 'Method', 'Amount', 'USD Value', 'Status'].map((h) => cell(h, { bold: true, shaded: true, width: 20, color: MUTED })) }),
             ...invoice.payments.map((p) => new TableRow({ children: [
-              cell(`${p.currency} ${parseFloat(p.amount).toFixed(2)}`), cell(p.method.toUpperCase()), cell(money(p.amount_usd)), cell(p.status.toUpperCase()), cell(new Date(p.created_at).toLocaleDateString()),
+              cell(fmtDate(p.created_at), { width: 20 }), cell(String(p.method).toUpperCase(), { width: 20 }), cell(money(p.amount, p.currency), { width: 20 }), cell(money(p.amount_usd), { width: 20 }), cell(String(p.status).toUpperCase(), { width: 20 }),
             ] })),
           ],
         })]),
@@ -213,21 +294,16 @@ async function buildInvoiceDocx(invoice) {
       new Paragraph({ children: [new TextRun({ text: 'Voided reason: ', bold: true }), new TextRun({ text: invoice.voided_reason || '—' })] }),
       new Paragraph({ children: [new TextRun({ text: 'Voided at: ', bold: true }), new TextRun({ text: new Date(invoice.voided_at).toLocaleString() })] }),
     ] : []),
-    footer(`${companyName} — Invoice — ${invoice.invoice_number}`),
+    new Paragraph({ spacing: { before: 360 }, alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Mahadsanid — Thank you for keeping our city clean.', size: 20, color: INK, bold: true })] }),
+    ...footer(branding, `Invoice ${invoice.invoice_number} · Generated ${fmtDate(new Date())}`),
   ];
-  const doc = new Document({ sections: [{ children }] });
+  const doc = new Document({ styles: DOC_STYLES, sections: [{ properties: PAGE, children }] });
   return Packer.toBuffer(doc);
 }
 
-// Customer Portal Rebuild — Implementation Spec §11 (OD-5/Invoice
-// Preview). A server-rendered HTML twin of the same data buildInvoiceDocx()
-// already assembles — deliberately NOT a PDF-conversion pipeline and NOT a
-// client-side .docx renderer (no new runtime dependency, no new failure
-// mode, for a feature that only needs "see before download"). Every
-// interpolated field is escaped explicitly — this function must never
-// string-concatenate untrusted data straight into the HTML (customer
-// name/notes are the two fields that could plausibly carry another
-// customer's chosen text).
+// HTML twin of the invoice for the Customer Portal preview — same layout
+// as the .docx. Every interpolated value is escaped: customer name/notes
+// can carry arbitrary text.
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -235,58 +311,100 @@ function escapeHtml(value) {
 }
 
 async function buildInvoiceHtml(invoice) {
-  const balance = invoice.balance || {};
-  const companyName = await getCompanyNameForDocument();
-  const rows = (invoice.payments || []).map((p) => `
-    <tr>
-      <td>${escapeHtml(p.currency)} ${escapeHtml(parseFloat(p.amount).toFixed(2))}</td>
-      <td>${escapeHtml(String(p.method).toUpperCase())}</td>
-      <td>${escapeHtml(money(p.amount_usd))}</td>
-      <td>${escapeHtml(String(p.status).toUpperCase())}</td>
-      <td>${escapeHtml(new Date(p.created_at).toLocaleDateString())}</td>
-    </tr>`).join('');
+  const branding = await getCompanyBranding();
+  const ctx = await customerContext(invoice.customer_id);
+  const cur = invoice.currency || 'USD';
+  const f = invoiceFigures(invoice);
+  const status = String(invoice.status || '');
+  const logo = branding.logo ? `<img class="logo" alt="" src="data:image/png;base64,${branding.logo.png.toString('base64')}">` : '';
+  const payRows = (invoice.payments || []).map((p) => `
+      <tr><td>${escapeHtml(fmtDate(p.created_at))}</td><td>${escapeHtml(String(p.method).toUpperCase())}</td>
+      <td class="num">${escapeHtml(money(p.amount, p.currency))}</td><td class="num">${escapeHtml(money(p.amount_usd))}</td>
+      <td>${escapeHtml(String(p.status).toUpperCase())}</td></tr>`).join('');
 
-  return `
-<!doctype html>
-<html><head><meta charset="utf-8"><title>${escapeHtml(invoice.invoice_number)}</title>
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(invoice.invoice_number)}</title>
 <style>
-  /* Explicit color-scheme + background — without this, some browsers
-     auto-dark-invert an iframe's default (white) background while leaving
-     our own hardcoded dark text color untouched, rendering every value
-     invisible (dark-on-dark). Found live via a screenshot during Hardening
-     of this rebuild pass — the raw HTML was correct, only the rendered
-     appearance was broken. */
-  :root { color-scheme: light; }
-  html, body { background: #ffffff; }
-  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #1B1F16; padding: 24px; }
-  h1 { color: #2F7D3E; font-size: 22px; margin: 0 0 4px; }
-  .meta { color: #6B7280; font-size: 13px; margin-bottom: 16px; }
-  .doc-number { text-align: right; font-weight: 700; margin-bottom: 8px; }
-  hr { border: none; border-top: 3px solid #2F7D3E; margin: 12px 0 20px; }
-  .section-title { color: #2F7D3E; text-transform: uppercase; font-size: 13px; font-weight: 800; margin: 20px 0 8px; }
+  /* Explicit light scheme + background: some browsers auto-darken an
+     iframe's default white background while leaving our dark text alone. */
+  :root { color-scheme: light; --green: #${BRAND_GREEN}; --orange: #${BRAND_ORANGE}; --ink: #${INK}; --muted: #${MUTED}; --line: #${BORDER}; --soft: #${SOFT}; }
+  html, body { background: #ffffff; margin: 0; }
+  body { font-family: "Segoe UI", -apple-system, Roboto, Arial, sans-serif; color: var(--ink); font-size: 14px; }
+  .sheet { max-width: 760px; margin: 0 auto; padding: 32px 28px 24px; }
+  .top { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .logo { height: 56px; width: auto; display: block; margin-bottom: 8px; }
+  .co-name { font-size: 20px; font-weight: 800; }
+  .tagline { color: var(--green); font-size: 13px; }
+  .contact { color: var(--muted); font-size: 12px; }
+  .doc { text-align: right; }
+  .doc h1 { margin: 0; color: var(--green); font-size: 30px; letter-spacing: .12em; }
+  .doc .no { font-weight: 700; font-size: 15px; }
+  .doc .date { color: var(--muted); font-size: 12px; }
+  .badge { display: inline-block; margin-top: 8px; padding: 3px 10px; border-radius: 999px; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .badge.paid { background: var(--green); } .badge.partial { background: var(--orange); } .badge.unpaid { background: #D14343; } .badge.voided { background: var(--muted); }
+  .rule { height: 4px; background: var(--green); margin: 20px 0 2px; border-radius: 2px; }
+  .rule2 { height: 2px; background: var(--orange); margin-bottom: 24px; border-radius: 2px; }
+  .billing { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; align-items: stretch; }
+  .label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; }
+  .cust { font-size: 18px; font-weight: 800; }
+  .custno { color: var(--green); font-weight: 700; }
+  .small { color: var(--muted); font-size: 13px; }
+  .due { background: var(--soft); border-radius: 12px; padding: 16px 20px; text-align: right; min-width: 200px; }
+  .due .amt { font-size: 28px; font-weight: 800; color: var(--green); font-variant-numeric: tabular-nums; }
+  h2 { color: var(--green); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; margin: 28px 0 8px; }
+  .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #D0D5DD; }
-  th { background: #F2F4F7; font-size: 11px; text-transform: uppercase; }
-  .kv { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 24px; font-size: 13px; }
-  .kv div span:first-child { color: #6B7280; display: block; font-size: 11px; text-transform: uppercase; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { background: var(--soft); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 800; color: var(--green); border-bottom: none; }
+  .empty { color: var(--muted); font-style: italic; }
+  .thanks { text-align: center; font-weight: 700; margin-top: 32px; }
+  .foot { text-align: center; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 10px; }
+  .foot b { color: var(--green); }
 </style></head>
-<body>
-  <h1>${escapeHtml(companyName)}</h1>
-  <div class="meta">${escapeHtml(invoice.customer_name)} (${escapeHtml(invoice.customer_number)}) &middot; Issued ${escapeHtml(new Date(invoice.created_at).toLocaleString())}</div>
-  <div class="doc-number">${escapeHtml(invoice.invoice_number)}</div>
-  <hr>
-  <div class="section-title">Invoice Summary</div>
-  <div class="kv">
-    <div><span>Invoice Total</span>${escapeHtml(money(invoice.invoice_total))}</div>
-    <div><span>Discount</span>${escapeHtml(money(invoice.discount_amount))}</div>
-    <div><span>Currency</span>${escapeHtml(invoice.currency)}</div>
-    <div><span>Status</span>${escapeHtml(String(invoice.status).toUpperCase())}</div>
-    <div><span>Paid</span>${escapeHtml(money(balance.paid))}</div>
-    <div><span>Outstanding</span>${escapeHtml(money(balance.outstanding))}</div>
+<body><div class="sheet">
+  <div class="top">
+    <div>${logo}
+      <div class="co-name">${escapeHtml(branding.name)}</div>
+      <div class="tagline">${escapeHtml(branding.tagline)}</div>
+      ${branding.contact.map((l) => `<div class="contact">${escapeHtml(l)}</div>`).join('')}
+    </div>
+    <div class="doc">
+      <h1>INVOICE</h1>
+      <div class="no">${escapeHtml(invoice.invoice_number)}</div>
+      <div class="date">Issued ${escapeHtml(fmtDate(invoice.created_at))}</div>
+      <span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span>
+    </div>
   </div>
-  <div class="section-title">Payment History</div>
-  ${rows ? `<table><thead><tr><th>Amount</th><th>Method</th><th>USD Value</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="color:#6B7280;font-style:italic;">No payments recorded yet.</p>'}
-</body></html>`;
+  <div class="rule"></div><div class="rule2"></div>
+  <div class="billing">
+    <div>
+      <div class="label">Bill to</div>
+      <div class="cust">${escapeHtml(invoice.customer_name)}</div>
+      <div class="custno">Customer # ${escapeHtml(invoice.customer_number)}</div>
+      ${ctx?.phone ? `<div class="small">${escapeHtml(ctx.phone)}</div>` : ''}
+      ${ctx?.path ? `<div class="small">${escapeHtml(ctx.path)}</div>` : ''}
+      ${ctx?.door ? `<div class="small">Door # ${escapeHtml(ctx.door)}</div>` : ''}
+    </div>
+    <div class="due"><div class="label">Amount due</div><div class="amt">${escapeHtml(money(f.outstanding, cur))}</div><div class="small">${status === 'paid' ? 'Paid in full' : 'Balance outstanding'}</div></div>
+  </div>
+  <h2>Details</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      <tr><td>Waste collection service</td><td class="num">${escapeHtml(money(f.total, cur))}</td></tr>
+      ${f.discount > 0 ? `<tr><td>Discount</td><td class="num">− ${escapeHtml(money(f.discount, cur))}</td></tr>` : ''}
+      <tr><td>Paid to date</td><td class="num">− ${escapeHtml(money(f.paid, cur))}</td></tr>
+      <tr class="total"><td>Balance due</td><td class="num">${escapeHtml(money(f.outstanding, cur))}</td></tr>
+    </tbody>
+  </table></div>
+  <h2>Payment history</h2>
+  ${payRows ? `<div class="scroll"><table><thead><tr><th>Date</th><th>Method</th><th class="num">Amount</th><th class="num">USD value</th><th>Status</th></tr></thead><tbody>${payRows}</tbody></table></div>` : '<p class="empty">No payments recorded yet.</p>'}
+  ${status === 'voided' ? `<h2>Void information</h2><p>${escapeHtml(invoice.voided_reason || '—')}</p>` : ''}
+  <div class="thanks">Mahadsanid — Thank you for keeping our city clean.</div>
+  <div class="foot"><b>${escapeHtml(branding.name)}</b> · ${escapeHtml(branding.tagline)} · Invoice ${escapeHtml(invoice.invoice_number)}</div>
+</div></body></html>`;
 }
 
-module.exports = { buildCashoutDocx, buildInvoiceDocx, buildInvoiceHtml };
+module.exports = { buildCashoutDocx, buildInvoiceDocx, buildInvoiceHtml, customerContext };
