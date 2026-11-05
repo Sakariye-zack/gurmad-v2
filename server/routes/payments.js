@@ -40,6 +40,53 @@ class PaymentError extends Error {
   }
 }
 
+const SLSH_TOLERANCE_USD = 0.005; // half a cent, expressed in SLSH via the rate
+
+const fmtMoney = (cur, n) => cur === 'SLSH' ? `${Math.round(n).toLocaleString('en-US')} SLSH` : `$${n.toFixed(2)}`;
+
+// Size one payment in the invoice's own currency and check it against the
+// outstanding balance. A USD payment on an SLSH invoice is converted at the
+// current rate and tolerates half a cent (rate x 0.005 SLSH): within that
+// band of the outstanding it is accepted and SNAPPED to exactly the
+// outstanding, so a whole-cent USD amount can always close an SLSH invoice.
+// Returns { error } (status/code/outstanding/attempted/invCur) or
+// { attempted, aic, conversionRateId }.
+function sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate }) {
+  if (invCur !== 'SLSH') {
+    if (amountUsd > outstanding + EPSILON) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted: amountUsd, invCur } };
+    return { attempted: amountUsd, aic: amountUsd, conversionRateId: null };
+  }
+  if (cur === 'SLSH') {
+    if (amt > outstanding + EPSILON) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted: amt, invCur } };
+    return { attempted: amt, aic: amt, conversionRateId: null };
+  }
+  if (!rate) return { error: { status: 409, code: 'NO_EXCHANGE_RATE', message: 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.' } };
+  const r = parseFloat(rate.rate);
+  const attempted = amt * r;
+  const tol = r * SLSH_TOLERANCE_USD;
+  if (attempted > outstanding + tol) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted, invCur } };
+  const aic = attempted >= outstanding - tol ? outstanding : attempted;
+  return { attempted, aic, conversionRateId: rate.id };
+}
+
+// Read-only pre-check shared with POST /zaad-request (runs BEFORE any
+// gateway call). Returns null when OK, else { status, code, message }.
+async function precheckPayment(client, invoice, { amt, cur }) {
+  const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
+  if (invCur === 'USD' && cur !== 'USD') return null; // rate-converted amount only known at record time
+  const rate = invCur === 'SLSH' && cur === 'USD' ? await getCurrentExchangeRate(client) : null;
+  if (invCur === 'SLSH' && cur === 'USD' && !rate) {
+    return { status: 409, code: 'NO_EXCHANGE_RATE', message: 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.' };
+  }
+  const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
+  const outstanding = netTotal - await paidInInvoiceCurrency(invoice.id, invCur, client, { rate });
+  const sized = sizePayment({ invCur, cur, amt, amountUsd: amt, outstanding, rate });
+  if (sized.error) {
+    return { status: 409, code: sized.error.code, message: sized.error.message || `Amount exceeds outstanding balance. Outstanding: ${fmtMoney(invCur, outstanding)}.` };
+  }
+  return null;
+}
+
 // The single source of truth for "record one payment against one
 // invoice" — every financial-integrity rule from the approved spec
 // lives here: row-locked invoice, balance computed inside the same
@@ -83,27 +130,18 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   const alreadyPaid = await paidInInvoiceCurrency(invoiceId, invCur, client, { rate: currentRate });
   const outstanding = netTotal - alreadyPaid;
 
-  // This payment's size in the invoice's currency.
-  let attempted = amountUsd;
-  if (invCur === 'SLSH') {
-    if (cur === 'SLSH') attempted = amt;
-    else {
-      if (!currentRate) throw new PaymentError(409, 'NO_EXCHANGE_RATE', 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.');
-      attempted = amt * parseFloat(currentRate.rate);
-    }
-  }
-
-  if (attempted > outstanding + EPSILON) {
-    const fmt = invCur === 'SLSH'
-      ? (n) => `${Math.round(n).toLocaleString('en-US')} SLSH`
-      : (n) => `$${n.toFixed(2)}`;
-    throw new PaymentError(409, 'OVERPAYMENT', `Payment amount exceeds outstanding balance. Outstanding: ${fmt(outstanding)}. Attempted: ${fmt(attempted)}.`);
+  // This payment's size in the invoice's currency (frozen on the row).
+  const sized = sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate: currentRate });
+  if (sized.error) {
+    const e = sized.error;
+    throw new PaymentError(e.status, e.code, e.message ||
+      `Payment amount exceeds outstanding balance. Outstanding: ${fmtMoney(invCur, e.outstanding)}. Attempted: ${fmtMoney(invCur, e.attempted)}.`);
   }
 
   const inserted = await client.query(
-    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded') RETURNING *`,
-    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id, referenceCode || null]
+    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded',$9,$10) RETURNING *`,
+    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id, referenceCode || null, sized.aic, sized.conversionRateId]
   );
   const payment = inserted.rows[0];
 
@@ -132,7 +170,7 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   );
   if (trueOutstanding > EPSILON) {
     if (existingAutoDebt.rows.length > 0) {
-      await client.query(`UPDATE debts SET amount = $1 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id]);
+      await client.query(`UPDATE debts SET amount = $1, currency = $3 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id, invCur]);
     } else {
       await client.query(
         `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
@@ -187,7 +225,7 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
     const { payment, recalculated } = await recordPaymentCore(client, req.user, { invoiceId, amt, cur, method, referenceCode: reference_code });
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: payment });
-    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding } });
+    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
   } catch (err) {
     await client.query('ROLLBACK');
     if (err instanceof PaymentError) return res.status(err.status).json({ error: { message: err.message, code: err.code } });
@@ -247,19 +285,8 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     if (myZoneId !== null && custRes.rows[0]?.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this invoice.', code: 'FORBIDDEN' } });
     }
-    const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
-    const preRate = invCur === 'SLSH' ? await getCurrentExchangeRate(pool) : null;
-    const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
-    const outstanding = netTotal - await paidInInvoiceCurrency(invoiceId, invCur, pool, { rate: preRate });
-    if (invCur === 'USD' && cur === 'USD' && amt > outstanding + EPSILON) {
-      return res.status(409).json({ error: { message: `Amount exceeds outstanding balance. Outstanding: $${outstanding.toFixed(2)}.`, code: 'OVERPAYMENT' } });
-    }
-    if (invCur === 'SLSH') {
-      const inInvCur = cur === 'SLSH' ? amt : (preRate ? amt * parseFloat(preRate.rate) : null);
-      if (inInvCur !== null && inInvCur > outstanding + EPSILON) {
-        return res.status(409).json({ error: { message: `Amount exceeds outstanding balance. Outstanding: ${Math.round(outstanding).toLocaleString('en-US')} SLSH.`, code: 'OVERPAYMENT' } });
-      }
-    }
+    const blocked = await precheckPayment(pool, invoice, { amt, cur });
+    if (blocked) return res.status(blocked.status).json({ error: { message: blocked.message, code: blocked.code } });
 
     const zaadResult = await requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: invoice.invoice_number });
     if (!zaadResult.ok) {
@@ -276,7 +303,7 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
       });
       await client.query('COMMIT');
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, zaad_raw: zaadResult.raw } });
-      res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding } });
+      res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
     } catch (err) {
       await client.query('ROLLBACK');
       // WAAFI already approved and moved the money — this is not a
@@ -352,7 +379,7 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
     );
     if (trueOutstanding > EPSILON) {
       if (existingAutoDebt.rows.length > 0) {
-        await client.query(`UPDATE debts SET amount = $1 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id]);
+        await client.query(`UPDATE debts SET amount = $1, currency = $3 WHERE id = $2`, [trueOutstanding, existingAutoDebt.rows[0].id, lockedCur]);
       } else {
         await client.query(
           `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
@@ -383,7 +410,7 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
 
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.reverse', entityType: 'payment', entityId: id, before: payment, after: updated.rows[0] });
-    const response = { data: { ...updated.rows[0], invoice_status: recalculated.status, outstanding: recalculated.outstanding } };
+    const response = { data: { ...updated.rows[0], invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } };
     if (warning) response.warnings = [warning];
     res.json(response);
   } catch (err) {
@@ -394,4 +421,5 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
   }
 });
 
+router.precheckPayment = precheckPayment;
 module.exports = router;

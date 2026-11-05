@@ -198,3 +198,74 @@ test('invoice GET returns dual-currency balance block and the rate used', async 
   assert.equal(num(u.slsh.outstanding), 60000);
   assert.equal(num(u.rate.rate), 10000);
 });
+
+// ---- fix round 1: frozen invoice-currency value, debts, tolerance, ZAAD pre-check ----
+test('SLSH invoice paid in USD stays paid after the exchange rate changes; extra payment rejected', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const p = await pay(tokens.cashier, inv, 10, 'cash', 'USD');
+  assert.equal(p.status, 201);
+  assert.equal(p.data.invoice_status, 'paid');
+  assert.equal(p.data.outstanding_currency, 'SLSH');
+  const row = await db.query('SELECT amount_invoice_currency, conversion_rate_id FROM payments WHERE id = $1', [p.data.id]);
+  assert.equal(num(row.rows[0].amount_invoice_currency), 100000);
+  assert.ok(row.rows[0].conversion_rate_id);
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 9000 } })).status, 201);
+  const b = (await api('GET', `/invoices/${inv.id}`, { token: tokens.admin })).data;
+  assert.equal(b.status, 'paid');
+  assert.equal(num(b.balance.outstanding), 0);
+  assert.equal(num(b.balance.paid), 100000);
+  assert.equal((await pay(tokens.cashier, inv, 1, 'cash', 'USD')).status, 409);
+  assert.equal((await pay(tokens.cashier, inv, 1000, 'slsh', 'SLSH')).status, 409);
+});
+
+test('SLSH invoice closes with a whole-cent USD payment (half-cent SLSH tolerance)', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 8500 } })).status, 201);
+  const a = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const ok = await pay(tokens.cashier, a, 11.76, 'cash', 'USD');
+  assert.equal(ok.status, 201);
+  assert.equal(ok.data.invoice_status, 'paid');
+  assert.equal(num(ok.data.outstanding), 0);
+  const debts = await db.query("SELECT 1 FROM debts WHERE invoice_id = $1 AND status = 'unpaid'", [a.id]);
+  assert.equal(debts.rows.length, 0);
+  const b = await createSlshInvoice(tokens.cashier, custA, 100000);
+  assert.equal((await pay(tokens.cashier, b, 11.77, 'cash', 'USD')).status, 409);
+});
+
+test('auto-debt on an SLSH invoice is SLSH and reports/portal convert it to USD', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const p = await pay(tokens.cashier, inv, 40000, 'slsh', 'SLSH');
+  assert.equal(p.status, 201);
+  const d = await db.query("SELECT amount, currency FROM debts WHERE invoice_id = $1 AND status = 'unpaid'", [inv.id]);
+  assert.equal(d.rows[0].currency, 'SLSH');
+  assert.equal(num(d.rows[0].amount), 60000);
+  const { getRevenueForPeriod } = require('../lib/reportsCalculations');
+  const base = await getRevenueForPeriod({ periodStart: new Date(Date.now() - 86400000), periodEnd: new Date(Date.now() + 86400000), zoneId: null });
+  // the SLSH debt (60,000 / 10,000 = $6) must not be added as 60,000
+  assert.ok(base.debt < 60000, 'debt total must be USD-converted: ' + base.debt);
+  assert.ok(base.debt >= 6 - 0.001);
+  // update-in-place keeps the currency
+  await pay(tokens.cashier, inv, 10000, 'slsh', 'SLSH');
+  const d2 = await db.query("SELECT amount, currency FROM debts WHERE invoice_id = $1 AND status = 'unpaid'", [inv.id]);
+  assert.equal(d2.rows[0].currency, 'SLSH');
+  assert.equal(num(d2.rows[0].amount), 50000);
+});
+
+test('ZAAD pre-check: USD payment on an SLSH invoice with no exchange rate is blocked before the gateway', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const row = (await db.query('SELECT * FROM invoices WHERE id = $1', [inv.id])).rows[0];
+  const { precheckPayment } = require('../routes/payments');
+  const noRateClient = { query: async (sql) => ({ rows: [] }) };
+  const r = await precheckPayment(noRateClient, row, { amt: 5, cur: 'USD' });
+  assert.equal(r.status, 409);
+  assert.equal(r.code, 'NO_EXCHANGE_RATE');
+  assert.equal(await precheckPayment(db, row, { amt: 5, cur: 'USD' }), null);
+  const over = await precheckPayment(db, row, { amt: 11, cur: 'USD' });
+  assert.equal(over.code, 'OVERPAYMENT');
+});

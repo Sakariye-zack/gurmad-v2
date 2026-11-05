@@ -71,16 +71,20 @@ async function getRevenueForPeriod({ zoneId = null, cashierId = null, periodStar
          ELSE i.invoice_total - i.discount_amount - COALESCE(pp.paid, 0) END), 0) AS outstanding
      FROM invoices i JOIN customers c ON i.customer_id = c.id
      LEFT JOIN (SELECT p.invoice_id, SUM(p.amount_usd) AS paid,
-                       SUM(CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $${rateIdx}::numeric) END) AS paid_slsh
+                       SUM(COALESCE(p.amount_invoice_currency, CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $${rateIdx}::numeric) END)) AS paid_slsh
                 FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
                 WHERE p.status = 'recorded' GROUP BY p.invoice_id) pp ON pp.invoice_id = i.id
      WHERE i.status != 'voided' AND i.created_at >= $1 AND i.created_at < $2${zoneClause}`,
     [periodStart, periodEnd, ...(zoneId ? [zoneId] : []), curRate ? parseFloat(curRate.rate) : null]
   );
+  // Debts may be SLSH (auto-debts on SLSH invoices): convert to USD at the
+  // current rate; with no rate they contribute 0.
   const debtRes = await client.query(
-    `SELECT COALESCE(SUM(d.amount), 0) AS total FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
+    `SELECT COALESCE(SUM(CASE WHEN d.currency = 'SLSH'
+         THEN (CASE WHEN $${rateIdx}::numeric > 0 THEN d.amount / $${rateIdx}::numeric ELSE 0 END)
+         ELSE d.amount END), 0) AS total FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
      WHERE d.status = 'unpaid' AND d.created_at >= $1 AND d.created_at < $2${zoneClause}`,
-    [periodStart, periodEnd, ...(zoneId ? [zoneId] : [])]
+    [periodStart, periodEnd, ...(zoneId ? [zoneId] : []), curRate ? parseFloat(curRate.rate) : null]
   );
   return {
     collected: parseFloat(revenueRes.rows[0].collected),
@@ -321,7 +325,7 @@ async function getDebtsSummary({ zoneId = null, status = null, periodStart, peri
   if (status) { params.push(status); clauses.push(`d.status = $${params.length}`); }
   params.push(limit, offset);
   const res = await client.query(
-    `SELECT d.id, d.amount, d.status, d.created_at, d.invoice_id, d.cashout_id, c.name AS customer_name
+    `SELECT d.id, d.amount, d.currency, d.status, d.created_at, d.invoice_id, d.cashout_id, c.name AS customer_name
      FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
      WHERE ${clauses.join(' AND ')} ORDER BY d.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params

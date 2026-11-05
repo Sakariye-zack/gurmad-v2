@@ -551,6 +551,20 @@ async function runMigrations() {
       )
     );
   `);
+  // Each payment's value FROZEN in its invoice's own currency at write time
+  // (same principle as amount_usd): a later exchange-rate change must never
+  // move an invoice's paid/outstanding. conversion_rate_id records the rate
+  // used when a conversion happened (USD payment on an SLSH invoice).
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount_invoice_currency NUMERIC;`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS conversion_rate_id INTEGER REFERENCES exchange_rates(id);`);
+  // Idempotent backfill (only rows still NULL).
+  await pool.query(`UPDATE payments p SET amount_invoice_currency = p.amount_usd
+    FROM invoices i WHERE i.id = p.invoice_id AND p.amount_invoice_currency IS NULL AND i.currency <> 'SLSH';`);
+  await pool.query(`UPDATE payments p SET amount_invoice_currency = p.amount
+    FROM invoices i WHERE i.id = p.invoice_id AND p.amount_invoice_currency IS NULL AND i.currency = 'SLSH' AND p.currency = 'SLSH';`);
+  await pool.query(`UPDATE payments p SET amount_invoice_currency = p.amount_usd * r.rate, conversion_rate_id = r.id
+    FROM invoices i, (SELECT id, rate FROM exchange_rates WHERE effective_from <= NOW() ORDER BY effective_from DESC LIMIT 1) r
+    WHERE i.id = p.invoice_id AND p.amount_invoice_currency IS NULL AND i.currency = 'SLSH' AND p.currency <> 'SLSH';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_cashier_id ON payments(cashier_id);`);

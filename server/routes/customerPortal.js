@@ -414,8 +414,9 @@ router.get('/summary', authenticateCustomerPortal, async (req, res) => {
       [customerId]
     );
     const debtRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS outstanding_debt FROM debts WHERE customer_id = $1 AND status = 'unpaid'`,
-      [customerId]
+      `SELECT COALESCE(SUM(CASE WHEN currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN amount / $2::numeric ELSE 0 END) ELSE amount END), 0) AS outstanding_debt
+       FROM debts WHERE customer_id = $1 AND status = 'unpaid'`,
+      [customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
     const lastPaymentRes = await pool.query(
       `SELECT p.amount, p.currency, p.created_at FROM payments p JOIN invoices i ON i.id = p.invoice_id

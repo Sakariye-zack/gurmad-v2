@@ -11,8 +11,9 @@ const EPSILON = 0.005; // float-safety tolerance, reused from the reference
 
 // Sum of recorded payments on an invoice, expressed in the INVOICE'S OWN
 // currency.
-//  - USD invoice: SUM(amount_usd) — byte-for-byte the historical behaviour.
-//  - SLSH invoice: SLSH payments count at their own face amount; USD
+//  - USD invoice: SUM(amount_usd) â€” byte-for-byte the historical behaviour.
+//  - SLSH invoice: each payment's FROZEN amount_invoice_currency (written at
+//    payment time); legacy rows without it fall back to: SLSH payments count at their own face amount; USD
 //    payments (and any other non-SLSH row) are converted amount_usd x rate,
 //    where rate is the payment's own exchange_rate_id rate if it stored one,
 //    else the CURRENT rate (rate argument, fetched if omitted). With no rate
@@ -30,8 +31,9 @@ async function paidInInvoiceCurrency(invoiceId, currency, client = pool, { exclu
   if (rate === undefined) rate = await getCurrentExchangeRate(client);
   const curRate = rate ? parseFloat(rate.rate) : null;
   const r = await client.query(
-    `SELECT COALESCE(SUM(CASE WHEN p.currency = 'SLSH' THEN p.amount
-                              ELSE p.amount_usd * COALESCE(er.rate, $2::numeric) END), 0) AS paid
+    `SELECT COALESCE(SUM(COALESCE(p.amount_invoice_currency,
+                                  CASE WHEN p.currency = 'SLSH' THEN p.amount
+                                       ELSE p.amount_usd * COALESCE(er.rate, $2::numeric) END)), 0) AS paid
      FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
      WHERE p.invoice_id = $1 AND p.status = 'recorded'${debtClause}`,
     [invoiceId, curRate]
@@ -41,7 +43,7 @@ async function paidInInvoiceCurrency(invoiceId, currency, client = pool, { exclu
 
 // Dual-currency view of a balance. Convention: every figure is computed in the
 // invoice's own currency first; the OTHER currency is that figure converted at
-// the CURRENT rate (USD = slsh / rate, SLSH = usd x rate) — one consistent
+// the CURRENT rate (USD = slsh / rate, SLSH = usd x rate) â€” one consistent
 // rule, so usd.paid for an SLSH invoice is paidSLSH / current rate (not the
 // sum of stored amount_usd). No rate => the other-currency block is null.
 function dualBlocks(currency, paid, outstanding, netTotal, rate) {
