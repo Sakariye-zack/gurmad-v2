@@ -111,3 +111,90 @@ test('debts: create/settle role gates and validation', async () => {
   assert.equal((await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 200);
   assert.equal((await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 409, 'cannot settle twice');
 });
+
+// ---- SLSH invoices: balances are computed in the invoice's own currency ----
+const createSlshInvoice = async (token, customer, total) => {
+  const r = await api('POST', '/invoices', { token, body: { customer_id: customer.id, invoice_total: total, currency: 'SLSH' } });
+  if (r.status !== 201) throw new Error('slsh invoice create failed: ' + JSON.stringify(r.body));
+  return r.data;
+};
+
+test('SLSH invoice paid fully in SLSH -> paid', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  assert.equal(inv.currency, 'SLSH');
+  const p1 = await pay(tokens.cashier, inv, 60000, 'slsh', 'SLSH');
+  assert.equal(p1.status, 201);
+  assert.equal(p1.data.invoice_status, 'partial');
+  assert.equal(num(p1.data.outstanding), 40000);
+  const p2 = await pay(tokens.cashier, inv, 40000, 'slsh', 'SLSH');
+  assert.equal(p2.status, 201);
+  assert.equal(p2.data.invoice_status, 'paid');
+  assert.equal(num(p2.data.outstanding), 0);
+});
+
+test('SLSH invoice part-paid in USD converts at payment rate', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const p = await pay(tokens.cashier, inv, 4, 'cash', 'USD');
+  assert.equal(p.status, 201);
+  assert.equal(p.data.invoice_status, 'partial');
+  assert.equal(num(p.data.outstanding), 60000, '$4 at 10,000 = 40,000 SLSH paid');
+  const rest = await pay(tokens.cashier, inv, 60000, 'slsh', 'SLSH');
+  assert.equal(rest.status, 201);
+  assert.equal(rest.data.invoice_status, 'paid');
+});
+
+test('overpaying an SLSH invoice -> 409', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createSlshInvoice(tokens.cashier, custA, 100000);
+  const over = await pay(tokens.cashier, inv, 100001, 'slsh', 'SLSH');
+  assert.equal(over.status, 409);
+  assert.match(over.body.error.message, /SLSH/);
+  const overUsd = await pay(tokens.cashier, inv, 11, 'cash', 'USD');
+  assert.equal(overUsd.status, 409, '$11 = 110,000 SLSH > 100,000');
+  const n = await db.query('SELECT COUNT(*)::int AS n FROM payments WHERE invoice_id = $1', [inv.id]);
+  assert.equal(n.rows[0].n, 0);
+});
+
+test('USD invoices unchanged: SLSH payment still converts to USD', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const inv = await createInvoice(tokens.cashier, custA, 10);
+  const p = await pay(tokens.cashier, inv, 50000, 'slsh', 'SLSH');
+  assert.equal(p.status, 201);
+  assert.equal(num(p.data.outstanding), 5);
+});
+
+test('invoice GET returns dual-currency balance block and the rate used', async () => {
+  const { tokens, custA } = await setupWorld();
+  assert.equal((await api('POST', '/exchange-rates', { token: tokens.admin, body: { rate: 10000 } })).status, 201);
+  const slsh = await createSlshInvoice(tokens.cashier, custA, 100000);
+  await pay(tokens.cashier, slsh, 40000, 'slsh', 'SLSH');
+  const g = await api('GET', `/invoices/${slsh.id}`, { token: tokens.admin });
+  assert.equal(g.status, 200);
+  const b = g.data.balance;
+  assert.equal(b.currency, 'SLSH');
+  assert.equal(num(b.paid), 40000);
+  assert.equal(num(b.outstanding), 60000);
+  assert.equal(num(b.netTotal), 100000);
+  assert.equal(num(b.slsh.outstanding), 60000);
+  assert.equal(num(b.usd.netTotal), 10);
+  assert.equal(num(b.usd.paid), 4);
+  assert.equal(num(b.usd.outstanding), 6);
+  assert.equal(num(b.rate.rate), 10000);
+  assert.ok(b.rate.id && b.rate.effective_from);
+
+  const usd = await createInvoice(tokens.cashier, custA, 10);
+  await pay(tokens.cashier, usd, 4);
+  const u = (await api('GET', `/invoices/${usd.id}`, { token: tokens.admin })).data.balance;
+  assert.equal(u.currency, 'USD');
+  assert.equal(num(u.outstanding), 6);
+  assert.equal(num(u.usd.outstanding), 6);
+  assert.equal(num(u.slsh.netTotal), 100000);
+  assert.equal(num(u.slsh.outstanding), 60000);
+  assert.equal(num(u.rate.rate), 10000);
+});

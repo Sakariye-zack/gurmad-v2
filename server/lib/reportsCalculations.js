@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { getCurrentExchangeRate } = require('./financialCalculations');
 
 // Module 8 — Reports. The ONE shared aggregation/calculation module for
 // every reporting figure in V2 — Reports today, a future Dashboard later
@@ -58,12 +59,23 @@ async function getRevenueForPeriod({ zoneId = null, cashierId = null, periodStar
      WHERE p.status = 'recorded' AND p.created_at >= $1 AND p.created_at < $2${zoneClause}${cashierClause}`,
     params
   );
+  // Outstanding is reported in USD. SLSH invoices are computed natively
+  // (net - SLSH paid, each USD payment converted at its own rate or the
+  // current one) and then converted at the CURRENT rate; with no rate they
+  // contribute 0. USD invoices keep the historical amount_usd arithmetic.
+  const curRate = await getCurrentExchangeRate(client);
+  const rateIdx = zoneId ? 4 : 3;
   const outstandingRes = await client.query(
-    `SELECT COALESCE(SUM(i.invoice_total - i.discount_amount - COALESCE(pp.paid, 0)), 0) AS outstanding
+    `SELECT COALESCE(SUM(CASE WHEN i.currency = 'SLSH'
+         THEN (CASE WHEN $${rateIdx}::numeric > 0 THEN (i.invoice_total - i.discount_amount - COALESCE(pp.paid_slsh, 0)) / $${rateIdx}::numeric ELSE 0 END)
+         ELSE i.invoice_total - i.discount_amount - COALESCE(pp.paid, 0) END), 0) AS outstanding
      FROM invoices i JOIN customers c ON i.customer_id = c.id
-     LEFT JOIN (SELECT invoice_id, SUM(amount_usd) AS paid FROM payments WHERE status = 'recorded' GROUP BY invoice_id) pp ON pp.invoice_id = i.id
+     LEFT JOIN (SELECT p.invoice_id, SUM(p.amount_usd) AS paid,
+                       SUM(CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $${rateIdx}::numeric) END) AS paid_slsh
+                FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
+                WHERE p.status = 'recorded' GROUP BY p.invoice_id) pp ON pp.invoice_id = i.id
      WHERE i.status != 'voided' AND i.created_at >= $1 AND i.created_at < $2${zoneClause}`,
-    [periodStart, periodEnd, ...(zoneId ? [zoneId] : [])]
+    [periodStart, periodEnd, ...(zoneId ? [zoneId] : []), curRate ? parseFloat(curRate.rate) : null]
   );
   const debtRes = await client.query(
     `SELECT COALESCE(SUM(d.amount), 0) AS total FROM debts d LEFT JOIN customers c ON d.customer_id = c.id

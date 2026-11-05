@@ -9,7 +9,7 @@ const { pool, logPortalAudit } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { authenticateCustomerPortal, issuePortalToken } = require('../middleware/customerPortalAuth');
-const { getInvoiceBalance } = require('../lib/financialCalculations');
+const { getInvoiceBalance, getCurrentExchangeRate } = require('../lib/financialCalculations');
 const { getCollectionHistory, getCollectionDetail } = require('../lib/reportsCalculations');
 const { buildInvoiceDocx, buildInvoiceHtml } = require('../lib/documentGenerators');
 const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
@@ -401,10 +401,11 @@ router.post('/me/revoke-sessions', authenticateCustomerPortal, async (req, res) 
 router.get('/summary', authenticateCustomerPortal, async (req, res) => {
   try {
     const customerId = req.customerId;
+    const portalRate = await getCurrentExchangeRate(pool);
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(i.invoice_total - i.discount_amount), 0) AS billed
+      `SELECT COALESCE(SUM(CASE WHEN i.currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN (i.invoice_total - i.discount_amount) / $2::numeric ELSE 0 END) ELSE i.invoice_total - i.discount_amount END), 0) AS billed
        FROM invoices i WHERE i.customer_id = $1 AND i.status != 'voided'`,
-      [customerId]
+      [customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
     const paidRes = await pool.query(
       `SELECT COALESCE(SUM(p.amount_usd), 0) AS paid
@@ -580,10 +581,11 @@ router.get('/payments', authenticateCustomerPortal, async (req, res) => {
 
 router.get('/balance', authenticateCustomerPortal, async (req, res) => {
   try {
+    const portalRate = await getCurrentExchangeRate(pool);
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(i.invoice_total - i.discount_amount), 0) AS billed
+      `SELECT COALESCE(SUM(CASE WHEN i.currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN (i.invoice_total - i.discount_amount) / $2::numeric ELSE 0 END) ELSE i.invoice_total - i.discount_amount END), 0) AS billed
        FROM invoices i WHERE i.customer_id = $1 AND i.status != 'voided'`,
-      [req.customerId]
+      [req.customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
     const paidRes = await pool.query(
       `SELECT COALESCE(SUM(p.amount_usd), 0) AS paid

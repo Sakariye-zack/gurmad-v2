@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { recalculateInvoiceStatus, getCurrentExchangeRate, EPSILON } = require('../lib/financialCalculations');
+const { recalculateInvoiceStatus, getCurrentExchangeRate, paidInInvoiceCurrency, EPSILON } = require('../lib/financialCalculations');
 const { requestZaadPayment } = require('../lib/zaadService');
 
 const router = express.Router();
@@ -73,19 +73,31 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
     amountUsd = amt / parseFloat(rate.rate);
   }
 
-  // Outstanding balance computed INSIDE the lock, using the same
-  // amount_usd-summing logic recalculateInvoiceStatus itself uses —
-  // never a second, independently-derived copy.
-  const paidRes = await client.query(
-    `SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded'`,
-    [invoiceId]
-  );
+  // Outstanding balance computed INSIDE the lock, in the INVOICE'S OWN
+  // currency, using the same paidInInvoiceCurrency logic
+  // recalculateInvoiceStatus itself uses — never a second, independently-
+  // derived copy. For USD invoices this is the historical amount_usd sum.
+  const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
   const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
-  const alreadyPaid = parseFloat(paidRes.rows[0].paid);
+  const currentRate = invCur === 'SLSH' ? await getCurrentExchangeRate(client) : null;
+  const alreadyPaid = await paidInInvoiceCurrency(invoiceId, invCur, client, { rate: currentRate });
   const outstanding = netTotal - alreadyPaid;
 
-  if (amountUsd > outstanding + EPSILON) {
-    throw new PaymentError(409, 'OVERPAYMENT', `Payment amount exceeds outstanding balance. Outstanding: $${outstanding.toFixed(2)}. Attempted: $${amountUsd.toFixed(2)}.`);
+  // This payment's size in the invoice's currency.
+  let attempted = amountUsd;
+  if (invCur === 'SLSH') {
+    if (cur === 'SLSH') attempted = amt;
+    else {
+      if (!currentRate) throw new PaymentError(409, 'NO_EXCHANGE_RATE', 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.');
+      attempted = amt * parseFloat(currentRate.rate);
+    }
+  }
+
+  if (attempted > outstanding + EPSILON) {
+    const fmt = invCur === 'SLSH'
+      ? (n) => `${Math.round(n).toLocaleString('en-US')} SLSH`
+      : (n) => `$${n.toFixed(2)}`;
+    throw new PaymentError(409, 'OVERPAYMENT', `Payment amount exceeds outstanding balance. Outstanding: ${fmt(outstanding)}. Attempted: ${fmt(attempted)}.`);
   }
 
   const inserted = await client.query(
@@ -113,11 +125,7 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   // kept in sync: created/updated while something is still owed,
   // auto-settled the moment it reaches zero. Never touches a
   // manually-created debt (source='manual').
-  const trueOutstandingRes = await client.query(
-    `SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded' AND method != 'debt'`,
-    [invoiceId]
-  );
-  const trueOutstanding = netTotal - parseFloat(trueOutstandingRes.rows[0].paid);
+  const trueOutstanding = netTotal - await paidInInvoiceCurrency(invoiceId, invCur, client, { excludeDebt: true, rate: currentRate });
   const existingAutoDebt = await client.query(
     `SELECT * FROM debts WHERE invoice_id = $1 AND source = 'auto_invoice' AND status = 'unpaid' LIMIT 1`,
     [invoiceId]
@@ -128,8 +136,8 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
     } else {
       await client.query(
         `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
-         VALUES ($1,$2,$3,'USD',$4,'unpaid','auto_invoice',$5)`,
-        [invoice.customer_id, invoiceId, trueOutstanding, `Auto-tracked remaining balance on ${invoice.invoice_number}`, user.id]
+         VALUES ($1,$2,$3,$6,$4,'unpaid','auto_invoice',$5)`,
+        [invoice.customer_id, invoiceId, trueOutstanding, `Auto-tracked remaining balance on ${invoice.invoice_number}`, user.id, invCur]
       );
     }
   } else if (existingAutoDebt.rows.length > 0) {
@@ -239,11 +247,18 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     if (myZoneId !== null && custRes.rows[0]?.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this invoice.', code: 'FORBIDDEN' } });
     }
-    const paidRes = await pool.query(`SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded'`, [invoiceId]);
+    const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
+    const preRate = invCur === 'SLSH' ? await getCurrentExchangeRate(pool) : null;
     const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
-    const outstanding = netTotal - parseFloat(paidRes.rows[0].paid);
-    if (cur === 'USD' && amt > outstanding + EPSILON) {
+    const outstanding = netTotal - await paidInInvoiceCurrency(invoiceId, invCur, pool, { rate: preRate });
+    if (invCur === 'USD' && cur === 'USD' && amt > outstanding + EPSILON) {
       return res.status(409).json({ error: { message: `Amount exceeds outstanding balance. Outstanding: $${outstanding.toFixed(2)}.`, code: 'OVERPAYMENT' } });
+    }
+    if (invCur === 'SLSH') {
+      const inInvCur = cur === 'SLSH' ? amt : (preRate ? amt * parseFloat(preRate.rate) : null);
+      if (inInvCur !== null && inInvCur > outstanding + EPSILON) {
+        return res.status(409).json({ error: { message: `Amount exceeds outstanding balance. Outstanding: ${Math.round(outstanding).toLocaleString('en-US')} SLSH.`, code: 'OVERPAYMENT' } });
+      }
     }
 
     const zaadResult = await requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: invoice.invoice_number });
@@ -329,11 +344,8 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
     // Without this it would only self-correct on the invoice's NEXT
     // payment, leaving it stale (understated) in the meantime.
     const netTotal = parseFloat(lockedInvoice.invoice_total) - parseFloat(lockedInvoice.discount_amount);
-    const trueOutstandingRes = await client.query(
-      `SELECT COALESCE(SUM(amount_usd), 0) AS paid FROM payments WHERE invoice_id = $1 AND status = 'recorded' AND method != 'debt'`,
-      [payment.invoice_id]
-    );
-    const trueOutstanding = netTotal - parseFloat(trueOutstandingRes.rows[0].paid);
+    const lockedCur = lockedInvoice.currency === 'SLSH' ? 'SLSH' : 'USD';
+    const trueOutstanding = netTotal - await paidInInvoiceCurrency(payment.invoice_id, lockedCur, client, { excludeDebt: true });
     const existingAutoDebt = await client.query(
       `SELECT * FROM debts WHERE invoice_id = $1 AND source = 'auto_invoice' AND status = 'unpaid' LIMIT 1`,
       [payment.invoice_id]
@@ -344,8 +356,8 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
       } else {
         await client.query(
           `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
-           VALUES ($1,$2,$3,'USD',$4,'unpaid','auto_invoice',$5)`,
-          [lockedInvoice.customer_id, payment.invoice_id, trueOutstanding, `Auto-tracked remaining balance on ${lockedInvoice.invoice_number}`, req.user.id]
+           VALUES ($1,$2,$3,$6,$4,'unpaid','auto_invoice',$5)`,
+          [lockedInvoice.customer_id, payment.invoice_id, trueOutstanding, `Auto-tracked remaining balance on ${lockedInvoice.invoice_number}`, req.user.id, lockedCur]
         );
       }
     } else if (existingAutoDebt.rows.length > 0) {
