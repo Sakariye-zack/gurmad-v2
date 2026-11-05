@@ -117,3 +117,37 @@ test('auto-billing: non-admin run is 403, bad body is 400, status readable by gu
   assert.equal((await api('GET', '/invoices/auto-billing/status', { token: w.tokens.gudoomiye })).status, 200);
   assert.equal((await api('GET', '/invoices/auto-billing/status', { token: w.tokens.cashier })).status, 403);
 });
+
+test('daily: visit at 22:30 UTC is a next-day local (UTC+3) visit', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w, { customer_type: 'commercial', business_name: 'TzShop', commercial_shift: 'day', billing_type: 'daily', fee: 2 });
+  const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom','2031-11-01','2031-11-30') RETURNING id`, [w.zoneA.id])).rows[0].id;
+  const batch = (await db.query(
+    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, commercial_shift, start_date) VALUES ($1,$2,$3,1,'commercial','day','2031-11-09') RETURNING id`,
+    ['ABTZ-' + Date.now(), w.zoneA.id, cyc])).rows[0].id;
+  await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced','2031-11-09 22:30:00')`, [batch, c.id]);
+  const nov9 = await runBilling(w, { kind: 'daily', date: '2031-11-09' });
+  assert.equal(nov9.status, 200);
+  assert.equal((await invoicesOf(c.id)).length, 0);
+  const nov10 = await runBilling(w, { kind: 'daily', date: '2031-11-10' });
+  assert.equal(nov10.data.created, 1);
+  assert.equal((await invoicesOf(c.id)).length, 1);
+});
+
+test('monthly: customer with a manual invoice in that local month is skipped as already_invoiced', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w, { billing_type: 'monthly', fee: 15 });
+  const manual = await api('POST', '/invoices', { token: w.tokens.admin, body: { customer_id: c.id, invoice_total: 15 } });
+  assert.equal(manual.status, 201);
+  const period = (await db.query(`SELECT to_char(NOW() AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Mogadishu', 'YYYY-MM') AS p`)).rows[0].p;
+  const r = await runBilling(w, { kind: 'monthly', period });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await invoicesOf(c.id)).length, 1);
+  const hit = r.data.skipped.find((s) => s.customer_id === c.id);
+  assert.equal(hit && hit.reason, 'already_invoiced');
+  // a voided manual invoice does not block billing
+  await api('PUT', '/invoices/' + manual.data.id + '/void', { token: w.tokens.admin, body: { reason: 'test' } });
+  const r2 = await runBilling(w, { kind: 'monthly', period });
+  assert.ok(r2.data.created >= 1);
+  assert.equal((await invoicesOf(c.id)).length, 2);
+});

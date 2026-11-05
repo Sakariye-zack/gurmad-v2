@@ -46,7 +46,7 @@ router.get('/auto-billing/status', authenticateToken, requireRole('admin', 'gudo
     const myZoneId = await resolveUserZoneId(req.user);
     const latest = {};
     for (const kind of ['monthly', 'daily']) {
-      const r = await pool.query(`SELECT id, period_key, skipped FROM billing_runs WHERE kind = $1 AND finished_at IS NOT NULL AND error IS NULL ORDER BY id DESC LIMIT 1`, [kind]);
+      const r = await pool.query(`SELECT id, period_key, skipped FROM billing_runs WHERE kind = $1 AND finished_at IS NOT NULL AND error IS NULL ORDER BY period_key DESC, id DESC LIMIT 1`, [kind]);
       let skipped = r.rows[0]?.skipped || [];
       if (myZoneId !== null && skipped.length) {
         const ok = await pool.query(`SELECT id FROM customers WHERE id = ANY($1::int[]) AND zone_id = $2`, [skipped.map((s) => s.customer_id), myZoneId]);
@@ -81,7 +81,8 @@ router.post('/auto-billing/run', authenticateToken, requireRole('admin'), async 
       after: { kind, period: period || null, date: date || null, created: result.created, skipped: result.skipped.length } });
     res.json({ data: result });
   } catch (err) {
-    res.status(500).json({ error: { message: 'Auto-billing run failed: ' + err.message, code: 'INTERNAL' } });
+    console.error('auto-billing run failed:', err);
+    res.status(500).json({ error: { message: 'Auto-billing run failed.', code: 'INTERNAL' } });
   }
 });
 
@@ -256,6 +257,8 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     res.status(201).json({ data: invoice });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'This collection event already has an invoice.', code: 'CONFLICT' } });
+    console.error('invoice create failed:', err);
     res.status(500).json({ error: { message: 'Failed to create invoice.', code: 'INTERNAL' } });
   } finally {
     client.release();
@@ -366,6 +369,8 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
     res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 } });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'One of these visits was invoiced concurrently (possibly by auto-billing). Please retry.', code: 'CONFLICT' } });
+    console.error('bulk invoice generation failed:', err);
     res.status(500).json({ error: { message: 'Failed to generate invoices.', code: 'INTERNAL' } });
   } finally {
     client.release();

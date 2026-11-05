@@ -38,6 +38,11 @@ function shiftDate(isoDate, days) {
   return d.toISOString().slice(0, 10);
 }
 
+function prevPeriod(period) {
+  const [y, m] = period.split('-').map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
 async function resolveCreatedBy(client, triggeredBy) {
   if (triggeredBy) return triggeredBy;
   const r = await client.query(`SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE ORDER BY id LIMIT 1`);
@@ -48,29 +53,50 @@ async function resolveCreatedBy(client, triggeredBy) {
 const skipEntry = (c, reason) => ({ customer_id: c.id, customer_number: c.customer_number, name: c.name, reason });
 const hasFee = (fee) => fee !== null && fee !== undefined && Number(fee) > 0;
 
-// Wraps a run in a transaction + advisory lock and records a billing_runs row (also on failure).
+// Wraps a run in a transaction + advisory lock. A billing_runs row is written only when informative:
+// something was created, it is a manual run (triggeredBy set), it is the first run for that
+// (kind, period_key), or it failed. This stops hourly catch-up ticks flooding the table.
 async function recordedRun(kind, periodKey, triggeredBy, work) {
   const client = await pool.connect();
-  let runId = null;
+  const startedAt = new Date();
   try {
-    const ins = await pool.query(`INSERT INTO billing_runs (kind, period_key, triggered_by) VALUES ($1,$2,$3) RETURNING id`, [kind, periodKey, triggeredBy || null]);
-    runId = ins.rows[0].id;
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEY]);
     const createdBy = await resolveCreatedBy(client, triggeredBy);
     const result = await work(client, createdBy);
     await client.query('COMMIT');
-    await pool.query(`UPDATE billing_runs SET finished_at = NOW(), created_count = $2, skipped = $3 WHERE id = $1`,
-      [runId, result.created, JSON.stringify(result.skipped)]);
+    let runId = null;
+    const first = (await pool.query(`SELECT 1 FROM billing_runs WHERE kind = $1 AND period_key = $2 LIMIT 1`, [kind, periodKey])).rows.length === 0;
+    if (result.created > 0 || triggeredBy || first) {
+      const ins = await pool.query(
+        `INSERT INTO billing_runs (kind, period_key, started_at, finished_at, created_count, skipped, triggered_by) VALUES ($1,$2,$3,NOW(),$4,$5,$6) RETURNING id`,
+        [kind, periodKey, startedAt, result.created, JSON.stringify(result.skipped), triggeredBy || null]);
+      runId = ins.rows[0].id;
+    }
     return { ...result, run_id: runId };
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
-    if (runId) {
-      try { await pool.query(`UPDATE billing_runs SET finished_at = NOW(), error = $2 WHERE id = $1`, [runId, String(err.message || err)]); } catch (_) { /* ignore */ }
-    }
+    try {
+      await pool.query(`INSERT INTO billing_runs (kind, period_key, started_at, finished_at, error, triggered_by) VALUES ($1,$2,$3,NOW(),$4,$5)`,
+        [kind, periodKey, startedAt, String(err.message || err), triggeredBy || null]);
+    } catch (_) { /* ignore */ }
     throw err;
   } finally {
     client.release();
+  }
+}
+
+// Insert inside a SAVEPOINT so one bad row cannot roll back (and block) the whole run.
+async function safeInsert(client, params) {
+  await client.query('SAVEPOINT bill_row');
+  try {
+    const inv = await insertInvoice(client, params);
+    await client.query('RELEASE SAVEPOINT bill_row');
+    return { inv };
+  } catch (err) {
+    await client.query('ROLLBACK TO SAVEPOINT bill_row');
+    await client.query('RELEASE SAVEPOINT bill_row');
+    return { error: String(err.message || err) };
   }
 }
 
@@ -81,19 +107,25 @@ async function runMonthly({ now = new Date(), triggeredBy = null, manual = false
   if (!manual && local.day < 28) return { created: 0, skipped: [], not_due: true };
   const periodKey = period || local.period;
   return recordedRun('monthly', periodKey, triggeredBy, async (client, createdBy) => {
+    // A customer who already has a (manual) non-voided invoice created in that local month is not
+    // billed again, otherwise the first automatic run would double-bill them.
     const custs = await client.query(
-      `SELECT c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name
+      `SELECT c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name,
+         EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.status <> 'voided'
+           AND to_char((i.created_at AT TIME ZONE 'UTC' AT TIME ZONE $2), 'YYYY-MM') = $1) AS already_invoiced
        FROM customers c LEFT JOIN zones z ON z.id = c.zone_id
        WHERE c.status = 'active' AND c.billing_type = 'monthly'
          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = c.id AND i.billing_period = $1)
-       ORDER BY c.id`, [periodKey]);
+       ORDER BY c.id`, [periodKey, tz]);
     let created = 0;
     const skipped = [];
     for (const c of custs.rows) {
       if (!hasFee(c.fee)) { skipped.push(skipEntry(c, 'no_fee')); continue; }
-      const inv = await insertInvoice(client, { customerId: c.id, total: c.fee, currency: c.fee_currency || 'USD',
+      if (c.already_invoiced) { skipped.push(skipEntry(c, 'already_invoiced')); continue; }
+      const r = await safeInsert(client, { customerId: c.id, total: c.fee, currency: c.fee_currency || 'USD',
         zoneNameSnapshot: c.zone_name, notes: `Monthly fee ${periodKey} (auto-generated)`, createdBy, billingPeriod: periodKey, autoGenerated: true });
-      if (inv) created += 1;
+      if (r.error) skipped.push(skipEntry(c, 'error: ' + r.error));
+      else if (r.inv) created += 1;
     }
     return { created, skipped };
   });
@@ -101,47 +133,55 @@ async function runMonthly({ now = new Date(), triggeredBy = null, manual = false
 
 async function runDaily({ date, triggeredBy = null } = {}) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('runDaily needs a date (YYYY-MM-DD).');
+  const tz = await getTimezone();
   return recordedRun('daily', date, triggeredBy, async (client, createdBy) => {
+    // status_at is a naive UTC timestamp: convert to company-local time before taking the date.
     // Any existing invoice (even voided) blocks re-billing the visit: a deliberate void must stick.
     const rows = await client.query(
       `SELECT bc.id AS bc_id, c.id, c.customer_number, c.name, c.fee, c.fee_currency, z.name AS zone_name
        FROM batch_customers bc
        JOIN customers c ON c.id = bc.customer_id
        LEFT JOIN zones z ON z.id = c.zone_id
-       WHERE bc.status = 'serviced' AND bc.status_at::date = $1::date AND c.billing_type = 'daily'
+       WHERE bc.status = 'serviced' AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $2)::date = $1::date AND c.billing_type = 'daily'
          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.batch_customer_id = bc.id)
-       ORDER BY bc.id`, [date]);
+       ORDER BY bc.id`, [date, tz]);
     let created = 0;
     const skipped = [];
     for (const r of rows.rows) {
       if (!hasFee(r.fee)) { skipped.push(skipEntry(r, 'no_fee')); continue; }
-      const inv = await insertInvoice(client, { customerId: r.id, batchCustomerId: r.bc_id, total: r.fee, currency: r.fee_currency || 'USD',
+      const res = await safeInsert(client, { customerId: r.id, batchCustomerId: r.bc_id, total: r.fee, currency: r.fee_currency || 'USD',
         zoneNameSnapshot: r.zone_name, notes: `Daily service ${date} (auto-generated)`, createdBy, autoGenerated: true });
-      if (inv) created += 1;
+      if (res.error) skipped.push(skipEntry(r, 'error: ' + res.error));
+      else if (res.inv) created += 1;
     }
     return { created, skipped };
   });
 }
 
+async function hasSuccessfulMonthly(period) {
+  const r = await pool.query(`SELECT 1 FROM billing_runs WHERE kind = 'monthly' AND period_key = $1 AND finished_at IS NOT NULL AND error IS NULL LIMIT 1`, [period]);
+  return r.rows.length > 0;
+}
+
 async function schedulerTick(now = new Date()) {
   const tz = await getTimezone();
   const local = localParts(now, tz);
-  if (local.day >= 28) {
-    const done = await pool.query(`SELECT 1 FROM billing_runs WHERE kind = 'monthly' AND period_key = $1 AND finished_at IS NOT NULL AND error IS NULL LIMIT 1`, [local.period]);
-    if (done.rows.length === 0) {
-      try { await runMonthly({ now }); } catch (e) { console.error('auto-billing monthly failed:', e.message); }
-    }
+  const guard = async (label, fn) => { try { await fn(); } catch (e) { console.error(`auto-billing ${label} failed:`, e.message); } };
+  if (local.day >= 28 && !(await hasSuccessfulMonthly(local.period))) {
+    await guard('monthly', () => runMonthly({ now }));
   }
-  // End of day: bill today's and yesterday's serviced visits. Early-morning ticks catch up
-  // yesterday in case the late-evening window was missed (e.g. server down).
-  const evening = local.hour > 23 || (local.hour === 23 && local.minute >= 30);
-  if (evening) {
-    for (const date of [shiftDate(local.date, -1), local.date]) {
-      try { await runDaily({ date }); } catch (e) { console.error('auto-billing daily failed:', e.message); }
-    }
-  } else if (local.hour < 6) {
-    try { await runDaily({ date: shiftDate(local.date, -1) }); } catch (e) { console.error('auto-billing daily failed:', e.message); }
+  // Catch-up for a missed previous month (e.g. server down on the 28th-31st). Only once the engine has
+  // run before, so the very first deploy never retro-bills a month nobody asked for.
+  const prev = prevPeriod(local.period);
+  const everRan = (await pool.query(`SELECT 1 FROM billing_runs WHERE kind = 'monthly' AND finished_at IS NOT NULL AND error IS NULL LIMIT 1`)).rows.length > 0;
+  if (everRan && !(await hasSuccessfulMonthly(prev))) {
+    await guard('monthly catch-up', () => runMonthly({ now, manual: true, period: prev }));
   }
+  // Daily: the last 7 local days are re-checked every tick (idempotent); today only from 23:00.
+  const days = [];
+  for (let i = 1; i <= 7; i++) days.push(shiftDate(local.date, -i));
+  if (local.hour >= 23) days.unshift(local.date);
+  for (const date of days) await guard('daily', () => runDaily({ date }));
 }
 
 function startScheduler() {
