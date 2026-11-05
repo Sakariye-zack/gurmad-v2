@@ -47,7 +47,7 @@ const IMPORT_ENTITIES = {
 
   customers: {
     table: 'customers',
-    canonicalKey: null, // customer_number is server-generated — see §Decisions §15, never client-supplied, so there is no client-facing canonical key to validate at layer 4; duplicate detection (layer 5) is not applicable to this entity for the same reason (a fresh sequence number cannot collide)
+    canonicalKey: null, // customer_number is derived server-side from door_number (C-<door>), never client-supplied; the duplicate check lives in insert()
     importRoles: ['admin', 'gudoomiye'], // routes/customers.js:364
     zoneScoped: true,
     importFields: [
@@ -60,6 +60,7 @@ const IMPORT_ENTITIES = {
       { csvColumn: 'email', dbField: 'email', required: false, type: 'string' },
       { csvColumn: 'address_line', dbField: 'address_line', required: false, type: 'string' },
       { csvColumn: 'sub_zone', dbField: 'sub_zone', required: false, type: 'string' },
+      { csvColumn: 'door_number', dbField: 'door_number', required: true, type: 'string' },
       { csvColumn: 'lat', dbField: 'lat', required: false, type: 'number' },
       { csvColumn: 'lng', dbField: 'lng', required: false, type: 'number' },
       { csvColumn: 'commercial_shift', dbField: 'commercial_shift', required: false, type: 'string' },
@@ -95,22 +96,27 @@ const IMPORT_ENTITIES = {
       }
       return { ok: true, groupId, routeId };
     },
-    async generateCustomerNumber(client) {
-      const seq = await client.query(`SELECT nextval('customer_number_seq') AS n`);
-      return `CUST-${String(seq.rows[0].n).padStart(6, '0')}`;
-    },
     async insert(client, row, ctx) {
       const gr = await this.resolveGroupRoute(client, row, ctx.zoneId);
       if (!gr.ok) return gr;
-      const customerNumber = await this.generateCustomerNumber(client);
+      // Customer # is derived from the door number: C- + door (min 2 digits).
+      const door = String(row.door_number ?? '').trim();
+      if (!/^\d+$/.test(door) || door.length > 20) {
+        return { ok: false, code: 'INVALID_FORMAT', field: 'door_number', message: 'door_number is required and must contain digits only (max 20).' };
+      }
+      const customerNumber = 'C-' + door.replace(/^0+(?=\d)/, '').padStart(2, '0'); // leading zeros ignored
+      const dup = await client.query('SELECT 1 FROM customers WHERE customer_number = $1 OR door_number = $2', [customerNumber, door]);
+      if (dup.rows.length) {
+        return { ok: false, code: 'DUPLICATE_IN_DATABASE', field: 'door_number', message: `Customer Number ${customerNumber} (door ${door}) is already assigned to another customer.` };
+      }
       const r = await client.query(
         `INSERT INTO customers (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
-           address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode, fee, registered_by, group_id, route_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+           address_line, zone_id, sub_zone, lat, lng, commercial_shift, collection_frequency, collection_mode, fee, registered_by, group_id, route_id, door_number)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
         [customerNumber, row.customer_type, row.name, row.business_name || null, row.phone, row.alternate_phone || null,
          row.whatsapp || null, row.email || null, row.address_line || null, ctx.zoneId, row.sub_zone || null,
          row.lat || null, row.lng || null, row.commercial_shift || null, row.collection_frequency || null,
-         row.collection_mode || null, row.fee || null, ctx.actorId, gr.groupId, gr.routeId]
+         row.collection_mode || null, row.fee || null, ctx.actorId, gr.groupId, gr.routeId, door]
       );
       return { ok: true, id: r.rows[0].id };
     },

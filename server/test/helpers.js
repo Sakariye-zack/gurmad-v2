@@ -70,7 +70,7 @@ async function setupWorld() {
   const mkCustomer = async (name, zone, phone) => {
     const ex = await db.query('SELECT id, zone_id FROM customers WHERE name = $1', [name]);
     if (ex.rows[0]) return ex.rows[0];
-    const r = await api('POST', '/customers', { token: admin, body: { customer_type: 'residential', name, phone, zone_id: zone.id, fee: 10 } });
+    const r = await api('POST', '/customers', { token: admin, body: { customer_type: 'residential', name, phone, zone_id: zone.id, fee: 10, door_number: phone.slice(-6) } });
     if (r.status !== 201) throw new Error('customer create failed: ' + JSON.stringify(r.body));
     return r.data;
   };

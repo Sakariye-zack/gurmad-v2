@@ -40,19 +40,6 @@ async function resolveUserZoneId(user) {
   return r.rows[0]?.id ?? null;
 }
 
-// Next free automatic number. Numbers can also be entered by hand, so skip any
-// sequence value that is already taken instead of failing on the unique index.
-async function generateCustomerNumber(client) {
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    const seq = await client.query(`SELECT nextval('customer_number_seq') AS n`);
-    const n = Number(seq.rows[0].n);
-    const candidate = `C-${String(n).padStart(Math.max(2, String(n).length), '0')}`;
-    const taken = await client.query('SELECT 1 FROM customers WHERE customer_number = $1', [candidate]);
-    if (taken.rows.length === 0) return candidate;
-  }
-  throw new Error('No free customer number found');
-}
-
 // Door number (route #): trimmed; blank -> null; max 20 chars. Returns
 // { value } or { error }.
 function normaliseDoor(v) {
@@ -387,6 +374,10 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   const door = normaliseDoor(req.body?.door_number);
   if (door.error) return res.status(400).json({ error: { message: door.error, code: 'VALIDATION' } });
 
+  if (door.value === null || !/^\d+$/.test(door.value)) {
+    return res.status(400).json({ error: { message: 'door_number is required and must contain digits only.', code: 'VALIDATION' } });
+  }
+
   const writable = await assertZoneWritable(req.user, data.zone_id);
   if (!writable) {
     return res.status(403).json({ error: { message: 'You cannot create a customer outside your assigned zone.', code: 'FORBIDDEN' } });
@@ -398,21 +389,13 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
   const groupRouteError = await validateGroupRoute(data, data.zone_id, data.group_id);
   if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
 
-  // Optional hand-entered Customer Number (same rules as the Edit Number endpoint);
-  // blank means "generate the next one automatically".
-  const rawNumber = typeof req.body?.customer_number === 'string' ? req.body.customer_number.trim().toUpperCase() : '';
-  if (rawNumber && !CUSTOMER_NUMBER_RE.test(rawNumber)) {
-    return res.status(400).json({ error: { message: 'Customer Number must look like C-01 (C- followed by 2 or more digits).', code: 'VALIDATION' } });
-  }
-  if (rawNumber) {
-    const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1', [rawNumber]);
-    if (dup.rows.length) return res.status(409).json({ error: { message: `Customer Number ${rawNumber} is already assigned to another customer.`, code: 'DUPLICATE' } });
-  }
+  const customerNumber = 'C-' + door.value.replace(/^0+(?=\d)/, '').padStart(2, '0'); // leading zeros ignored: 09301 == 9301
+  const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1', [customerNumber]);
+  if (dup.rows.length) return res.status(409).json({ error: { message: `Customer Number ${customerNumber} is already assigned to another customer — use a different door number.`, code: 'DUPLICATE' } });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const customerNumber = rawNumber || await generateCustomerNumber(client);
     const result = await client.query(
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,

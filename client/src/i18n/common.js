@@ -3,9 +3,9 @@
 export const COMMON = {
   // ---- generic UI ----
   'login.staffPortal': { en: 'Staff portal', so: 'Bogga shaqaalaha' },
-  'cust.m.numberOptional': { en: 'Customer # (optional)', so: 'Lambarka macmiilka (ikhtiyaari)' },
-  'cust.m.numberHint': { en: 'Leave blank to number automatically, or enter one like C-105.', so: 'Madhan ka dhig si si toos ah loo bixiyo, ama geli mid sida C-105.' },
-  'cust.m.numberFormat': { en: 'Must look like C-105 (C- followed by 2 or more digits).', so: 'Waa inuu u ekaadaa C-105 (C- iyo 2 lambar ama ka badan).' },
+  'cust.m.numberPreview': { en: 'Customer #: {number}', so: 'Lambarka macmiilka: {number}' },
+  'cust.m.doorRequired': { en: 'Door # is required.', so: 'Lambarka albaabka waa lagama maaarmaan.' },
+  'cust.m.doorDigits': { en: 'Door # must contain digits only.', so: 'Lambarka albaabka waa inuu ahaado tiro keliya.' },
   'common.loading': { en: 'Loading…', so: 'Waa la soo raraya…' },
   'common.refresh': { en: 'Refresh', so: 'Cusboonaysii' },
   'common.back': { en: 'Back', so: 'Dib u laabo' },
