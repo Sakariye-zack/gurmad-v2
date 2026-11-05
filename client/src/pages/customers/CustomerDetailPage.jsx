@@ -43,7 +43,7 @@ export default function CustomerDetailPage() {
   // Group › District › Zone › Sub Zone breadcrumb (group/route codes resolved from the group detail).
   const grp = groupData?.data;
   const rt = customer.route_id ? grp?.routes?.find((r) => r.id === customer.route_id) : null;
-  const breadcrumb = [grp?.code, customer.zone_name, customer.group_zone_name, rt?.code].filter(Boolean).join(' › ');
+  const breadcrumb = [grp?.code, customer.zone_name, customer.group_zone_name || customer.group_zone_code, rt?.code].filter(Boolean).join(' › ');
 
   async function handleArchiveToggle() {
     try {

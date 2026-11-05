@@ -33,7 +33,7 @@ function toFormState(customer) {
     address_line: customer.address_line || '', zone_id: String(customer.zone_id || ''), sub_zone: customer.sub_zone || '',
     commercial_shift: customer.commercial_shift || '', collection_frequency: customer.collection_frequency || '',
     collection_mode: customer.collection_mode || '', fee: customer.fee ?? '', notes: customer.notes || '',
-    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', door_number: customer.door_number || '',
+    group_id: customer.group_id ? String(customer.group_id) : '', route_id: customer.route_id ? String(customer.route_id) : '', gz_filter: customer.group_zone_id ? String(customer.group_zone_id) : '', door_number: customer.door_number || '',
     lat: customer.lat ?? '', lng: customer.lng ?? '',
   };
 }

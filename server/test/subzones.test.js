@@ -136,3 +136,28 @@ test('customer detail returns group_zone_name', async () => {
   const get = await api('GET', '/customers/' + c.data.id, { token: w.tokens.admin });
   assert.equal(get.data.group_zone_name, 'Zone Named');
 });
+
+test('collector at cap: editing other fields with same collector still OK', async () => {
+  const w = await setupWorld();
+  const cid = await insertUser('t_collector_cap2', 'collector', w.zoneA.name);
+  const g = await api('POST', '/groups', { token: w.tokens.admin, body: { zone_id: w.zoneA.id, code: 'CAPH' + (++seq) } });
+  const ids = [];
+  for (let i = 1; i <= 10; i++) {
+    const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CH' + i, collector_user_id: cid } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    ids.push(r.data.id);
+  }
+  const put = await api('PUT', '/routes/' + ids[0], { token: w.tokens.admin, body: { name: 'Renamed', collector_user_id: cid } });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+});
+
+test('sub zone: inactive zone cannot be assigned', async () => {
+  const w = await setupWorld();
+  const { group, route } = await mkRoute(w);
+  const z = await api('POST', '/group-zones', { token: w.tokens.admin, body: { group_id: group.id, code: 'ZI' + (++seq), status: 'inactive' } });
+  assert.equal(z.status, 201, JSON.stringify(z.body));
+  const put = await api('PUT', '/routes/' + route.id, { token: w.tokens.admin, body: { group_zone_id: z.data.id } });
+  assert.equal(put.status, 400, JSON.stringify(put.body));
+  const post = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: group.id, code: 'ZIR' + (++seq), group_zone_id: z.data.id } });
+  assert.equal(post.status, 400, JSON.stringify(post.body));
+});

@@ -274,7 +274,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM customers c ${whereSql}`, params);
     params.push(limit, offset);
     const result = await pool.query(
-      `SELECT c.*, z.name AS zone_name, gz.name AS group_zone_name, gz.code AS group_zone_code
+      `SELECT c.*, z.name AS zone_name, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code
        FROM customers c JOIN zones z ON c.zone_id = z.id
        LEFT JOIN routes rt ON rt.id = c.route_id LEFT JOIN group_zones gz ON gz.id = rt.group_zone_id
        ${whereSql}
@@ -325,7 +325,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid customer id.', code: 'VALIDATION' } });
   try {
-    const result = await pool.query(`SELECT c.*, z.name AS zone_name, gz.name AS group_zone_name, gz.code AS group_zone_code
+    const result = await pool.query(`SELECT c.*, z.name AS zone_name, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code
        FROM customers c JOIN zones z ON c.zone_id = z.id
        LEFT JOIN routes rt ON rt.id = c.route_id LEFT JOIN group_zones gz ON gz.id = rt.group_zone_id
        WHERE c.id = $1`, [id]);
