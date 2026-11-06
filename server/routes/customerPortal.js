@@ -9,9 +9,11 @@ const { pool, logPortalAudit } = require('../db');
 const { sniffFileType } = require('../lib/fileSniff');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { authenticateCustomerPortal, issuePortalToken } = require('../middleware/customerPortalAuth');
-const { getInvoiceBalance } = require('../lib/financialCalculations');
+const { getInvoiceBalance, getCurrentExchangeRate, paidInInvoiceCurrency } = require('../lib/financialCalculations');
 const { getCollectionHistory, getCollectionDetail } = require('../lib/reportsCalculations');
 const { buildInvoiceDocx, buildInvoiceHtml } = require('../lib/documentGenerators');
+const { getWorkedDays } = require('../lib/workedDays');
+const { getTimezone } = require('../lib/autoBilling');
 const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
 // Phase 5 — Complaints now exists: createComplaint/getComplaintsForCustomer/
 // getComplaintDetail are imported directly from the ONE shared service
@@ -398,23 +400,34 @@ router.post('/me/revoke-sessions', authenticateCustomerPortal, async (req, res) 
   }
 });
 
+// Outstanding invoice balance for the portal. Each invoice is settled in ITS OWN currency
+// (paid from frozen amount_invoice_currency), then converted to USD at the same current rate
+// used for billed figures, so a fully paid SLSH invoice is exactly 0 outstanding.
+async function portalInvoiceOutstanding(customerId, rate) {
+  const curRate = rate ? parseFloat(rate.rate) : null;
+  const inv = await pool.query(
+    `SELECT id, currency, invoice_total - discount_amount AS net FROM invoices WHERE customer_id = $1 AND status != 'voided'`, [customerId]);
+  const byCurrency = { USD: 0, SLSH: 0 };
+  let usd = 0;
+  for (const i of inv.rows) {
+    const cur = i.currency === 'SLSH' ? 'SLSH' : 'USD';
+    const paid = await paidInInvoiceCurrency(i.id, cur, pool, { rate });
+    const out = Math.max(parseFloat(i.net) - paid, 0);
+    byCurrency[cur] += out;
+    usd += cur === 'SLSH' ? (curRate > 0 ? out / curRate : 0) : out;
+  }
+  return { usd, byCurrency };
+}
+
 router.get('/summary', authenticateCustomerPortal, async (req, res) => {
   try {
     const customerId = req.customerId;
-    const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(i.invoice_total - i.discount_amount), 0) AS billed
-       FROM invoices i WHERE i.customer_id = $1 AND i.status != 'voided'`,
-      [customerId]
-    );
-    const paidRes = await pool.query(
-      `SELECT COALESCE(SUM(p.amount_usd), 0) AS paid
-       FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE i.customer_id = $1 AND p.status = 'recorded'`,
-      [customerId]
-    );
+    const portalRate = await getCurrentExchangeRate(pool);
+    const outstanding = await portalInvoiceOutstanding(customerId, portalRate);
     const debtRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS outstanding_debt FROM debts WHERE customer_id = $1 AND status = 'unpaid'`,
-      [customerId]
+      `SELECT COALESCE(SUM(CASE WHEN currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN amount / $2::numeric ELSE 0 END) ELSE amount END), 0) AS outstanding_debt
+       FROM debts WHERE customer_id = $1 AND status = 'unpaid'`,
+      [customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
     const lastPaymentRes = await pool.query(
       `SELECT p.amount, p.currency, p.created_at FROM payments p JOIN invoices i ON i.id = p.invoice_id
@@ -426,11 +439,10 @@ router.get('/summary', authenticateCustomerPortal, async (req, res) => {
        ORDER BY bc.status_at DESC LIMIT 1`,
       [customerId]
     );
-    const billed = parseFloat(balanceRes.rows[0].billed);
-    const paid = parseFloat(paidRes.rows[0].paid);
     return res.json({
       data: {
-        outstandingInvoiceBalance: Math.max(billed - paid, 0),
+        outstandingInvoiceBalance: outstanding.usd,
+        outstandingByCurrency: outstanding.byCurrency,
         outstandingDebt: parseFloat(debtRes.rows[0].outstanding_debt),
         lastPayment: lastPaymentRes.rows[0] || null,
         lastCollection: lastCollectionRes.rows[0] || null,
@@ -527,7 +539,8 @@ router.get('/invoices/:id/document.docx', authenticateCustomerPortal, async (req
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await getTimezone()) : undefined;
+    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows, worked_days });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.docx"`);
     return res.send(buffer);
@@ -556,7 +569,8 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const html = await buildInvoiceHtml({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await getTimezone()) : undefined;
+    const html = await buildInvoiceHtml({ ...invoice, balance, payments: payments.rows, worked_days });
     return res.json({ data: { html } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to generate preview.', code: 'INTERNAL' } });
@@ -580,26 +594,16 @@ router.get('/payments', authenticateCustomerPortal, async (req, res) => {
 
 router.get('/balance', authenticateCustomerPortal, async (req, res) => {
   try {
-    const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(i.invoice_total - i.discount_amount), 0) AS billed
-       FROM invoices i WHERE i.customer_id = $1 AND i.status != 'voided'`,
-      [req.customerId]
-    );
-    const paidRes = await pool.query(
-      `SELECT COALESCE(SUM(p.amount_usd), 0) AS paid
-       FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE i.customer_id = $1 AND p.status = 'recorded'`,
-      [req.customerId]
-    );
+    const portalRate = await getCurrentExchangeRate(pool);
+    const outstanding = await portalInvoiceOutstanding(req.customerId, portalRate);
     const debtsRes = await pool.query(
       `SELECT id, amount, currency, description, status, created_at FROM debts WHERE customer_id = $1 ORDER BY created_at DESC`,
       [req.customerId]
     );
-    const billed = parseFloat(balanceRes.rows[0].billed);
-    const paid = parseFloat(paidRes.rows[0].paid);
     return res.json({
       data: {
-        outstandingInvoiceBalance: Math.max(billed - paid, 0),
+        outstandingInvoiceBalance: outstanding.usd,
+        outstandingByCurrency: outstanding.byCurrency,
         debts: debtsRes.rows,
       },
     });

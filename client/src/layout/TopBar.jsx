@@ -10,6 +10,7 @@ import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import ThemeToggle from '../components/ThemeToggle.jsx';
 import LanguageToggle from '../components/LanguageToggle.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
+import { fmtMoney } from '../lib/money.js';
 
 // Top Bar — Phase 10, user-requested ('dashboardka waxaad iigu soo
 // dartaa search bar oo waliba global search ah, notificationka,
@@ -129,7 +130,7 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
               <SearchGroup label="Invoices" icon={Receipt}>
                 {results.invoices.map((i) => (
                   <SearchRow key={i.id} onClick={() => goTo(`/financial/invoices/${i.id}`)}
-                    title={i.invoice_number} subtitle={`${i.customer_name} — $${parseFloat(i.invoice_total).toFixed(2)} (${i.status})`} />
+                    title={i.invoice_number} subtitle={`${i.customer_name} — ${fmtMoney(i.invoice_total, i.currency)} (${i.status})`} />
                 ))}
               </SearchGroup>
             )}

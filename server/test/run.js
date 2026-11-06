@@ -40,7 +40,7 @@ async function waitHealthy(base, tries = 60) {
 (async () => {
   await recreateDb();
   const clam = await stubclamd.start(Number(CLAM_PORT));
-  const env = { ...process.env, DB_NAME: TEST_DB, PORT, CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });

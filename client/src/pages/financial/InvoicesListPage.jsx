@@ -6,6 +6,8 @@ import RoleGate from '../../components/RoleGate.jsx';
 import { useInvoices, useCreateInvoice } from '../../hooks/useFinancial.js';
 import { useCustomers } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import AutoBillingCard from './AutoBillingCard.jsx';
+import { fmtMoney } from '../../lib/money.js';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -44,6 +46,8 @@ export default function InvoicesListPage() {
         <StatCard label={t('status.partial')} value={error ? '—' : partialCount} icon={Receipt} accent="var(--warning)" />
       </div>
 
+      <AutoBillingCard />
+
       <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('fin.search_invoice_customer_name_or')}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">{t('cust.all_statuses')}</option>
@@ -67,7 +71,7 @@ export default function InvoicesListPage() {
           <tr key={inv.id} onClick={() => navigate(`/financial/invoices/${inv.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
             <td style={cellStyle}><strong>{inv.invoice_number}</strong></td>
             <td style={cellStyle}>{inv.customer_name} <span style={{ color: 'var(--text-muted)' }}>({inv.customer_number})</span></td>
-            <td style={cellStyle} className="tabular-nums">{inv.currency} {parseFloat(inv.invoice_total).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{fmtMoney(inv.invoice_total, inv.currency)}</td>
             <td style={cellStyle}><StatusBadge status={inv.status} map={STATUS_MAP} /></td>
             <td style={cellStyle}>{new Date(inv.created_at).toLocaleDateString()}</td>
           </tr>

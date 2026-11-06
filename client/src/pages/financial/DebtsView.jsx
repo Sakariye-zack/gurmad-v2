@@ -5,6 +5,7 @@ import RoleGate from '../../components/RoleGate.jsx';
 import { useDebts, useSettleDebt, useCreateDebt } from '../../hooks/useFinancial.js';
 import { useCustomers } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
 
 const STATUS_MAP = { unpaid: 'danger', paid: 'success' };
 
@@ -71,7 +72,7 @@ export default function DebtsView() {
         {debts.map((d) => (
           <tr key={d.id} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}>{d.customer_name} <span style={{ color: 'var(--text-muted)' }}>({d.customer_number})</span></td>
-            <td style={cellStyle} className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</td>
+            <td style={cellStyle} className="tabular-nums">{fmtMoney(d.amount, d.currency)}</td>
             <td style={cellStyle}>
               {d.invoice_id ? (d.invoice_number || `#${d.invoice_id}`) : <span style={{ color: 'var(--text-muted)' }}>{t('cust.standalone')}</span>}
               {/* User-requested (Phase 10 — 'qaabkeebu partial iyo debt

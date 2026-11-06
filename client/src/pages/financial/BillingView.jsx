@@ -5,6 +5,7 @@ import { PageHeader, Button, Card, StatusBadge, LoadingState, useToast, StatCard
 import RoleGate from '../../components/RoleGate.jsx';
 import { useInvoices, useInvoice, useRecordPayment, useRequestZaadPayment } from '../../hooks/useFinancial.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -78,7 +79,7 @@ export default function BillingView() {
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{inv.customer_name} ({inv.customer_number})</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="tabular-nums" style={{ fontWeight: 700 }}>{inv.currency} {parseFloat(inv.invoice_total).toFixed(2)}</div>
+                    <div className="tabular-nums" style={{ fontWeight: 700 }}>{fmtMoney(inv.invoice_total, inv.currency)}</div>
                     <StatusBadge status={inv.status} map={STATUS_MAP} />
                   </div>
                 </div>
@@ -131,6 +132,8 @@ function PaymentPanel({ invoiceId, onRecorded }) {
   const [amountDebt, setAmountDebt] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [method, setMethod] = useState('cash');
+  const invCurrency = data?.data?.currency === 'SLSH' ? 'SLSH' : 'USD';
+  React.useEffect(() => { setCurrency(invCurrency); }, [invoiceId, invCurrency]);
   const [error, setError] = useState('');
   const invoice = data?.data;
 
@@ -177,9 +180,9 @@ function PaymentPanel({ invoiceId, onRecorded }) {
         </Button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '16px' }}>
-        <StatCard label={t('fin.invoice_total')} value={`$${parseFloat(invoice.invoice_total).toFixed(2)}`} />
-        <StatCard label={t('status.paid')} value={`$${(balance.paid ?? 0).toFixed?.(2) ?? balance.paid}`} accent="var(--success)" />
-        <StatCard label={t('portal.invoice.outstanding')} value={`$${(balance.outstanding ?? 0).toFixed?.(2) ?? balance.outstanding}`} accent={balance.outstanding > 0 ? 'var(--danger)' : 'var(--success)'} />
+        <StatCard label={t('fin.invoice_total')} value={fmtMoney(invoice.invoice_total, invoice.currency)} />
+        <StatCard label={t('status.paid')} value={fmtMoney(balance.paid, invoice.currency)} accent="var(--success)" />
+        <StatCard label={t('portal.invoice.outstanding')} value={fmtMoney(balance.outstanding, invoice.currency)} accent={balance.outstanding > 0 ? 'var(--danger)' : 'var(--success)'} />
       </div>
 
       {invoice.status === 'paid' ? (
@@ -236,7 +239,7 @@ function PaymentPanel({ invoiceId, onRecorded }) {
         {(invoice.payments || []).length === 0 && <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('fin.none_yet')}</p>}
         {(invoice.payments || []).map((p) => (
           <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
-            <span style={{ textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)} — {p.currency} {parseFloat(p.amount).toFixed(2)}</span>
+            <span style={{ textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)} — {fmtMoney(p.amount, p.currency)}</span>
             <StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} />
           </div>
         ))}
@@ -270,7 +273,7 @@ function ZaadRequestModal({ open, onClose, invoice, requestZaad, onDone }) {
     if (open && invoice) {
       setPhone(invoice.customer_phone || '');
       setAmount(invoice.balance?.outstanding ? String(invoice.balance.outstanding.toFixed?.(2) ?? invoice.balance.outstanding) : '');
-      setCurrency('USD');
+      setCurrency(invoice.currency === 'SLSH' ? 'SLSH' : 'USD');
       setError('');
     }
   }, [open, invoice]);

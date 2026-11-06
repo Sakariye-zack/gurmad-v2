@@ -151,7 +151,7 @@ router.put('/:id/status', authenticateToken, requireRole(...SETTLE_ROLES), async
           await client.query('ROLLBACK');
           return res.status(409).json({
             error: {
-              message: `Cannot settle this debt: the originating invoice #${debt.invoice_id} still has an outstanding balance of $${balance.outstanding.toFixed(2)}. Provide settlement_override_reason to settle anyway.`,
+              message: `Cannot settle this debt: the originating invoice #${debt.invoice_id} still has an outstanding balance of ${balance.currency === 'SLSH' ? Math.round(balance.outstanding).toLocaleString('en-US') + ' SLSH' : '$' + balance.outstanding.toFixed(2)}. Provide settlement_override_reason to settle anyway.`,
               code: 'INVOICE_STILL_OUTSTANDING',
             },
           });

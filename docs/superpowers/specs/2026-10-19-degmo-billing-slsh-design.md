@@ -219,3 +219,4 @@ Qayb kasta: tijaabo → commit → adiga oo oggolaada → deploy.
    - badhanka Generate now
    
    Invoice kasta waxaa ku qoran calaamad "Auto · Nov 2026" ama "Auto · daily".
+5. **LA GO'AAMIYAY (2026-11-06):** invoice kasta wuxuu muujinayaa **labada lacag**, USD iyo SLSH: wadarta, wixii la bixiyay, iyo inta hartay. Waxaa sidoo kale ku qoran **sicirka sarrifka** ee la adeegsaday (tusaale 1 USD = 8,500 SLSH). Lacagta invoice-ka (heshiiska macmiilka) ayaa ah tan ugu weyn, tan kalena waxay ku qoran tahay sicirka.

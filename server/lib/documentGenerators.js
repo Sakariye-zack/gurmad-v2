@@ -32,12 +32,15 @@ function sectionTitle(text) {
     spacing: { before: 280, after: 100 },
   });
 }
-function cell(text, { bold = false, width = 25, shaded = false, align = AlignmentType.LEFT, color = INK } = {}) {
+function cell(text, { bold = false, width = 25, shaded = false, align = AlignmentType.LEFT, color = INK, sub = null } = {}) {
   return new TableCell({
     width: { size: width, type: WidthType.PERCENTAGE },
     shading: shaded ? { type: ShadingType.CLEAR, fill: SOFT } : undefined,
     margins: { top: 90, bottom: 90, left: 120, right: 120 },
-    children: [new Paragraph({ alignment: align, children: [new TextRun({ text: String(text ?? '—'), bold, color, size: 19 })] })],
+    children: [
+      new Paragraph({ alignment: align, children: [new TextRun({ text: String(text ?? '—'), bold, color, size: 19 })] }),
+      ...(sub ? [new Paragraph({ alignment: align, children: [new TextRun({ text: sub, color: MUTED, size: 16 })] })] : []),
+    ],
   });
 }
 function kvTable(rows) {
@@ -64,6 +67,37 @@ function money(n, currency = 'USD') {
 }
 function fmtDate(d) {
   return d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// '2026-11' -> 'Nov 2026'
+function periodLabel(period) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(period || ''));
+  return m ? `${MONTHS[Number(m[2]) - 1]} ${m[1]}` : '';
+}
+function serviceDescription(invoice) {
+  return invoice.billing_period ? `Waste collection — ${periodLabel(invoice.billing_period)}` : 'Waste collection service';
+}
+// '2026-11-03' -> '03 Nov'
+function dayLabel(iso) {
+  return `${iso.slice(8, 10)} ${MONTHS[Number(iso.slice(5, 7)) - 1]}`;
+}
+// Secondary-currency figures + exchange rate (null when no rate is configured).
+function dualInfo(invoice) {
+  const b = invoice.balance || {};
+  const cur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
+  const other = cur === 'SLSH' ? 'USD' : 'SLSH';
+  const sec = other === 'USD' ? b.usd : b.slsh;
+  if (!sec || !b.rate || !(Number(b.rate.rate) > 0)) return null;
+  const rate = Number(b.rate.rate);
+  const rateText = `1 USD = ${rate.toLocaleString('en-US', { maximumFractionDigits: 2 })} SLSH`;
+  return { other, sec, rateText };
+}
+// The invoice total is shown gross of discount; scale the secondary (net) figure to match.
+function secondaryTotal(invoice, d) {
+  const net = Number((invoice.balance || {}).netTotal || 0);
+  const gross = parseFloat(invoice.invoice_total || 0);
+  return net > 0 ? d.sec.netTotal * (gross / net) : gross * 0;
 }
 
 const STATUS_COLORS = { paid: BRAND_GREEN, partial: BRAND_ORANGE, unpaid: 'D14343', voided: MUTED };
@@ -240,17 +274,24 @@ async function buildInvoiceDocx(invoice) {
     ...(ctx?.path ? [new Paragraph({ children: [new TextRun({ text: ctx.path, size: 18, color: MUTED })] })] : []),
     ...(ctx?.door ? [new Paragraph({ children: [new TextRun({ text: `Door # ${ctx.door}`, size: 18, color: MUTED })] })] : []),
   ];
+  const dual = dualInfo(invoice);
   const dueBox = [
     new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: 'AMOUNT DUE', bold: true, size: 16, color: MUTED, characterSpacing: 40 })] }),
     new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: money(f.outstanding, cur), bold: true, size: 44, color: f.outstanding > 0 ? BRAND_GREEN : MUTED })] }),
+    ...(dual ? [
+      new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `≈ ${money(dual.sec.outstanding, dual.other)}`, bold: true, size: 22, color: MUTED })] }),
+      new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `Exchange rate: ${dual.rateText}`, size: 15, color: MUTED })] }),
+    ] : []),
     new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: invoice.status === 'paid' ? 'Paid in full' : 'Balance outstanding', size: 16, color: MUTED })] }),
   ];
 
+  const approx = (v) => (dual ? `≈ ${money(v, dual.other)}` : null);
   const lineRows = [
-    ['Waste collection service', money(f.total, cur)],
-    ...(f.discount > 0 ? [['Discount', `− ${money(f.discount, cur)}`]] : []),
-    ['Paid to date', `− ${money(f.paid, cur)}`],
+    [serviceDescription(invoice), money(f.total, cur), dual ? approx(secondaryTotal(invoice, dual)) : null],
+    ...(f.discount > 0 ? [['Discount', `− ${money(f.discount, cur)}`, null]] : []),
+    ['Paid to date', `− ${money(f.paid, cur)}`, dual ? approx(dual.sec.paid) : null],
   ];
+  const workedDays = Array.isArray(invoice.worked_days) ? invoice.worked_days : null;
 
   const children = [
     ...letterhead(branding, {
@@ -272,10 +313,22 @@ async function buildInvoiceDocx(invoice) {
       borders: { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE },
       rows: [
         new TableRow({ children: [cell('Description', { bold: true, width: 70, shaded: true, color: MUTED }), cell('Amount', { bold: true, width: 30, shaded: true, color: MUTED, align: AlignmentType.RIGHT })] }),
-        ...lineRows.map(([d, a]) => new TableRow({ children: [cell(d, { width: 70 }), cell(a, { width: 30, align: AlignmentType.RIGHT })] })),
-        new TableRow({ children: [cell('Balance due', { bold: true, width: 70 }), cell(money(f.outstanding, cur), { bold: true, width: 30, align: AlignmentType.RIGHT, color: BRAND_GREEN })] }),
+        ...lineRows.map(([d, a, sb]) => new TableRow({ children: [cell(d, { width: 70 }), cell(a, { width: 30, align: AlignmentType.RIGHT, sub: sb })] })),
+        new TableRow({ children: [cell('Balance due', { bold: true, width: 70 }), cell(money(f.outstanding, cur), { bold: true, width: 30, align: AlignmentType.RIGHT, color: BRAND_GREEN, sub: dual ? approx(dual.sec.outstanding) : null })] }),
       ],
     }),
+    ...(dual ? [new Paragraph({ spacing: { before: 60 }, children: [new TextRun({ text: `Exchange rate: ${dual.rateText}`, size: 16, color: MUTED, italics: true })] })] : []),
+    ...(workedDays ? [
+      sectionTitle('Service days'),
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE },
+        rows: [
+          new TableRow({ children: [cell('Week', { bold: true, width: 25, shaded: true, color: MUTED }), cell('Dates', { bold: true, width: 75, shaded: true, color: MUTED })] }),
+          ...workedDays.map((wk) => new TableRow({ children: [cell(`Week ${wk.week} (${wk.range})`, { width: 25 }), cell(wk.dates.length ? wk.dates.map(dayLabel).join(', ') : '—', { width: 75 })] })),
+        ],
+      }),
+    ] : []),
     sectionTitle('Payment History'),
     ...(!invoice.payments || invoice.payments.length === 0
       ? [new Paragraph({ children: [new TextRun({ text: 'No payments recorded yet.', italics: true, color: MUTED, size: 18 })] })]
@@ -315,7 +368,12 @@ async function buildInvoiceHtml(invoice) {
   const ctx = await customerContext(invoice.customer_id);
   const cur = invoice.currency || 'USD';
   const f = invoiceFigures(invoice);
+  const dual = dualInfo(invoice);
   const status = String(invoice.status || '');
+  const sub = (v) => (dual ? `<div class="sub">≈ ${escapeHtml(money(v, dual.other))}</div>` : '');
+  const workedDays = Array.isArray(invoice.worked_days) ? invoice.worked_days : null;
+  const daysHtml = workedDays ? `<h2>Service days</h2><div class="scroll"><table><thead><tr><th>Week</th><th>Dates</th></tr></thead><tbody>${
+    workedDays.map((wk) => `<tr><td>Week ${wk.week} (${escapeHtml(wk.range)})</td><td>${wk.dates.length ? escapeHtml(wk.dates.map(dayLabel).join(', ')) : '—'}</td></tr>`).join('')}</tbody></table></div>` : '';
   const logo = branding.logo ? `<img class="logo" alt="" src="data:image/png;base64,${branding.logo.png.toString('base64')}">` : '';
   const payRows = (invoice.payments || []).map((p) => `
       <tr><td>${escapeHtml(fmtDate(p.created_at))}</td><td>${escapeHtml(String(p.method).toUpperCase())}</td>
@@ -357,6 +415,9 @@ async function buildInvoiceHtml(invoice) {
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
   th { background: var(--soft); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .due .sec { font-size: 16px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .due .rate { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .sub { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   tr.total td { font-weight: 800; color: var(--green); border-bottom: none; }
   .empty { color: var(--muted); font-style: italic; }
   .thanks { text-align: center; font-weight: 700; margin-top: 32px; }
@@ -387,18 +448,20 @@ async function buildInvoiceHtml(invoice) {
       ${ctx?.path ? `<div class="small">${escapeHtml(ctx.path)}</div>` : ''}
       ${ctx?.door ? `<div class="small">Door # ${escapeHtml(ctx.door)}</div>` : ''}
     </div>
-    <div class="due"><div class="label">Amount due</div><div class="amt">${escapeHtml(money(f.outstanding, cur))}</div><div class="small">${status === 'paid' ? 'Paid in full' : 'Balance outstanding'}</div></div>
+    <div class="due"><div class="label">Amount due</div><div class="amt">${escapeHtml(money(f.outstanding, cur))}</div>${dual ? `<div class="sec">≈ ${escapeHtml(money(dual.sec.outstanding, dual.other))}</div><div class="rate">Exchange rate: ${escapeHtml(dual.rateText)}</div>` : ''}<div class="small">${status === 'paid' ? 'Paid in full' : 'Balance outstanding'}</div></div>
   </div>
   <h2>Details</h2>
   <div class="scroll"><table>
     <thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
     <tbody>
-      <tr><td>Waste collection service</td><td class="num">${escapeHtml(money(f.total, cur))}</td></tr>
+      <tr><td>${escapeHtml(serviceDescription(invoice))}</td><td class="num">${escapeHtml(money(f.total, cur))}${dual ? sub(secondaryTotal(invoice, dual)) : ''}</td></tr>
       ${f.discount > 0 ? `<tr><td>Discount</td><td class="num">− ${escapeHtml(money(f.discount, cur))}</td></tr>` : ''}
-      <tr><td>Paid to date</td><td class="num">− ${escapeHtml(money(f.paid, cur))}</td></tr>
-      <tr class="total"><td>Balance due</td><td class="num">${escapeHtml(money(f.outstanding, cur))}</td></tr>
+      <tr><td>Paid to date</td><td class="num">− ${escapeHtml(money(f.paid, cur))}${dual ? sub(dual.sec.paid) : ''}</td></tr>
+      <tr class="total"><td>Balance due</td><td class="num">${escapeHtml(money(f.outstanding, cur))}${dual ? sub(dual.sec.outstanding) : ''}</td></tr>
     </tbody>
   </table></div>
+  ${dual ? `<p class="small" style="margin:6px 0 0">Exchange rate: ${escapeHtml(dual.rateText)}</p>` : ''}
+  ${daysHtml}
   <h2>Payment history</h2>
   ${payRows ? `<div class="scroll"><table><thead><tr><th>Date</th><th>Method</th><th class="num">Amount</th><th class="num">USD value</th><th>Status</th></tr></thead><tbody>${payRows}</tbody></table></div>` : '<p class="empty">No payments recorded yet.</p>'}
   ${status === 'voided' ? `<h2>Void information</h2><p>${escapeHtml(invoice.voided_reason || '—')}</p>` : ''}

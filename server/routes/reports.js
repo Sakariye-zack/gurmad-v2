@@ -234,7 +234,7 @@ const EXPORTABLE = {
   ] },
   'invoices-summary': { roles: FINANCIAL_ROLES, fn: 'invoices', columns: [
     { key: 'invoice_number', label: 'Invoice' }, { key: 'customer_name', label: 'Customer' }, { key: 'invoice_total', label: 'Total' },
-    { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
+    { key: 'currency', label: 'Currency' }, { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
   ] },
   'payments-summary': { roles: FINANCIAL_ROLES, fn: 'payments', columns: [
     { key: 'invoice_number', label: 'Invoice' }, { key: 'customer_name', label: 'Customer' }, { key: 'amount', label: 'Amount' },

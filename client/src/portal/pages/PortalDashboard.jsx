@@ -7,6 +7,7 @@ import PortalCard from '../components/PortalCard.jsx';
 import PortalEmptyBanner from '../components/PortalEmptyBanner.jsx';
 import { portalApiClient } from '../apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
 
 // Rebuild — Implementation Spec §20: a real hierarchy — one prominent
 // "what needs attention" card above the existing StatCard row (unchanged
@@ -83,7 +84,7 @@ export default function PortalDashboard() {
         </div>
         <StatCard
           label={t('portal.dash.lastPayment')}
-          value={data.lastPayment ? `$${parseFloat(data.lastPayment.amount).toFixed(2)}` : '—'}
+          value={data.lastPayment ? fmtMoney(data.lastPayment.amount, data.lastPayment.currency) : '—'}
           sub={data.lastPayment ? new Date(data.lastPayment.created_at).toLocaleDateString() : t('portal.dash.noPayments')}
           icon={Receipt}
         />

@@ -3,6 +3,9 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
+const { generateInvoiceNumber, insertInvoice } = require('../lib/invoiceInsert');
+const autoBilling = require('../lib/autoBilling');
+const { getWorkedDays } = require('../lib/workedDays');
 
 const router = express.Router();
 
@@ -35,11 +38,54 @@ async function resolveUserZoneId(user) {
   return r.rows[0]?.id ?? null;
 }
 
-async function generateInvoiceNumber(client) {
-  const seq = await client.query(`SELECT nextval('invoice_number_seq') AS n`);
-  const n = Number(seq.rows[0].n);
-  return `INV-${String(n).padStart(6, '0')}`;
-}
+// ---- Auto-billing admin endpoints (registered before '/:id') ----
+router.get('/auto-billing/status', authenticateToken, requireRole('admin', 'gudoomiye', 'zone_accountant'), async (req, res) => {
+  try {
+    const runs = (await pool.query(
+      `SELECT id, kind, period_key, started_at, finished_at, created_count, jsonb_array_length(skipped) AS skipped_count, error, triggered_by
+       FROM billing_runs ORDER BY id DESC LIMIT 20`)).rows;
+    const myZoneId = await resolveUserZoneId(req.user);
+    const latest = {};
+    for (const kind of ['monthly', 'daily']) {
+      const r = await pool.query(`SELECT id, period_key, skipped FROM billing_runs WHERE kind = $1 AND finished_at IS NOT NULL AND error IS NULL ORDER BY period_key DESC, id DESC LIMIT 1`, [kind]);
+      let skipped = r.rows[0]?.skipped || [];
+      if (myZoneId !== null && skipped.length) {
+        const ok = await pool.query(`SELECT id FROM customers WHERE id = ANY($1::int[]) AND zone_id = $2`, [skipped.map((s) => s.customer_id), myZoneId]);
+        const allowed = new Set(ok.rows.map((x) => x.id));
+        skipped = skipped.filter((s) => allowed.has(s.customer_id));
+      }
+      latest[kind] = { run_id: r.rows[0]?.id || null, period_key: r.rows[0]?.period_key || null, skipped };
+    }
+    res.json({ data: { runs, latest_skipped: latest } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load auto-billing status.', code: 'INTERNAL' } });
+  }
+});
+
+router.post('/auto-billing/run', authenticateToken, requireRole('admin'), async (req, res) => {
+  const { kind, period, date } = req.body || {};
+  if (kind !== 'monthly' && kind !== 'daily') return res.status(400).json({ error: { message: "kind must be 'monthly' or 'daily'.", code: 'VALIDATION' } });
+  try {
+    let result;
+    if (kind === 'monthly') {
+      if (period !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(period))) return res.status(400).json({ error: { message: 'period must be YYYY-MM.', code: 'VALIDATION' } });
+      result = await autoBilling.runMonthly({ triggeredBy: req.user.id, manual: true, period: period || null });
+    } else {
+      let d = date;
+      if (d === undefined) d = autoBilling.localParts(new Date(), await autoBilling.getTimezone()).date;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || isNaN(new Date(d + 'T00:00:00Z').getTime()) || new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) !== d) {
+        return res.status(400).json({ error: { message: 'date must be a valid YYYY-MM-DD.', code: 'VALIDATION' } });
+      }
+      result = await autoBilling.runDaily({ date: d, triggeredBy: req.user.id });
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.auto_billing_run', entityType: 'billing_run', entityId: result.run_id || null, before: null,
+      after: { kind, period: period || null, date: date || null, created: result.created, skipped: result.skipped.length } });
+    res.json({ data: result });
+  } catch (err) {
+    console.error('auto-billing run failed:', err);
+    res.status(500).json({ error: { message: 'Auto-billing run failed.', code: 'INTERNAL' } });
+  }
+});
 
 // GET / — list, zone-scoped via the customer's own zone_id (invoices have
 // no zone_id of their own; joining to customers is the same pattern the
@@ -112,7 +158,9 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     );
     const debt = await pool.query(`SELECT * FROM debts WHERE invoice_id = $1`, [id]);
 
-    res.json({ data: { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null } });
+    const out = { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null };
+    if (invoice.billing_period) out.worked_days = await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone());
+    res.json({ data: out });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load invoice.', code: 'INTERNAL' } });
   }
@@ -142,7 +190,8 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
       `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );
-    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows });
+    const worked_days = invoice.billing_period ? await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone()) : undefined;
+    const buffer = await buildInvoiceDocx({ ...invoice, balance, payments: payments.rows, worked_days });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.docx"`);
     res.send(buffer);
@@ -212,6 +261,8 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     res.status(201).json({ data: invoice });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'This collection event already has an invoice.', code: 'CONFLICT' } });
+    console.error('invoice create failed:', err);
     res.status(500).json({ error: { message: 'Failed to create invoice.', code: 'INTERNAL' } });
   } finally {
     client.release();
@@ -289,7 +340,7 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
     // the NOT EXISTS guard is what makes this endpoint safely re-runnable
     // (generate once, fix a missing fee, run again — only the gap fills in).
     const candidatesRes = await client.query(
-      `SELECT bc.id AS batch_customer_id, c.id AS customer_id, c.name AS customer_name, c.fee
+      `SELECT bc.id AS batch_customer_id, c.id AS customer_id, c.name AS customer_name, c.fee, c.fee_currency, c.billing_type
        FROM batch_customers bc
        JOIN customers c ON c.id = bc.customer_id
        WHERE bc.batch_id = $1 AND bc.status = 'serviced'
@@ -300,28 +351,31 @@ router.post('/bulk-generate', authenticateToken, requireRole(...CREATE_ROLES), a
 
     const created = [];
     const skippedNoFee = [];
+    const skipped = [];
     for (const row of candidatesRes.rows) {
+      if (row.billing_type === 'monthly') {
+        skipped.push({ customer_id: row.customer_id, customer_name: row.customer_name, reason: 'monthly_customer' });
+        continue;
+      }
       if (row.fee === null || row.fee === undefined) {
         skippedNoFee.push({ customer_id: row.customer_id, customer_name: row.customer_name });
         continue;
       }
-      const invoiceNumber = await generateInvoiceNumber(client);
-      const inserted = await client.query(
-        `INSERT INTO invoices (invoice_number, customer_id, batch_customer_id, invoice_total, discount_amount, currency, status, zone_name_snapshot, notes, created_by, customer_number_snapshot)
-         VALUES ($1,$2,$3,$4,0,'USD','unpaid',$5,$6,$7,(SELECT customer_number FROM customers WHERE id = $2)) RETURNING *`,
-        [invoiceNumber, row.customer_id, row.batch_customer_id, row.fee, batch.zone_name || null,
-          `Auto-generated from batch ${batch.batch_code}`, req.user.id]
-      );
-      created.push(inserted.rows[0]);
+      const inv = await insertInvoice(client, { customerId: row.customer_id, batchCustomerId: row.batch_customer_id,
+        total: row.fee, currency: row.fee_currency || 'USD', zoneNameSnapshot: batch.zone_name || null,
+        notes: `Auto-generated from batch ${batch.batch_code}`, createdBy: req.user.id });
+      if (inv) created.push(inv);
     }
 
     await client.query('COMMIT');
     for (const invoice of created) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.create', entityType: 'invoice', entityId: invoice.id, before: null, after: invoice });
     }
-    res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 } });
+    res.status(201).json({ data: { created, skipped_no_fee: skippedNoFee, skipped, already_invoiced: candidatesRes.rowCount === 0 && created.length === 0 && skippedNoFee.length === 0 && skipped.length === 0 } });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'One of these visits was invoiced concurrently (possibly by auto-billing). Please retry.', code: 'CONFLICT' } });
+    console.error('bulk invoice generation failed:', err);
     res.status(500).json({ error: { message: 'Failed to generate invoices.', code: 'INTERNAL' } });
   } finally {
     client.release();

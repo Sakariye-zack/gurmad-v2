@@ -4,6 +4,7 @@ import { Wallet, AlertTriangle } from 'lucide-react';
 import PortalPageHeader from '../components/PortalPageHeader.jsx';
 import { portalApiClient } from '../apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtByCurrency } from '../../lib/money.js';
 
 // Gap-audit sweep (Phase 10, continuation): GET /v2/customer-portal/balance
 // was fully built server-side (outstanding invoice balance + the itemized
@@ -41,10 +42,10 @@ export default function PortalBalance() {
 
       {data && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '16px' }}>
-          <StatCard label={t('portal.dash.invoiceBalance')} value={`$${data.outstandingInvoiceBalance.toFixed(2)}`} icon={Wallet} accent="#2563EB" />
+          <StatCard label={t('portal.dash.invoiceBalance')} value={fmtByCurrency(data.outstandingByCurrency)} icon={Wallet} accent="#2563EB" />
           <StatCard
             label={t('portal.dash.debt')}
-            value={`$${debts.filter((d) => d.status === 'unpaid').reduce((sum, d) => sum + parseFloat(d.amount), 0).toFixed(2)}`}
+            value={fmtByCurrency(debts.filter((d) => d.status === 'unpaid').reduce((acc, d) => { const k = d.currency === 'SLSH' ? 'SLSH' : 'USD'; acc[k] += parseFloat(d.amount); return acc; }, { USD: 0, SLSH: 0 }))}
             icon={AlertTriangle}
             accent="#DC2626"
           />

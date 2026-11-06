@@ -84,6 +84,7 @@ const TAXONOMY = {
   // Financial
   'invoice.create':               { category: 'Financial', severity: 'INFO' },
   'invoice.void':                 { category: 'Financial', severity: 'WARNING' },
+  'invoice.auto_billing_run':    { category: 'Financial', severity: 'INFO' },
   'payment.create':               { category: 'Financial', severity: 'INFO' },
   'payment.reverse':             { category: 'Financial', severity: 'WARNING' },
   'debt.create':                   { category: 'Financial', severity: 'INFO' },
