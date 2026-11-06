@@ -143,7 +143,7 @@ export default function FleetFuelListPage() {
           {records.map((r) => (
             <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
               <td style={cellStyle}>
-                <div style={{ fontWeight: 800 }}>{r.plate_number}</div>
+                <div style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{r.plate_number}</div>
                 {r.station && <div style={sub}>{r.station}</div>}
               </td>
               <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>{fmtDate(r.record_date)}<EditedChip r={r} /></td>
