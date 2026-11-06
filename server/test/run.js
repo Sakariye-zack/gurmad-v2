@@ -47,7 +47,31 @@ async function waitHealthy(base, tries = 60) {
   // that role and unit-tests the production default separately.
   // TRUST_PROXY=1: the opt-in proxy trust (lib/trustProxy.js) is on for the
   // suite so the X-Forwarded-For handling is exercised; off by default in prod.
-  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  // Backups page: a throwaway backup dir + a fake backup script (node) so the
+  // suite never touches real backups. BACKUP_SLOW_FLAG makes the fake sleep.
+  const fs = require('fs');
+  const os = require('os');
+  const BACKUP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gurmad-bak-'));
+  const BACKUP_SCRIPT = path.join(BACKUP_DIR, 'fake_backup.js');
+  fs.writeFileSync(BACKUP_SCRIPT, `
+const fs = require('fs'); const path = require('path');
+const dir = process.env.BACKUP_DIR;
+fs.mkdirSync(path.join(dir, 'db'), { recursive: true });
+const finish = () => {
+  let t = Date.now();
+  let name;
+  for (;;) {
+    const d = new Date(t).toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
+    name = 'gurmad_v2_' + d + '.dump';
+    if (!fs.existsSync(path.join(dir, 'db', name))) break;
+    t += 1000;
+  }
+  fs.writeFileSync(path.join(dir, 'db', name), 'FAKE-DUMP-CONTENT');
+  console.log(new Date().toISOString() + ' backup ok ' + name);
+};
+if (fs.existsSync(path.join(dir, 'slow.flag'))) setTimeout(finish, 1500); else finish();
+`);
+  const env = { ...process.env, BACKUP_DIR, BACKUP_SCRIPT, BACKUP_LOG: path.join(BACKUP_DIR, 'backup.log'), BACKUP_MONITOR: 'off', DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });

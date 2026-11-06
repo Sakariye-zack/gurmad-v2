@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
-  BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Settings as SettingsIcon, LogOut,
+  BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Database, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
   ListChecks,
 } from 'lucide-react';
@@ -29,7 +29,7 @@ export const NAV_LABEL_KEYS = {
   'Inventory Adjustments': 'nav.inventoryAdjustments', Assets: 'nav.assets',
   Reports: 'nav.reports', 'Collection History': 'nav.collectionHistory', Complaints: 'nav.complaints',
   Documents: 'nav.documents', 'Data Import': 'nav.dataImport', 'Data Export': 'nav.dataExport',
-  'Users & Access': 'nav.usersAccess', 'Roles & Permissions': 'nav.rolesPermissions', 'Audit & Security': 'nav.auditSecurity',
+  'Users & Access': 'nav.usersAccess', 'Roles & Permissions': 'nav.rolesPermissions', 'Audit & Security': 'nav.auditSecurity', Backups: 'nav.backups',
   'System Settings': 'nav.systemSettings', 'Account Security': 'nav.accountSecurity', 'My HR': 'nav.myHr', Tasks: 'nav.tasks',
 };
 const GROUP_LABEL_KEYS = {
@@ -138,6 +138,7 @@ export const NAV = [
   // against — a plain roles:['admin'] gate is simplest and correct.
   { to: '/roles', label: 'Roles & Permissions', icon: ShieldCheck, roles: ['admin'], group: 'Administration' },
   { to: '/audit', label: 'Audit & Security', icon: History, permission: 'audit.view', group: 'Administration' },
+  { to: '/backups', label: 'Backups', icon: Database, roles: ['admin'], group: 'Administration' },
   { to: '/settings', label: 'System Settings', icon: SettingsIcon, permission: 'settings.view', group: 'Administration' },
 
   // Account Security is self-service — every authenticated staff member
