@@ -140,7 +140,7 @@ export default function InvoiceDetailPage() {
         </div>
         <DetailGrid items={[
           { label: t('fin.customer'), value: <Link to={`/customers/${invoice.customer_id}`}>{invoice.customer_name}</Link> },
-          { label: t('portal.invoice.discount'), value: `${invoice.currency} ${parseFloat(invoice.discount_amount).toFixed(2)}` },
+          { label: t('portal.invoice.discount'), value: fmtMoney(invoice.discount_amount, invoice.currency) },
           { label: t('fin.created'), value: new Date(invoice.created_at).toLocaleString() },
           { label: t('fin.collection_event'), value: invoice.batch_customer_id ? t('fin.m.batchCustomer', undefined, { id: invoice.batch_customer_id }) : t('fin.walk_in_not_linked') },
           { label: t('fin.linked_debt'), value: invoice.debt ? <StatusBadge status={invoice.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> : 'None' },
@@ -193,7 +193,7 @@ export default function InvoiceDetailPage() {
             <tbody>
               {invoice.payments.map((p) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={cellStyle} className="tabular-nums">{p.currency} {parseFloat(p.amount).toFixed(2)}</td>
+                  <td style={cellStyle} className="tabular-nums">{fmtMoney(p.amount, p.currency)}</td>
                   <td style={{ ...cellStyle, textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)}</td>
                   <td style={cellStyle} className="tabular-nums">${parseFloat(p.amount_usd).toFixed(2)}</td>
                   <td style={cellStyle}><StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} /></td>

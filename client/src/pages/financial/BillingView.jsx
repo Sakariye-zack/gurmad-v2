@@ -79,7 +79,7 @@ export default function BillingView() {
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{inv.customer_name} ({inv.customer_number})</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="tabular-nums" style={{ fontWeight: 700 }}>{inv.currency} {parseFloat(inv.invoice_total).toFixed(2)}</div>
+                    <div className="tabular-nums" style={{ fontWeight: 700 }}>{fmtMoney(inv.invoice_total, inv.currency)}</div>
                     <StatusBadge status={inv.status} map={STATUS_MAP} />
                   </div>
                 </div>
@@ -239,7 +239,7 @@ function PaymentPanel({ invoiceId, onRecorded }) {
         {(invoice.payments || []).length === 0 && <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('fin.none_yet')}</p>}
         {(invoice.payments || []).map((p) => (
           <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
-            <span style={{ textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)} — {p.currency} {parseFloat(p.amount).toFixed(2)}</span>
+            <span style={{ textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)} — {fmtMoney(p.amount, p.currency)}</span>
             <StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} />
           </div>
         ))}
