@@ -6,6 +6,7 @@ import { useMapCustomers, useMapMissingLocation, useMapTrucks } from '../../hook
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
+import { apiClient } from '../../lib/apiClient.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import MapCanvas from './MapCanvas.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
@@ -57,7 +58,7 @@ export default function MapPage() {
     groupZoneId: groupZoneId || undefined,
     routeId: routeId || undefined,
   };
-  const { data, isLoading, error, refetch } = useMapCustomers(filters);
+  const { data, isLoading, error, refetch } = useMapCustomers({ ...filters, today: showToday });
   const points = useMemo(() => data?.data || [], [data]);
   const { data: missingData } = useMapMissingLocation(filters);
   const missing = useMemo(() => missingData?.data || [], [missingData]);
@@ -80,14 +81,21 @@ export default function MapPage() {
   function handleGroupChange(v) { setGroupId(v); setGroupZoneId(''); setRouteId(''); }
   function handleGroupZoneChange(v) { setGroupZoneId(v); setRouteId(''); }
 
-  function runSearch(e) {
+  async function runSearch(e) {
     e.preventDefault();
     setSearchMsg('');
     if (!query.trim()) return;
     const hit = matchCustomer(points, query);
     if (hit) { setFocus({ id: hit.id, n: Date.now() }); return; }
     if (matchCustomer(missing, query)) { setSearchMsg(t('map.search_no_location')); setPanelOpen(true); return; }
-    setSearchMsg(t('map.search_not_found'));
+    // Not on the map or in the missing list: does the customer exist outside the current filters?
+    // (/customers is already district-scoped server-side.)
+    try {
+      const res = await apiClient.get(`/v2/customers?limit=1&q=${encodeURIComponent(query.trim())}`);
+      setSearchMsg((res?.data || []).length > 0 ? t('map.search_outside_filters') : t('map.search_not_found'));
+    } catch {
+      setSearchMsg(t('map.search_not_found'));
+    }
   }
 
   return (
@@ -166,7 +174,7 @@ export default function MapPage() {
       {!isLoading && error && <ErrorState message={error.message} onRetry={refetch} />}
       {!isLoading && !error && (
         <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '12px', minHeight: '60vh' }}>
-          <div style={{ flex: '1 1 480px', minHeight: '60vh', position: 'relative' }}>
+          <div style={{ flex: '1 1 480px', minWidth: 0, maxWidth: '100%', minHeight: '60vh', position: 'relative' }}>
             <MapCanvas
               points={points}
               trucks={trucks}
@@ -191,7 +199,7 @@ export default function MapPage() {
             <aside
               aria-label={t('map.no_location')}
               style={{
-                flex: '1 1 280px', maxWidth: '100%', minWidth: 0, maxHeight: '70vh', overflowY: 'auto',
+                flex: '1 1 280px', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box', maxHeight: '70vh', overflowY: 'auto',
                 background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '10px',
               }}
             >

@@ -22,7 +22,7 @@ async function mkCust(w, h, extra = {}, loc) {
   const zone = extra.zone || w.zoneA;
   const r = await api('POST', '/customers', { token: w.tokens.admin, body: {
     customer_type: 'residential', name: 'MapCust ' + seq + ' ' + Date.now(), phone: '06388' + String(seq).padStart(5, '0'),
-    zone_id: zone.id, door_number: String(82000 + seq), billing_type: 'monthly', fee: 30000, fee_currency: 'SLSH' } });
+    zone_id: zone.id, door_number: String(Date.now()).slice(-9) + String(seq).padStart(3, '0'), billing_type: 'monthly', fee: 30000, fee_currency: 'SLSH' } });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const c = r.data;
   await db.query('UPDATE customers SET group_id=$1, route_id=$2, lat=$3, lng=$4 WHERE id=$5',
@@ -77,12 +77,14 @@ test('map: payment_status clear / partial / unpaid / none (SLSH invoices, voided
   const partial = await mkCust(w, h); await slshInvoice(partial, 30000, 10000);
   const unpaid = await mkCust(w, h); await slshInvoice(unpaid, 30000, 0);
   const none = await mkCust(w, h);
+  const oldPaidNewOpen = await mkCust(w, h); await slshInvoice(oldPaidNewOpen, 30000, 30000); await slshInvoice(oldPaidNewOpen, 30000, 0);
   const onlyVoid = await mkCust(w, h); await slshInvoice(onlyVoid, 30000, 0, true);
   const r = await get(w, 'route_id=' + h.route.id);
   assert.equal(find(r, clear).payment_status, 'clear');
   assert.equal(find(r, partial).payment_status, 'partial');
   assert.equal(Number(find(r, partial).outstanding_slsh), 20000);
   assert.equal(find(r, unpaid).payment_status, 'unpaid');
+  assert.equal(find(r, oldPaidNewOpen).payment_status, 'partial');
   assert.equal(find(r, none).payment_status, 'none');
   assert.equal(find(r, onlyVoid).payment_status, 'none');
 });
@@ -109,16 +111,22 @@ test('map: today status uses company-local date (22:30 UTC visit counts on the n
   const cyc = (await db.query(
     `INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom',$2::date - 5,$2::date + 5) RETURNING id`,
     [w.zoneA.id, todayStr])).rows[0].id;
-  const mkBatch = async (status) => (await db.query(
-    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, status) VALUES ($1,$2,$3,$4,$5::date - 1,$6) RETURNING id`,
-    ['MPB' + Date.now() + (++seq), w.zoneA.id, cyc, seq, todayStr, status])).rows[0].id;
+  const mkBatch = async (status, endOffset = null) => (await db.query(
+    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, end_date, status) VALUES ($1,$2,$3,$4,$5::date - 1,CASE WHEN $7::int IS NULL THEN NULL ELSE $5::date + $7::int END,$6) RETURNING id`,
+    ['MPB' + Date.now() + (++seq), w.zoneA.id, cyc, seq, todayStr, status, endOffset])).rows[0].id;
   const b1 = await mkBatch('in_progress'); const b2 = await mkBatch('assigned');
+  const b3 = await mkBatch('in_progress', -1); // stale: ended yesterday
+  const cstale = await mkCust(w, h);
+  await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1,$2,'pending')`, [b3, cstale.id]);
   // yesterday 22:30 UTC == today 01:30 local (UTC+3): counts as today
   await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced',($3::date - 1)::timestamp + interval '22:30')`, [b1, ctoday.id, todayStr]);
   // yesterday 20:00 UTC == yesterday 23:00 local: not today
   await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced',($3::date - 1)::timestamp + interval '20:00')`, [b1, cold.id, todayStr]);
   await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1,$2,'pending')`, [b2, cpend.id]);
-  const r = await get(w, 'route_id=' + h.route.id);
+  const r = await get(w, 'today=1&route_id=' + h.route.id);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(find(r, cstale).today_status, 'not_scheduled');
+  assert.equal((await get(w, 'route_id=' + h.route.id)).data[0].today_status, null);
   assert.equal(find(r, ctoday).today_status, 'serviced');
   assert.equal(find(r, cold).today_status, 'not_scheduled');
   assert.equal(find(r, cpend).today_status, 'pending');

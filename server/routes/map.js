@@ -100,9 +100,25 @@ router.get('/customers', async (req, res) => {
     if (scope.empty) return res.json({ data: [] });
 
     const params = [...scope.params];
-    const tz = await getTimezone();
-    params.push(tz); const tzIdx = params.length;
-    params.push(localParts(new Date(), tz).date); const todayIdx = params.length;
+    // Today's service status is only computed on request (?today=1).
+    const wantToday = req.query.today === '1';
+    let todayJoin = '';
+    if (wantToday) {
+      const tz = await getTimezone();
+      params.push(tz); const tzIdx = params.length;
+      params.push(localParts(new Date(), tz).date); const todayIdx = params.length;
+      todayJoin = `LEFT JOIN LATERAL (
+         SELECT CASE bc.status WHEN 'serviced' THEN 'serviced' WHEN 'missed' THEN 'missed'
+                               WHEN 'pending' THEN 'pending' ELSE 'skipped' END AS s
+         FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id
+         WHERE bc.customer_id = c.id
+           AND ( (bc.status <> 'pending' AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text)::date = $${todayIdx}::date)
+              OR (bc.status = 'pending' AND b.status IN ('assigned','in_progress','partially_completed')
+                  AND b.start_date <= $${todayIdx}::date AND (b.end_date IS NULL OR b.end_date >= $${todayIdx}::date)) )
+         ORDER BY CASE bc.status WHEN 'serviced' THEN 0 WHEN 'missed' THEN 1 WHEN 'pending' THEN 3 ELSE 2 END
+         LIMIT 1
+       ) td ON TRUE`;
+    }
     const where = ["c.status = 'active'", HAS_LOCATION, ...scope.where].join(' AND ');
 
     // One query, no N+1. Payment status: per non-voided invoice, outstanding =
@@ -113,24 +129,24 @@ router.get('/customers', async (req, res) => {
       `SELECT ${PATH_COLUMNS},
               CASE WHEN inv.inv_count = 0 THEN 'none'
                    WHEN inv.open_count = 0 THEN 'clear'
-                   WHEN inv.open_paid_count > 0 THEN 'partial'
+                   WHEN inv.pay_count > 0 THEN 'partial'
                    ELSE 'unpaid' END AS payment_status,
               inv.outstanding_usd, inv.outstanding_slsh,
-              COALESCE(td.s, 'not_scheduled') AS today_status
+              ${wantToday ? "COALESCE(td.s, 'not_scheduled')" : 'NULL::text'} AS today_status
        FROM customers c
        ${PATH_JOINS}
        LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS inv_count,
                 COUNT(*) FILTER (WHERE x.outstanding > 0.005)::int AS open_count,
-                COUNT(*) FILTER (WHERE x.outstanding > 0.005 AND x.paid > 0.005)::int AS open_paid_count,
+                COALESCE(SUM(x.pay_count), 0)::int AS pay_count,
                 COALESCE(SUM(x.outstanding) FILTER (WHERE x.currency <> 'SLSH' AND x.outstanding > 0.005), 0)::float AS outstanding_usd,
                 COALESCE(SUM(x.outstanding) FILTER (WHERE x.currency = 'SLSH' AND x.outstanding > 0.005), 0)::float AS outstanding_slsh
          FROM (
-           SELECT i.currency, p.paid,
+           SELECT i.currency, p.paid, p.pay_count,
                   GREATEST(i.invoice_total - i.discount_amount - p.paid, 0) AS outstanding
            FROM invoices i
            CROSS JOIN LATERAL (
-             SELECT COALESCE(SUM(CASE WHEN i.currency <> 'SLSH' THEN pp.amount_usd
+             SELECT COUNT(*)::int AS pay_count, COALESCE(SUM(CASE WHEN i.currency <> 'SLSH' THEN pp.amount_usd
                       ELSE COALESCE(pp.amount_invoice_currency,
                              CASE WHEN pp.currency = 'SLSH' THEN pp.amount
                                   ELSE pp.amount_usd * COALESCE(er.rate, (SELECT rate FROM exchange_rates WHERE effective_from <= NOW() ORDER BY effective_from DESC LIMIT 1), 0) END)
@@ -141,16 +157,7 @@ router.get('/customers', async (req, res) => {
            WHERE i.customer_id = c.id AND i.status <> 'voided'
          ) x
        ) inv ON TRUE
-       LEFT JOIN LATERAL (
-         SELECT CASE bc.status WHEN 'serviced' THEN 'serviced' WHEN 'missed' THEN 'missed'
-                               WHEN 'pending' THEN 'pending' ELSE 'skipped' END AS s
-         FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id
-         WHERE bc.customer_id = c.id
-           AND ( (bc.status <> 'pending' AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text)::date = $${todayIdx}::date)
-              OR (bc.status = 'pending' AND b.status IN ('assigned','in_progress','partially_completed') AND b.start_date <= $${todayIdx}::date) )
-         ORDER BY CASE bc.status WHEN 'serviced' THEN 0 WHEN 'missed' THEN 1 WHEN 'pending' THEN 3 ELSE 2 END
-         LIMIT 1
-       ) td ON TRUE
+       ${todayJoin}
        WHERE ${where}
        ORDER BY c.id ASC`,
       params

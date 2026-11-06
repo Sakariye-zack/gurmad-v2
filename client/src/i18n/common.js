@@ -213,6 +213,7 @@ export const SECURITY_EXTRA = {
   "map.no_location_count": { en: "No location ({n})", so: "Goob ma laha ({n})" },
   "map.no_location_hint": { en: "Open the customer to set a location.", so: "Fur macmiilka si aad goob u dejiso." },
   "map.no_location_empty": { en: "Every customer in this view has a location.", so: "Macmiil kasta oo halkan ah wuxuu leeyahay goob." },
+  "map.search_outside_filters": { en: "Not in the current filters", so: "Kuma jiro shaandhaynta hadda" },
   "map.show_panel": { en: "Show list", so: "Tus liiska" },
   "map.hide_panel": { en: "Hide list", so: "Qari liiska" },
 };

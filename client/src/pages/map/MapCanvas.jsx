@@ -159,7 +159,7 @@ export default function MapCanvas({ points, trucks, showToday, focus, onOpenCust
       const lng = Number(p.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return; // defensive only — API already excludes these
 
-      const popup = new mapboxgl.Popup({ offset: 18, maxWidth: '300px' }).setDOMContent(buildPopup(p, t, onOpenRef));
+      const popup = new mapboxgl.Popup({ offset: 18, maxWidth: '300px' }).setDOMContent(buildPopup(p, t, onOpenRef, showToday));
       // House pin coloured by payment status; in Today mode a badge shows the
       // visit result and customers with nothing scheduled are dimmed.
       const el = document.createElement('div');
@@ -250,12 +250,12 @@ export default function MapCanvas({ points, trucks, showToday, focus, onOpenCust
     return <ConfigNotice text="The map could not be loaded right now." />;
   }
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 'var(--radius-md)', overflow: 'hidden' }} />;
+  return <div ref={containerRef} style={{ width: '100%', maxWidth: '100%', height: '100%', minWidth: 0, borderRadius: 'var(--radius-md)', overflow: 'hidden' }} />;
 }
 
 // Popup content. Fixed dark text on purpose: Mapbox popups are always white,
 // regardless of the app's light/dark theme. Every value is HTML-escaped.
-function buildPopup(p, t, onOpenRef) {
+function buildPopup(p, t, onOpenRef, showToday) {
   const row = (label, value) => `<div><span style="color:#5b665e;">${escapeHtml(label)}:</span> ${value}</div>`;
   const pay = p.payment_status || 'none';
   const today = p.today_status || 'not_scheduled';
@@ -276,7 +276,7 @@ function buildPopup(p, t, onOpenRef) {
       ${row(t('map.collector'), escapeHtml(p.collector_name || '—'))}
       ${row(t('map.billing'), escapeHtml(billing))}
       ${row(t('map.payment'), dot(PAYMENT_COLORS[pay] || PAYMENT_COLORS.none) + escapeHtml(t('map.pay.' + pay)) + (owed.length ? ' (' + escapeHtml(owed.join(' + ')) + ')' : ''))}
-      ${row(t('map.today_status'), dot(TODAY_COLORS[today] || TODAY_COLORS.not_scheduled) + escapeHtml(t('map.today.' + today)))}
+      ${showToday ? row(t('map.today_status'), dot(TODAY_COLORS[today] || TODAY_COLORS.not_scheduled) + escapeHtml(t('map.today.' + today))) : ''}
       <a href="/customers/${encodeURIComponent(p.id)}" data-open="1" style="display:inline-block;margin-top:6px;color:#0b6b3a;font-weight:700;text-decoration:underline;">${escapeHtml(t('map.open_customer'))}</a>
     </div>`;
   const wrap = document.createElement('div');
