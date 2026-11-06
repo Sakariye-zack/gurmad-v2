@@ -307,15 +307,21 @@ router.post('/2fa/verify-login', authLimiter, async (req, res) => {
     if (!ok) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_2fa_failed', entityType: 'v2_user', entityId: user.id });
       await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: '2fa_failed' });
+      // One atomic statement: increment, and lock when the NEW count
+      // reaches the threshold — concurrent wrong codes can't slip past
+      // the limit between a read and a write. The counter is NOT reset
+      // at lock time (only by a correct code or an admin reset), so the
+      // first wrong code after the lock expires locks again.
       const upd = await pool.query(
-        'UPDATE v2_users SET two_factor_failed_count = two_factor_failed_count + 1, updated_at = NOW() WHERE id = $1 RETURNING two_factor_failed_count',
-        [user.id]
+        `UPDATE v2_users SET
+           two_factor_failed_count = two_factor_failed_count + 1,
+           locked_until = CASE WHEN two_factor_failed_count + 1 >= $2 THEN $3::timestamp ELSE locked_until END,
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING two_factor_failed_count`,
+        [user.id, TWO_FACTOR_LOCK_THRESHOLD, new Date(Date.now() + LOCK_WINDOW_MS)]
       );
       if (upd.rows[0].two_factor_failed_count >= TWO_FACTOR_LOCK_THRESHOLD) {
-        await pool.query(
-          'UPDATE v2_users SET locked_until = $1, two_factor_failed_count = 0, updated_at = NOW() WHERE id = $2',
-          [new Date(Date.now() + LOCK_WINDOW_MS), user.id]
-        );
         await logAudit({ actorId: user.id, actorUsername: user.username, action: 'account_locked', entityType: 'v2_user', entityId: user.id, after: { reason: '2fa_attempts' } });
         await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'locked' });
         return res.status(401).json({ error: { message: 'Too many incorrect codes. Please try again later.', code: 'AUTH_LOCKED' } });

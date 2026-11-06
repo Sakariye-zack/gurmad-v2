@@ -276,6 +276,7 @@ test('2FA attempt limit: 5 consecutive wrong codes lock the account; a success r
     assert.equal((await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: 'bad-code' } })).body.error.code, 'AUTH_INVALID');
   }
   const okLogin = await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: authenticator.generate(secret) } });
+  // (a correct code resets the counter)
   assert.equal(okLogin.status, 200);
   assert.equal((await db.query('SELECT two_factor_failed_count FROM v2_users WHERE id = $1', [id])).rows[0].two_factor_failed_count, 0);
 
@@ -287,6 +288,7 @@ test('2FA attempt limit: 5 consecutive wrong codes lock the account; a success r
   assert.equal(last.body.error.code, 'AUTH_LOCKED');
   const lockedRow = (await db.query('SELECT locked_until FROM v2_users WHERE id = $1', [id])).rows[0];
   assert.ok(lockedRow.locked_until && new Date(lockedRow.locked_until) > new Date(), 'locked_until set');
+  assert.equal((await db.query('SELECT two_factor_failed_count FROM v2_users WHERE id = $1', [id])).rows[0].two_factor_failed_count, 5, 'counter not reset at lock time');
   assert.ok((await db.query("SELECT 1 FROM auth_events WHERE user_id = $1 AND event = 'locked'", [id])).rows.length >= 1);
   // Even the right code is refused while locked, and so is the password step.
   assert.equal((await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: authenticator.generate(secret) } })).body.error.code, 'AUTH_LOCKED');
@@ -313,6 +315,15 @@ test('admin 2FA reset: clears 2FA, revokes sessions, notifies; admin-only, not o
   assert.equal((await db.query('SELECT 1 FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL', [id])).rows.length, 0);
   assert.equal((await db.query("SELECT 1 FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_reset'", [id])).rows.length, 1);
   assert.equal((await db.query("SELECT 1 FROM v2_audit_log WHERE action = '2fa_reset_by_admin' AND entity_id::text = $1", [String(id)])).rows.length, 1);
+  assert.equal((await db.query("SELECT 1 FROM auth_events WHERE user_id = $1 AND event = '2fa_reset_by_admin'", [id])).rows.length, 1, 'auth event for the target');
+  // Every OTHER active admin is told (not the acting admin, not the target).
+  const otherAdmin = await insertUser('t_sec_admin2', 'admin');
+  await enroll2fa('t_sec_2fareset');
+  assert.equal((await api('POST', `/users/${id}/2fa/reset`, { token: tokens.admin, body: {} })).status, 200);
+  const toOther = await db.query("SELECT title FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_reset'", [otherAdmin]);
+  assert.equal(toOther.rows.length, 1);
+  assert.equal(toOther.rows[0].title, 't_admin reset two-factor for t_sec_2fareset');
+  assert.equal((await db.query("SELECT 1 FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_reset'", [adminId])).rows.length, 0, 'acting admin not notified');
   const fresh = await login('t_sec_2fareset');
   assert.ok(fresh.data.token, 'password-only login works again');
 });
@@ -369,4 +380,28 @@ test('forced password change: admin-created user is gated until they change it; 
   const again = await login('t_sec_new', 'Reset-By-Admin-9');
   assert.equal(again.data.user.must_change_password, true);
   assert.equal((await api('GET', '/staff-tasks/my', { token: again.data.token })).body.error.code, 'PASSWORD_CHANGE_REQUIRED');
+});
+
+test('auth_events CHECK migration: no-op when current, replaces an outdated list safely under concurrent boots', async () => {
+  const dbmod = require('../db');
+  const def = async () => (await db.query(
+    `SELECT pg_get_constraintdef(oid) AS def, convalidated FROM pg_constraint
+     WHERE conrelid = 'auth_events'::regclass AND conname = 'auth_events_event_check'`
+  )).rows[0];
+  try {
+    const before = await def();
+    await dbmod.ensureAuthEventsCheck();
+    assert.deepEqual(await def(), before, 'unchanged when already current');
+
+    // Simulate an older deploy's narrower list, then two processes booting at once.
+    await db.query('ALTER TABLE auth_events DROP CONSTRAINT auth_events_event_check');
+    await db.query("ALTER TABLE auth_events ADD CONSTRAINT auth_events_event_check CHECK (event IN ('login_success', 'login_failed', 'locked', '2fa_failed', 'logout', 'password_changed', '2fa_enabled', '2fa_reset_by_admin', 'retired_event'))");
+    await Promise.all([dbmod.ensureAuthEventsCheck(), dbmod.ensureAuthEventsCheck()]);
+    const after = await def();
+    assert.equal(after.convalidated, true);
+    for (const e of dbmod.AUTH_EVENT_TYPES) assert.ok(after.def.includes(`'${e}'`), e);
+    assert.ok(!after.def.includes('retired_event'));
+  } finally {
+    await dbmod.pool.end();
+  }
 });

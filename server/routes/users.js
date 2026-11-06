@@ -8,7 +8,7 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sniffFileType } = require('../lib/fileSniff');
 const { rejectIfInfected } = require('../lib/virusScan');
 const { validatePassword, policyErrorBody } = require('../lib/passwordPolicy');
-const { revokeAllSessions, loginHistory, notifySecurityEvent } = require('../lib/accountSecurity');
+const { revokeAllSessions, loginHistory, notifySecurityEvent, recordAuthEvent, cleanLabel } = require('../lib/accountSecurity');
 
 // User & Access Administration — Implementation Spec §16/§17. Admin-only
 // user-management surface (Preconditions §9's default, not separately
@@ -383,7 +383,15 @@ router.post('/:id/2fa/reset', authenticateToken, requireRole('admin'), async (re
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
     await revokeAllSessions(id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_reset_by_admin', entityType: 'v2_user', entityId: id });
-    await notifySecurityEvent(id, 'security.2fa_reset', `Two-factor authentication was reset by an administrator (${req.user.username})`, null);
+    await recordAuthEvent(req, { userId: id, username: r.rows[0].username, event: '2fa_reset_by_admin' });
+    await notifySecurityEvent(id, 'security.2fa_reset', `Two-factor authentication was reset by an administrator (${cleanLabel(req.user.username)})`, null);
+    const others = await pool.query(
+      "SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE AND id <> $1 AND id <> $2",
+      [req.user.id, id]
+    );
+    for (const a of others.rows) {
+      await notifySecurityEvent(a.id, 'security.2fa_reset', `${cleanLabel(req.user.username)} reset two-factor for ${cleanLabel(r.rows[0].username)}`, null);
+    }
     return res.json({ data: r.rows[0] });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to reset two-factor authentication.', code: 'INTERNAL' } });
