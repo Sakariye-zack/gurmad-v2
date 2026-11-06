@@ -1,0 +1,48 @@
+// Account security (feat/account-security) — password policy hints,
+// forced password change, mandatory 2FA, sessions, sign-in history,
+// idle auto-logout.
+export const ACCOUNT_SECURITY = {
+  'pwPolicy.summary': { en: 'Password must be at least 10 characters, with a letter and a number.', so: 'Password-ka waa inuu noqdaa ugu yaraan 10 xaraf, xaraf iyo tiro.' },
+  'pwPolicy.weak': { en: 'Too weak', so: 'Aad u daciif ah' },
+  'pwPolicy.ok': { en: 'Acceptable', so: 'La aqbali karo' },
+  'pwPolicy.good': { en: 'Good', so: 'Wanaagsan' },
+  'pwPolicy.strong': { en: 'Strong', so: 'Adag' },
+  'pwPolicy.rule.too_short': { en: 'At least 10 characters', so: 'Ugu yaraan 10 xaraf' },
+  'pwPolicy.rule.needs_letter': { en: 'At least one letter', so: 'Ugu yaraan hal xaraf' },
+  'pwPolicy.rule.needs_digit': { en: 'At least one number', so: 'Ugu yaraan hal tiro' },
+  'pwPolicy.rule.too_common': { en: 'Not a common password', so: 'Ma aha password caadi ah oo la wada yaqaan' },
+  'pwPolicy.rule.same_as_username': { en: 'Not the same as the username', so: 'Lama mid aha magaca isticmaalaha' },
+  'pwPolicy.mustChangeNote': { en: 'The user will be asked to choose their own password at first sign-in.', so: 'Isticmaalaha waxaa laga codsan doonaa inuu doorto password-kiisa marka ugu horreysa ee uu soo galo.' },
+
+  'forcedPw.title': { en: 'Please change your password', so: 'Fadlan beddel password-kaaga' },
+  'forcedPw.body': { en: 'Your password was set by an administrator. Choose your own password to continue.', so: 'Password-kaaga waxaa dejiyay maamule. Dooro password adiga kuu gaar ah si aad u sii wadato.' },
+  'forcedPw.confirm': { en: 'Confirm new password', so: 'Xaqiiji password-ka cusub' },
+  'forcedPw.mismatch': { en: 'The two passwords do not match.', so: 'Labada password isma laha.' },
+
+  'mfaGate.title': { en: 'Two-factor authentication is required', so: 'Xaqiijinta laba-tallaabo waa qasab' },
+  'mfaGate.body': { en: 'Your role requires two-factor authentication. Set it up below to unlock the rest of the system.', so: 'Doorkaagu wuxuu u baahan yahay xaqiijin laba-tallaabo ah. Hoos ka deji si aad u furto inta kale ee nidaamka.' },
+  'mfaGate.cannotDisable': { en: 'Two-factor authentication is mandatory for your role and cannot be turned off.', so: 'Xaqiijinta laba-tallaabo waa qasab doorkaaga, lama demin karo.' },
+
+  'sessions.title': { en: 'Open devices', so: 'Qalabka furan' },
+  'sessions.none': { en: 'No active sessions to show.', so: 'Ma jiraan fadhiyo firfircoon oo la muujiyo.' },
+  'sessions.thisDevice': { en: 'This device', so: 'Qalabkan' },
+  'sessions.lastActive': { en: 'last active', so: 'markii ugu dambeysay' },
+  'sessions.revoke': { en: 'Sign out', so: 'Ka saar' },
+  'sessions.revoked': { en: 'That device was signed out.', so: 'Qalabkaas waa laga saaray.' },
+
+  'history.title': { en: 'Sign-in history', so: 'Taariikhda gelitaanka' },
+  'history.none': { en: 'No sign-in activity recorded yet.', so: 'Weli lama diiwaan gelin wax gelitaan ah.' },
+  'history.when': { en: 'When', so: 'Goorma' },
+  'history.event': { en: 'Event', so: 'Dhacdo' },
+  'history.device': { en: 'Device', so: 'Qalab' },
+  'history.event.login_success': { en: 'Signed in', so: 'Soo galay' },
+  'history.event.login_failed': { en: 'Failed sign-in', so: 'Gelitaan fashilmay' },
+  'history.event.locked': { en: 'Account locked', so: 'Akoonka waa la xiray' },
+  'history.event.2fa_failed': { en: 'Wrong 2FA code', so: 'Koodh 2FA khaldan' },
+  'history.event.logout': { en: 'Signed out', so: 'Ka baxay' },
+  'history.event.password_changed': { en: 'Password changed', so: 'Password-ka waa la beddelay' },
+
+  'idle.title': { en: 'Are you still there?', so: 'Weli ma joogtaa?' },
+  'idle.body': { en: 'You have been inactive. You will be signed out in {n} seconds.', so: 'Waxaad ka bixi doontaa {n} ilbiriqsi gudahood.' },
+  'idle.stay': { en: 'Stay signed in', so: 'Sii jooji' },
+};

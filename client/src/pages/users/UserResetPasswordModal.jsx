@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useResetUserPassword } from '../../hooks/useUsers.js';
+import PasswordStrength from '../../components/PasswordStrength.jsx';
+import { isPasswordAcceptable } from '../../lib/passwordPolicy.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // Admin-set password for another user (forgotten password). The backend
 // also signs the user out everywhere and clears any failed-login lockout.
@@ -14,12 +17,13 @@ function Content({ onClose, user }) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const toast = useToast();
+  const { t } = useI18n();
   const reset = useResetUserPassword();
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (!isPasswordAcceptable(password, user.username)) return setError(t('pwPolicy.summary'));
     if (password !== confirm) return setError('The two passwords do not match.');
     try {
       await reset.mutateAsync({ id: user.id, password });
@@ -45,15 +49,16 @@ function Content({ onClose, user }) {
     >
       <form id="user-reset-password-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
-          Set a new password for this user and give it to them directly. They will be signed out of every device and should change it from Account Security after signing in.
+          Set a new password for this user and give it to them directly. They will be signed out of every device and will be asked to choose their own password at their next sign-in.
         </p>
         <label style={fieldStyle}>
           <span style={labelStyle}>New password</span>
-          <input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
+          <input type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
+          <PasswordStrength password={password} username={user.username} />
         </label>
         <label style={fieldStyle}>
           <span style={labelStyle}>Confirm new password</span>
-          <input type="password" autoComplete="new-password" minLength={8} required value={confirm} onChange={(e) => setConfirm(e.target.value)} style={inputStyle} />
+          <input type="password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} style={inputStyle} />
         </label>
         {error && <p role="alert" style={{ margin: 0, color: 'var(--danger)', fontSize: '13px', fontWeight: 600 }}>{error}</p>}
       </form>

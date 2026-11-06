@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState } from 'react';
-import { apiClient } from '../lib/apiClient.js';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { apiClient, AUTH_GATE_EVENT } from '../lib/apiClient.js';
 
 // V2 Foundation originally reused the existing, already-frozen T2.8-F
 // auth backend (POST /api/auth/login) as-is for every login — correct at
@@ -30,6 +30,64 @@ export function AuthProvider({ children }) {
     return saved ? JSON.parse(saved) : null;
   });
   const [loading, setLoading] = useState(false);
+
+  // Account security — merge server-side flags (must_change_password,
+  // must_enroll_2fa, ...) into the stored user, so the route guards can
+  // force the Change Password screen / the 2FA enrolment page.
+  const updateUser = useCallback((patch) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      localStorage.setItem('gurmad_v2_user', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const refreshSecurityStatus = useCallback(async () => {
+    if (!apiClient.getToken()) return null;
+    try {
+      const res = await apiClient.get('/v2/auth/security-status');
+      const { must_change_password, must_enroll_2fa, two_factor_required } = res.data || {};
+      updateUser({ must_change_password: !!must_change_password, must_enroll_2fa: !!must_enroll_2fa, two_factor_required: !!two_factor_required });
+      return res.data;
+    } catch {
+      return null; // offline / legacy token — keep whatever we had
+    }
+  }, [updateUser]);
+
+  // Clears this device's session locally only (no server call).
+  const clearLocalSession = useCallback(() => {
+    apiClient.clearToken();
+    localStorage.removeItem('gurmad_v2_user');
+    setUser(null);
+  }, []);
+
+  // A page reload (or a session that predates this feature) still learns
+  // about a pending gate — the login response alone isn't enough.
+  // (The state update happens after the network round-trip, not
+  // synchronously in the effect.)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (user) refreshSecurityStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onGate = (e) => {
+      const code = e.detail?.code;
+      if (code === 'PASSWORD_CHANGE_REQUIRED') updateUser({ must_change_password: true });
+      else if (code === 'TWO_FACTOR_REQUIRED') updateUser({ must_enroll_2fa: true });
+      else if (code === 'SESSION_REVOKED') {
+        // The collector app keeps its own 401 -> re-authenticate flow,
+        // which preserves the encrypted offline queue; dropping the
+        // session here would orphan it.
+        if (window.location.pathname.startsWith('/collector')) return;
+        clearLocalSession();
+      }
+    };
+    window.addEventListener(AUTH_GATE_EVENT, onGate);
+    return () => window.removeEventListener(AUTH_GATE_EVENT, onGate);
+  }, [updateUser, clearLocalSession]);
 
   const login = async (username, password, token) => {
     setLoading(true);
@@ -83,14 +141,15 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Revokes this device's server session (best-effort — the request
+  // captures the token before it is cleared locally), then clears it.
   const logout = () => {
-    apiClient.clearToken();
-    localStorage.removeItem('gurmad_v2_user');
-    setUser(null);
+    if (apiClient.getToken()) apiClient.post('/v2/auth/logout', {}).catch(() => {});
+    clearLocalSession();
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, verifyTwoFactorLogin, logout, loading, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, login, verifyTwoFactorLogin, logout, loading, isAuthenticated: !!user, updateUser, refreshSecurityStatus }}>
       {children}
     </AuthContext.Provider>
   );

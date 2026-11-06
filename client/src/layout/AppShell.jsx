@@ -1,16 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar.jsx';
 import MobileTabBar from './MobileTabBar.jsx';
 import MobileNavDrawer from './MobileNavDrawer.jsx';
 import FieldTopBar from './FieldTopBar.jsx';
 import TopBar from './TopBar.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useIdleLogout } from '../hooks/useIdleLogout.js';
+import { Modal, Button } from '../components/ui/index.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 const FIELD_ROLES = ['collector', 'cashier'];
 
 export default function AppShell() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const { t } = useI18n();
+  // Account security — 30-minute idle auto-logout (staff app only; the
+  // collector field app has its own route tree and is not affected).
+  const idle = useIdleLogout({
+    enabled: !!user,
+    onTimeout: () => { logout(); navigate('/login', { replace: true }); },
+  });
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -114,6 +125,20 @@ export default function AppShell() {
         </div>
       </main>
       {showFieldTabBar && <MobileTabBar />}
+      <Modal
+        open={idle.warning}
+        onClose={idle.stayActive}
+        title={t('idle.title')}
+        maxWidth="400px"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => { logout(); navigate('/login', { replace: true }); }}>{t('nav.logout')}</Button>
+            <Button onClick={idle.stayActive}>{t('idle.stay')}</Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: '14px' }} role="alert">{t('idle.body', undefined, { n: idle.secondsLeft })}</p>
+      </Modal>
     </div>
   );
 }

@@ -6,6 +6,9 @@ import { useEmployees } from '../../hooks/useEmployees.js';
 import { useRoles } from '../../hooks/useRoles.js';
 import UserEditModal from './UserEditModal.jsx';
 import UserResetPasswordModal from './UserResetPasswordModal.jsx';
+import PasswordStrength from '../../components/PasswordStrength.jsx';
+import { isPasswordAcceptable } from '../../lib/passwordPolicy.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 // User & Access Administration — admin-only. Role assignment used to be
 // restricted to 6 hardcoded strings; Dynamic Roles & Permissions
@@ -18,6 +21,7 @@ export default function UsersListPage() {
   const roles = rolesData?.data || [];
   const users = data?.data || [];
   const toast = useToast();
+  const { t } = useI18n();
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ username: '', password: '', full_name: '', role_id: '', employee_id: '' });
   const [editingUser, setEditingUser] = useState(null);
@@ -38,6 +42,10 @@ export default function UsersListPage() {
 
   async function handleCreate(e) {
     e.preventDefault();
+    if (!isPasswordAcceptable(form.password, form.username)) {
+      toast.error(t('pwPolicy.summary'));
+      return;
+    }
     try {
       await createUser.mutateAsync({
         username: form.username.trim(),
@@ -84,7 +92,9 @@ export default function UsersListPage() {
           </div>
           <div>
             <label style={labelStyle}>Password</label>
-            <input required type="password" minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={inputStyle} />
+            <input required type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={inputStyle} />
+            <PasswordStrength password={form.password} username={form.username} />
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{t('pwPolicy.mustChangeNote')}</p>
           </div>
           <div>
             <label style={labelStyle}>Full name</label>
