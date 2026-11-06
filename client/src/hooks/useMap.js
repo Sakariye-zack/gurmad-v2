@@ -32,11 +32,11 @@ export function useMapMissingLocation(filters) {
   });
 }
 
-// Trucks — Phase 10, user-requested ('ilaa gawaadhidii ay ka soo
-// muuqato'). Polled every 30s while the Map page is open (refetchInterval)
-// so a moving collector's marker visibly updates without a manual reload
-// — the backend itself only ever returns positions from the last 10
-// minutes, so a stale poll result still ages out correctly on its own.
+// Live trucks. Polled every 15 s while the Map page is open; react-query
+// pauses the interval while the tab is hidden (refetchIntervalInBackground
+// false). The backend only returns positions from the last 10 minutes, so
+// a stale result still ages out on its own.
+export const TRUCKS_POLL_MS = 15000;
 export function useMapTrucks({ zoneId } = {}) {
   const params = new URLSearchParams();
   if (zoneId) params.set('zone_id', String(zoneId));
@@ -45,6 +45,18 @@ export function useMapTrucks({ zoneId } = {}) {
   return useQuery({
     queryKey: ['v2', 'map', 'trucks', { zoneId }],
     queryFn: () => apiClient.get(`/v2/map/trucks${qs ? `?${qs}` : ''}`),
+    refetchInterval: TRUCKS_POLL_MS,
+    refetchIntervalInBackground: false,
+  });
+}
+
+// Today's route (ping trail) for one collector; only fetched while shown.
+export function useTruckTrail(employeeId) {
+  return useQuery({
+    queryKey: ['v2', 'map', 'trail', employeeId],
+    queryFn: () => apiClient.get(`/v2/map/trucks/${encodeURIComponent(employeeId)}/trail?since=today`),
+    enabled: !!employeeId,
     refetchInterval: 30000,
+    refetchIntervalInBackground: false,
   });
 }
