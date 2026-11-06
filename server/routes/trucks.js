@@ -1,6 +1,9 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const uploads = require('../lib/fleetUploads');
+const { getTimezone, localParts } = require('../lib/autoBilling');
+const { annotateFuelRows, fuelTotals, getNextMaintenance, currentRate, toUsd, round } = require('../lib/fleetInsights');
 
 const router = express.Router();
 
@@ -239,6 +242,11 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
        data.insurance_expiry ?? null, data.registration_expiry ?? null, data.road_tax_expiry ?? null, data.notes ?? null]
     );
     const truck = result.rows[0];
+    if (truck.collector_id || truck.driver_id) {
+      await pool.query(
+        `INSERT INTO truck_assignment_history (truck_id, collector_id, driver_id, changed_by) VALUES ($1, $2, $3, $4)`,
+        [truck.id, truck.collector_id, truck.driver_id, req.user.id]);
+    }
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.create', entityType: 'truck', entityId: truck.id, before: null, after: truck });
     res.status(201).json({ data: truck });
   } catch (err) {
@@ -292,11 +300,32 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     const values = fields.map((f) => data[f]);
     values.push(id);
 
-    const result = await pool.query(
-      `UPDATE trucks SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
-      values
-    );
-    const truck = result.rows[0];
+    // Assignment history: close the open row and open a new one whenever the
+    // collector or driver actually changes (same transaction as the update).
+    const client = await pool.connect();
+    let truck;
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `UPDATE trucks SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
+        values
+      );
+      truck = result.rows[0];
+      if (truck.collector_id !== current.collector_id || truck.driver_id !== current.driver_id) {
+        await client.query('UPDATE truck_assignment_history SET to_at = NOW() WHERE truck_id = $1 AND to_at IS NULL', [id]);
+        if (truck.collector_id || truck.driver_id) {
+          await client.query(
+            `INSERT INTO truck_assignment_history (truck_id, collector_id, driver_id, changed_by) VALUES ($1, $2, $3, $4)`,
+            [id, truck.collector_id, truck.driver_id, req.user.id]);
+        }
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.update', entityType: 'truck', entityId: truck.id, before: current, after: truck });
     res.json({ data: truck });
   } catch (err) {
@@ -345,6 +374,181 @@ router.put('/:id/status', authenticateToken, requireRole(...WRITE_ROLES), async 
     res.json({ data: truck });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to update truck status.', code: 'INTERNAL' } });
+  }
+});
+
+// ---------- Fleet upgrade: renew, photo, trips, assignments, summary ----------
+
+const bad = (res, message, status = 400, code = 'VALIDATION') => res.status(status).json({ error: { message, code } });
+
+function isValidDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+// Same read visibility as GET /:id: zone-scoped roles see their own zone's
+// trucks and company-wide (null-zone) trucks.
+async function loadViewableTruck(req, res) {
+  const id = parseStrictId(req.params.id);
+  if (id === null) { bad(res, 'Invalid truck id.'); return null; }
+  const r = await pool.query('SELECT * FROM trucks WHERE id = $1', [id]);
+  if (!r.rows[0]) { bad(res, 'Truck not found.', 404, 'NOT_FOUND'); return null; }
+  const myZoneId = await resolveUserZoneId(req.user);
+  if (myZoneId !== null && r.rows[0].zone_id !== null && r.rows[0].zone_id !== myZoneId) {
+    bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN'); return null;
+  }
+  return r.rows[0];
+}
+
+const DOCUMENT_COLUMNS = { insurance: 'insurance_expiry', registration: 'registration_expiry', road_tax: 'road_tax_expiry' };
+
+// PUT /trucks/:id/renew {document, new_expiry} — records a renewed document.
+router.put('/:id/renew', authenticateToken, requireRole(...WRITE_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return bad(res, 'Invalid truck id.');
+  const col = DOCUMENT_COLUMNS[req.body?.document];
+  if (!col) return bad(res, 'document must be one of: insurance, registration, road_tax.');
+  const newExpiry = req.body?.new_expiry;
+  if (!isValidDate(newExpiry)) return bad(res, 'new_expiry must be a valid YYYY-MM-DD date.');
+  try {
+    const today = localParts(new Date(), await getTimezone()).date;
+    if (newExpiry < today) return bad(res, 'new_expiry cannot be in the past.');
+    const existing = await pool.query('SELECT * FROM trucks WHERE id = $1', [id]);
+    if (!existing.rows[0]) return bad(res, 'Truck not found.', 404, 'NOT_FOUND');
+    const current = existing.rows[0];
+    if (!(await assertZoneWritable(req.user, current.zone_id))) return bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN');
+    const r = await pool.query(`UPDATE trucks SET ${col} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`, [newExpiry, id]);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.document_renew', entityType: 'truck', entityId: id,
+      before: { document: req.body.document, expiry: current[col] }, after: { document: req.body.document, expiry: newExpiry } });
+    res.json({ data: r.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to renew document.', code: 'INTERNAL' } });
+  }
+});
+
+router.post('/:id/photo', authenticateToken, requireRole(...WRITE_ROLES), uploads.single(uploads.photoUpload), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) { uploads.discard(req); return bad(res, 'Invalid truck id.'); }
+  if (await uploads.rejectBadFile(req, res, { kindsLabel: 'JPEG, PNG or WEBP', label: 'truck_photo' })) return;
+  try {
+    const existing = await pool.query('SELECT id, zone_id, photo_storage_path FROM trucks WHERE id = $1', [id]);
+    if (!existing.rows[0]) { uploads.discard(req); return bad(res, 'Truck not found.', 404, 'NOT_FOUND'); }
+    if (!(await assertZoneWritable(req.user, existing.rows[0].zone_id))) { uploads.discard(req); return bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN'); }
+    await pool.query('UPDATE trucks SET photo_storage_path = $1, photo_mime_type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [req.file.filename, req.file.mimetype, id]);
+    const old = existing.rows[0].photo_storage_path;
+    if (old && old !== req.file.filename) uploads.removeStored(old);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.photo_update', entityType: 'truck', entityId: id, before: null, after: { mime: req.file.mimetype } });
+    res.json({ data: { id, photo_url: `/v2/trucks/${id}/photo` } });
+  } catch (err) {
+    uploads.discard(req);
+    res.status(500).json({ error: { message: 'Failed to save truck photo.', code: 'INTERNAL' } });
+  }
+});
+
+router.get('/:id/photo', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const truck = await loadViewableTruck(req, res);
+    if (!truck) return;
+    if (!truck.photo_storage_path) return bad(res, 'No photo set.', 404, 'NOT_FOUND');
+    return uploads.sendStored(res, { name: truck.photo_storage_path, mime: truck.photo_mime_type, filename: `truck-${truck.id}` });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load truck photo.', code: 'INTERNAL' } });
+  }
+});
+
+// GET /trucks/:id/trips?days=30 — GPS km per company-local day
+// (truck_daily_distance, materialised hourly by lib/fleetMonitor.js).
+router.get('/:id/trips', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  const days = req.query.days === undefined ? 30 : parseInt(req.query.days, 10);
+  if (!Number.isInteger(days) || days < 1 || days > 90) return bad(res, 'days must be between 1 and 90.');
+  try {
+    const truck = await loadViewableTruck(req, res);
+    if (!truck) return;
+    const today = localParts(new Date(), await getTimezone()).date;
+    const r = await pool.query(
+      `SELECT day, km::float AS km, points, updated_at FROM truck_daily_distance
+       WHERE truck_id = $1 AND day > $2::date - $3::int AND day <= $2::date ORDER BY day DESC`,
+      [truck.id, today, days]
+    );
+    const total = round(r.rows.reduce((s, x) => s + x.km, 0));
+    res.json({ data: { truck_id: truck.id, days, total_km: total, rows: r.rows } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load trips.', code: 'INTERNAL' } });
+  }
+});
+
+router.get('/:id/assignments', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const truck = await loadViewableTruck(req, res);
+    if (!truck) return;
+    const r = await pool.query(
+      `SELECT h.id, h.collector_id, c.name AS collector_name, h.driver_id, d.name AS driver_name, h.from_at, h.to_at
+       FROM truck_assignment_history h
+       LEFT JOIN employees c ON c.id = h.collector_id
+       LEFT JOIN employees d ON d.id = h.driver_id
+       WHERE h.truck_id = $1 ORDER BY h.from_at DESC, h.id DESC LIMIT 200`,
+      [truck.id]
+    );
+    res.json({ data: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load assignment history.', code: 'INTERNAL' } });
+  }
+});
+
+// GET /trucks/:id/summary — this month's KPIs, last 6 months fuel vs
+// maintenance (USD-equivalent), next maintenance, batches served (30 days).
+router.get('/:id/summary', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const truck = await loadViewableTruck(req, res);
+    if (!truck) return;
+    const lp = localParts(new Date(), await getTimezone());
+    const today = lp.date;
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      let y = lp.year; let m = lp.month - i;
+      while (m < 1) { m += 12; y -= 1; }
+      months.push(`${y}-${String(m).padStart(2, '0')}`);
+    }
+    const from = `${months[0]}-01`;
+    const rate = await currentRate();
+    const [fuelM, maintM, monthFuel, km, downtime, batches, next] = await Promise.all([
+      pool.query(`SELECT to_char(record_date, 'YYYY-MM') AS month, currency, SUM(cost) AS total, SUM(liters) AS liters
+                  FROM truck_fuel_records WHERE truck_id = $1 AND record_date >= $2::date GROUP BY 1, 2`, [truck.id, from]),
+      pool.query(`SELECT to_char(COALESCE(completed_at, created_at), 'YYYY-MM') AS month, currency, SUM(cost) AS total
+                  FROM truck_maintenance_records WHERE truck_id = $1 AND status = 'completed' AND COALESCE(completed_at, created_at) >= $2::date
+                  GROUP BY 1, 2`, [truck.id, from]),
+      pool.query(`SELECT id, truck_id, liters, cost, currency, price_per_liter, odometer_reading, record_date, created_at, receipt_storage_path
+                  FROM truck_fuel_records WHERE truck_id = $1 AND record_date >= $2::date`, [truck.id, `${lp.period}-01`]),
+      pool.query(`SELECT COALESCE(SUM(km), 0)::float AS km FROM truck_daily_distance WHERE truck_id = $1 AND day >= $2::date`, [truck.id, `${lp.period}-01`]),
+      pool.query(`SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (completed_at - started_at)) / 86400.0), 0)::float AS days
+                  FROM truck_maintenance_records WHERE truck_id = $1 AND status = 'completed' AND started_at IS NOT NULL AND completed_at >= $2::date`, [truck.id, `${lp.period}-01`]),
+      pool.query(`SELECT DISTINCT b.id, b.batch_code, b.start_date, b.end_date, b.status, z.name AS zone_name
+                  FROM task_resources trt JOIN tasks tk ON tk.id = trt.task_id JOIN batches b ON b.id = tk.batch_id
+                  LEFT JOIN zones z ON z.id = b.zone_id
+                  WHERE trt.resource_type = 'truck' AND trt.resource_id = $1 AND b.start_date > $2::date - 30 AND b.start_date <= $2::date
+                  ORDER BY b.start_date DESC, b.id DESC LIMIT 100`, [truck.id, today]),
+      getNextMaintenance({ truckIds: [truck.id], today }),
+    ]);
+    const chart = months.map((month) => ({ month, fuel_usd: 0, maintenance_usd: 0 }));
+    const idx = new Map(chart.map((c, i) => [c.month, i]));
+    for (const r of fuelM.rows) { const i = idx.get(r.month); const u = toUsd(r.total, r.currency, rate); if (i !== undefined && u !== null) chart[i].fuel_usd += u; }
+    for (const r of maintM.rows) { const i = idx.get(r.month); const u = toUsd(r.total, r.currency, rate); if (i !== undefined && u !== null) chart[i].maintenance_usd += u; }
+    for (const c of chart) { c.fuel_usd = round(c.fuel_usd); c.maintenance_usd = round(c.maintenance_usd); }
+    const ft = fuelTotals(await annotateFuelRows(monthFuel.rows, pool, { rate }));
+    const cur = chart[chart.length - 1];
+    res.json({ data: {
+      truck_id: truck.id, period: lp.period, today,
+      month: {
+        fuel_usd: cur.fuel_usd, maintenance_usd: cur.maintenance_usd, liters: ft.liters, gps_km: round(km.rows[0].km),
+        odometer_km: ft.km, km_per_liter: ft.km_per_liter, cost_per_km_usd: ft.cost_per_km_usd, downtime_days: round(downtime.rows[0].days, 1),
+      },
+      chart,
+      next_maintenance: next.get(truck.id) || null,
+      batches_served: batches.rows,
+    } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load truck summary.', code: 'INTERNAL' } });
   }
 });
 

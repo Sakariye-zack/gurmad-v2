@@ -216,4 +216,4 @@ function startScheduler() {
   return { first, timer };
 }
 
-module.exports = { runMonthly, runDaily, startScheduler, schedulerTick, localParts, getTimezone };
+module.exports = { runMonthly, runDaily, startScheduler, schedulerTick, localParts, getTimezone, shiftDate };

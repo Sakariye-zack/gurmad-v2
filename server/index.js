@@ -233,6 +233,7 @@ runMigrations()
       console.log(`gurmad-v2-server listening on :${PORT}`);
       require('./lib/autoBilling').startScheduler();
       require('./lib/backupMonitor').startMonitor();
+      require('./lib/fleetMonitor').startMonitor();
     });
   })
   .catch((err) => {
