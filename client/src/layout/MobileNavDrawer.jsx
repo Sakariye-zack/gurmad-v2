@@ -119,6 +119,7 @@ export default function MobileNavDrawer({ open, onClose, triggerRef }) {
               <NavLink
                 key={item.to}
                 to={item.to}
+                end={item.end}
                 onClick={handleNavigate}
                 style={({ isActive }) => ({
                   display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',

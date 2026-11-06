@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Database, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
-  ListChecks,
+  ListChecks, Gauge,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
@@ -23,7 +23,7 @@ export const NAV_LABEL_KEYS = {
   Billing: 'nav.billing', Invoices: 'nav.invoices', Debts: 'nav.debts', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
   Employees: 'nav.employees', Attendance: 'nav.attendance', 'Leave Requests': 'nav.leaveRequests', 'Leave Types': 'nav.leaveTypes',
   Payroll: 'nav.payroll', 'Payroll History': 'nav.payrollHistory', 'HR Reports': 'nav.hrReports',
-  Trucks: 'nav.trucks', 'Fleet Maintenance': 'nav.fleetMaintenance', 'Fuel Records': 'nav.fuelRecords', 'Document Expiry': 'nav.documentExpiry',
+  'Fleet Overview': 'nav.fleetOverview', Trucks: 'nav.trucks', 'Fleet Maintenance': 'nav.fleetMaintenance', 'Fuel Records': 'nav.fuelRecords', 'Document Expiry': 'nav.documentExpiry',
   Suppliers: 'nav.suppliers', 'Procurement Requests': 'nav.procurementRequests', 'Purchase Orders': 'nav.purchaseOrders',
   'Inventory Items': 'nav.inventoryItems', 'Inventory Stores': 'nav.inventoryStores', 'Stock Movements': 'nav.stockMovements',
   'Inventory Adjustments': 'nav.inventoryAdjustments', Assets: 'nav.assets',
@@ -95,6 +95,7 @@ export const NAV = [
   { to: '/hr/reports', label: 'HR Reports', icon: BarChart3, permission: 'hr_reports.view', group: 'HR & Payroll' },
 
   // ---- Fleet ----
+  { to: '/fleet', end: true, label: 'Fleet Overview', icon: Gauge, roles: ['admin', 'cashier', 'collector', 'gudoomiye', 'zone_accountant'], group: 'Fleet' },
   { to: '/trucks', label: 'Trucks', icon: Truck, group: 'Fleet' },
   { to: '/fleet/maintenance', label: 'Fleet Maintenance', icon: Truck, permission: 'fleet_maintenance.view', group: 'Fleet' },
   { to: '/fleet/fuel', label: 'Fuel Records', icon: Truck, permission: 'fleet_fuel.view', group: 'Fleet' },
@@ -193,6 +194,7 @@ function NavItemLink({ item, onClick }) {
   const link = (
     <NavLink
       to={item.to}
+      end={item.end}
       onClick={onClick}
       style={({ isActive }) => ({
         display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px',
