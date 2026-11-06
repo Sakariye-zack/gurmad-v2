@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getTimezone, localParts } = require('../lib/autoBilling');
+const { activeWorkWhere, ACTIVE_WORK_FROM } = require('../lib/locationHistory');
 
 const router = express.Router();
 
@@ -205,8 +206,19 @@ router.get('/customers/missing-location', async (req, res) => {
 const TRUCK_LOCATION_FRESHNESS_MINUTES = 10;
 const TRUCK_LIVE_SECONDS = 120;
 const TRAIL_POINT_CAP = 2000;
-// Batches a collector is "working" — identical to the ping eligibility gate.
-const ACTIVE_BATCH_STATUSES = "('assigned', 'in_progress')";
+// Today's route is more sensitive than "where is the truck now": admin and
+// gudoomiye only (ruling).
+const TRAIL_ROLES = ['admin', 'gudoomiye'];
+// "Working today" for the collector e.id (same rule as the ping gate).
+const WORK_TODAY = activeWorkWhere('e.id', '$2::date');
+
+// In-scope collector: home district, or the district of a batch worked
+// today. zoneExpr is a SQL parameter reference; today is always $2.
+function collectorInZoneSql(zoneExpr) {
+  return `(e.zone_id = ${zoneExpr} OR EXISTS (
+            SELECT 1 FROM ${ACTIVE_WORK_FROM}
+            WHERE ${WORK_TODAY} AND b.zone_id = ${zoneExpr}))`;
+}
 
 async function truckZoneScope(req) {
   let requestedZoneId = null;
@@ -256,7 +268,7 @@ router.get('/trucks', async (req, res) => {
     let where = `cl.recorded_at >= LOCALTIMESTAMP - INTERVAL '${TRUCK_LOCATION_FRESHNESS_MINUTES} minutes'`;
     if (scope.zoneId !== null) {
       params.push(scope.zoneId);
-      where += ` AND e.zone_id = $${params.length}`;
+      where += ` AND ${collectorInZoneSql(`$${params.length}::int`)}`;
     }
 
     // Truck: the truck assigned on the collector's active task wins (that is
@@ -277,12 +289,10 @@ router.get('/trucks', async (req, res) => {
        LEFT JOIN zones z ON z.id = e.zone_id
        LEFT JOIN LATERAL (
          SELECT t.id, t.plate_number, t.model
-         FROM task_resources trc
-         JOIN tasks tk ON tk.id = trc.task_id
-         JOIN batches b ON b.id = tk.batch_id
+         FROM ${ACTIVE_WORK_FROM}
          JOIN task_resources trt ON trt.task_id = trc.task_id AND trt.resource_type = 'truck'
-         JOIN trucks t ON t.id = trt.resource_id
-         WHERE trc.resource_type = 'collector' AND trc.resource_id = e.id AND b.status IN ${ACTIVE_BATCH_STATUSES}
+         JOIN trucks t ON t.id = trt.resource_id AND t.status = 'active'
+         WHERE ${WORK_TODAY}
          ORDER BY (tk.status = 'in_progress') DESC, tk.id DESC
          LIMIT 1
        ) ttk ON TRUE
@@ -301,19 +311,15 @@ router.get('/trucks', async (req, res) => {
                 COUNT(*) FILTER (WHERE bc.status = 'pending')::int AS pending
          FROM batch_customers bc
          WHERE bc.batch_id IN (
-           SELECT tk.batch_id FROM task_resources trc
-           JOIN tasks tk ON tk.id = trc.task_id
-           JOIN batches b ON b.id = tk.batch_id
-           WHERE trc.resource_type = 'collector' AND trc.resource_id = e.id AND b.status IN ${ACTIVE_BATCH_STATUSES})
+           SELECT tk.batch_id FROM ${ACTIVE_WORK_FROM}
+           WHERE ${WORK_TODAY})
        ) wk ON TRUE
        LEFT JOIN LATERAL (
          SELECT array_agg(DISTINCT b.batch_code) AS batch_codes,
                 array_remove(array_agg(DISTINCT COALESCE(r.name, r.code)), NULL) AS sub_zone_names
-         FROM task_resources trc
-         JOIN tasks tk ON tk.id = trc.task_id
-         JOIN batches b ON b.id = tk.batch_id
+         FROM ${ACTIVE_WORK_FROM}
          LEFT JOIN routes r ON r.id = b.route_id
-         WHERE trc.resource_type = 'collector' AND trc.resource_id = e.id AND b.status IN ${ACTIVE_BATCH_STATUSES}
+         WHERE ${WORK_TODAY}
        ) bl ON TRUE
        LEFT JOIN LATERAL (
          SELECT json_agg(json_build_object('lat', h.lat::float, 'lng', h.lng::float, 't', EXTRACT(EPOCH FROM h.recorded_at)) ORDER BY h.recorded_at DESC) AS points
@@ -344,10 +350,11 @@ router.get('/trucks', async (req, res) => {
 });
 
 // GET /api/v2/map/trucks/:employeeId/trail?since=today — the collector's
-// own pings for the company-local day, oldest first (capped). Same scoping:
-// a scoped role asking for a collector outside its district gets 404 (no
-// existence leak).
-router.get('/trucks/:employeeId/trail', async (req, res) => {
+// own pings for the company-local day, oldest first (capped). Admin and
+// gudoomiye only (403 for the other map roles). Same district scoping as
+// the trucks list: a gudoomiye asking for a collector outside its district
+// gets 404 (no existence leak).
+router.get('/trucks/:employeeId/trail', requireRole(...TRAIL_ROLES), async (req, res) => {
   const employeeId = parseStrictId(req.params.employeeId);
   if (employeeId === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });
   if (req.query.since !== undefined && req.query.since !== 'today') {
@@ -358,12 +365,16 @@ router.get('/trucks/:employeeId/trail', async (req, res) => {
     if (scope.error) return res.status(scope.error.status).json(scope.error.body);
     const notFound = () => res.status(404).json({ error: { message: 'Collector not found.', code: 'NOT_FOUND' } });
     if (scope.empty) return notFound();
-    const emp = await pool.query('SELECT id, zone_id FROM employees WHERE id = $1', [employeeId]);
-    if (!emp.rows[0]) return notFound();
-    if (scope.zoneId !== null && emp.rows[0].zone_id !== scope.zoneId) return notFound();
-
     const tz = await getTimezone();
     const today = localParts(new Date(), tz).date;
+    const empParams = [employeeId, today];
+    let empWhere = 'e.id = $1 AND $2::date IS NOT NULL';
+    if (scope.zoneId !== null) {
+      empParams.push(scope.zoneId);
+      empWhere += ` AND ${collectorInZoneSql('$3::int')}`;
+    }
+    const emp = await pool.query(`SELECT e.id FROM employees e WHERE ${empWhere}`, empParams);
+    if (!emp.rows[0]) return notFound();
     const r = await pool.query(
       `SELECT lat, lng, recorded_at FROM (
          SELECT lat::float AS lat, lng::float AS lng, recorded_at

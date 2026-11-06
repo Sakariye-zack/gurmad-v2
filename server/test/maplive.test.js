@@ -61,6 +61,20 @@ async function setupLive() {
   return live;
 }
 
+// A batch + task assigned to a collector; startOffset in days from today.
+async function mkWork(zone, empId, { startOffset = 0, batchStatus = 'assigned', taskStatus = 'pending' } = {}) {
+  seq += 1;
+  const cyc = (await db.query(
+    `INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom',CURRENT_DATE - 30,CURRENT_DATE + 30) RETURNING id`,
+    [zone.id])).rows[0].id;
+  const batch = (await db.query(
+    `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, end_date, status) VALUES ($1,$2,$3,1,CURRENT_DATE + $4::int,CURRENT_DATE + $4::int + 2,$5) RETURNING id`,
+    ['LVW' + Date.now() + seq, zone.id, cyc, startOffset, batchStatus])).rows[0].id;
+  const task = (await db.query(`INSERT INTO tasks (batch_id, status) VALUES ($1,$2) RETURNING id`, [batch, taskStatus])).rows[0].id;
+  await db.query(`INSERT INTO task_resources (task_id, resource_type, resource_id) VALUES ($1,'collector',$2)`, [task, empId]);
+  return { batch, task };
+}
+
 const historyCount = async (emp) => (await db.query('SELECT COUNT(*)::int AS n FROM collector_location_history WHERE employee_id = $1', [emp])).rows[0].n;
 
 test('maplive: an accepted ping writes a history row; an ineligible ping does not', async () => {
@@ -72,7 +86,10 @@ test('maplive: an accepted ping writes a history row; an ineligible ping does no
   assert.equal(await historyCount(empA), before + 1);
   const last = (await db.query('SELECT lat::float AS lat, lng::float AS lng FROM collector_location_history WHERE employee_id = $1 ORDER BY recorded_at DESC LIMIT 1', [empA])).rows[0];
   assert.deepEqual(last, { lat: 9.5221, lng: 45.5336 });
-  // Collector B has no active batch: accepted silently, nothing tracked.
+  // Collector B only has next week's batch and a finished task today: accepted
+  // silently, nothing tracked.
+  await mkWork(w.zoneB, empB, { startOffset: 7 });
+  await mkWork(w.zoneB, empB, { startOffset: -1, batchStatus: 'in_progress', taskStatus: 'completed' });
   const beforeB = await historyCount(empB);
   const rb = await api('POST', '/collection-sync/location', { token: tokenB, body: { lat: 9.9, lng: 45.9 } });
   assert.equal(rb.status, 200);
@@ -145,7 +162,11 @@ test('maplive: trail returns today in order and is district-scoped', async () =>
   assert.equal((await api('GET', '/map/trucks/abc/trail', { token: w.tokens.admin })).status, 400);
   assert.equal((await api('GET', `/map/trucks/${empA}/trail?since=week`, { token: w.tokens.admin })).status, 400);
   assert.equal((await api('GET', '/map/trucks/99999999/trail', { token: w.tokens.admin })).status, 404);
-  assert.equal((await api('GET', `/map/trucks/${empA}/trail`, { token: w.tokens.cashier })).status, 403);
+  // Trail is admin + gudoomiye only; the other map roles still see live trucks.
+  for (const role of ['cashier', 'accountant', 'head']) {
+    assert.equal((await api('GET', `/map/trucks/${empA}/trail`, { token: w.tokens[role] })).status, 403, role);
+  }
+  assert.equal((await api('GET', '/map/trucks', { token: w.tokens.accountant })).status, 200);
 });
 
 test('maplive: prune drops history older than 3 days and keeps recent rows', async () => {
@@ -159,4 +180,17 @@ test('maplive: prune drops history older than 3 days and keeps recent rows', asy
   assert.deepEqual(left, [Number(recent)]);
   // Throttled: a non-forced call right after does nothing.
   assert.equal(await pruneLocationHistory(), null);
+});
+
+test('maplive: a collector working a batch in my district today is in scope (trucks + trail)', async () => {
+  const { w, empB, tokenB } = await setupLive();
+  // Home district B, but today's batch is in district A.
+  await mkWork(w.zoneA, empB, { startOffset: -1, batchStatus: 'in_progress', taskStatus: 'in_progress' });
+  const p = await api('POST', '/collection-sync/location', { token: tokenB, body: { lat: 9.53, lng: 45.54 } });
+  assert.equal(p.data.recorded, true);
+  const g = await api('GET', '/map/trucks', { token: w.tokens.gudoomiye });
+  const b = g.data.find((x) => x.employee_id === empB);
+  assert.ok(b, 'collector B visible to district A while working there');
+  assert.equal(b.status, 'live');
+  assert.equal((await api('GET', `/map/trucks/${empB}/trail`, { token: w.tokens.gudoomiye })).status, 200);
 });

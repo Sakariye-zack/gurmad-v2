@@ -172,7 +172,7 @@ function existingLayers(map, ids) {
 export default function MapCanvas({
   points, trucks, showToday, focus, onOpenCustomer,
   canEditLocation, pickTarget, onRequestMove, onPickConfirm, onPickCancel,
-  trail, trailEmployeeId, onToggleTrail,
+  trail, trailEmployeeId, onToggleTrail, fitKey,
 }) {
   const { t } = useI18n();
   const wrapRef = useRef(null);
@@ -195,7 +195,7 @@ export default function MapCanvas({
   const customerPopupRef = useRef(null);
   const pickPopupRef = useRef(null);
   const truckMarkers = useRef(new Map()); // employee_id -> { marker, el, popup, data, raf }
-  const fitRef = useRef({ points: null, fitted: false });
+  const fitRef = useRef({ key: {}, fitted: false }); // {} never equals a fitKey string -> first load fits
 
   // Init once per mount. Fail gracefully — no fallback provider, no
   // hardcoded token, no crash.
@@ -292,6 +292,7 @@ export default function MapCanvas({
     customerPopupRef.current?.remove();
     const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '300px' });
     popup.setLngLat(ll).setDOMContent(buildPopup(p, latest, () => popup.remove())).addTo(map);
+    popup.gmCustomerId = p.id;
     customerPopupRef.current = popup;
   }
 
@@ -334,17 +335,27 @@ export default function MapCanvas({
     const map = mapRef.current;
     if (!map || status !== 'ready') return;
     map.getSource(SRC_CUSTOMERS)?.setData(dataRef.current.customers);
-    customerPopupRef.current?.remove();
 
-    // Fit to the pins when the (server-filtered) set changes; trucks alone
-    // only drive the first fit if there are no pins at all.
-    if (fitRef.current.points !== points) {
-      fitRef.current.points = points;
+    // An open customer popup survives a refetch (e.g. after "Set on map" or
+    // a background refresh) when that customer is still on the map: same
+    // popup, fresh content and position. Otherwise it closes.
+    const open = customerPopupRef.current;
+    if (open && open.isOpen()) {
+      const p = pointsById.current.get(open.gmCustomerId);
+      const ll = finiteLngLat(p);
+      if (p && ll) open.setLngLat(ll).setDOMContent(buildPopup(p, latest, () => open.remove()));
+      else open.remove();
+    }
+
+    // Fit only on first load and when the filter set changes — never on a
+    // refetch of the same view, so the map doesn't jump under the user.
+    if (fitRef.current.key !== fitKey && (points || []).length > 0) {
+      fitRef.current.key = fitKey;
       const b = boundsOf(points, trucks);
-      if (b && (points || []).length > 0) { map.fitBounds(b, { ...FIT_OPTIONS, duration: 0 }); fitRef.current.fitted = true; }
+      if (b) { map.fitBounds(b, { ...FIT_OPTIONS, duration: 0 }); fitRef.current.fitted = true; }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, status]);
+  }, [points, status, fitKey]);
 
   useEffect(() => {
     dataRef.current.showToday = !!showToday;

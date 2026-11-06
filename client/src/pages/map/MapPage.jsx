@@ -236,6 +236,7 @@ export default function MapPage() {
               trail={trail}
               trailEmployeeId={trailEmployeeId}
               onToggleTrail={toggleTrail}
+              fitKey={[filters.zoneId, filters.groupId, filters.groupZoneId, filters.routeId].map((v) => v || '').join('|')}
             />
             {points.length === 0 && trucks.length === 0 && (
               <div style={{

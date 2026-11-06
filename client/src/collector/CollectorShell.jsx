@@ -30,19 +30,24 @@ function useLocationPing() {
     if (!navigator.geolocation) return undefined;
     let inFlight = false;
     let cancelled = false;
+    let lastPingAt = 0;
     function ping() {
       if (inFlight || cancelled || document.hidden) return;
       inFlight = true;
-      // Safety net: if neither callback ever fires (e.g. a permission prompt
-      // left unanswered), release the lock so later cycles can still run.
-      const guard = setTimeout(() => { inFlight = false; }, 20000);
-      const done = () => { clearTimeout(guard); inFlight = false; };
+      lastPingAt = Date.now();
+      let settled = false;
+      const done = () => { if (settled) return; settled = true; clearTimeout(geoGuard); inFlight = false; };
+      // Safety net for a geolocation request that never answers (e.g. a
+      // permission prompt left open). Cleared as soon as a position arrives,
+      // so it never releases the lock while the POST itself is in flight.
+      const geoGuard = setTimeout(done, 60000);
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          clearTimeout(geoGuard);
           if (cancelled) return done();
           apiClient.post('/v2/collection-sync/location', { lat: pos.coords.latitude, lng: pos.coords.longitude })
             .catch(() => {})
-            .finally(done);
+            .finally(done); // released only when the POST settles
         },
         done, // denied/unavailable — silently skip this cycle, try again next interval
         { timeout: 5000, maximumAge: 20000 }
@@ -50,8 +55,9 @@ function useLocationPing() {
     }
     ping(); // first ping immediately on mount, not after waiting a full interval
     const id = setInterval(ping, LOCATION_PING_INTERVAL_MS);
-    // Hidden (screen off / other app): no pings; ping at once on return.
-    const onVisible = () => { if (!document.hidden) ping(); };
+    // Hidden (screen off / other app): no pings. On return, ping at once —
+    // but at most once per 25 s, so app switching cannot spam pings.
+    const onVisible = () => { if (!document.hidden && Date.now() - lastPingAt >= 25000) ping(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { cancelled = true; clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, []);

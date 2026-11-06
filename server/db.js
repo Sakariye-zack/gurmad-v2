@@ -1779,7 +1779,8 @@ async function runMigrations() {
   `);
   // Live trucks (Map): short-lived ping history behind "route today" and the
   // speed estimate. Same write gate as collector_locations (only while the
-  // collector owns an assigned/in_progress batch); rows older than 3 days
+  // collector is working a batch today — see lib/locationHistory.js
+  // activeWorkWhere); rows older than 3 days
   // are pruned by lib/locationHistory.js. TIMESTAMPTZ so "today" can be
   // taken in the company timezone without guessing the session timezone.
   await pool.query(`

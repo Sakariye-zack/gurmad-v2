@@ -28,4 +28,19 @@ async function recordLocationHistory(employeeId, lat, lng) {
   pruneLocationHistory().catch(() => {});
 }
 
-module.exports = { recordLocationHistory, pruneLocationHistory, RETENTION_DAYS };
+// "Working today" — the single rule for tracking (ping gate) and for what
+// the live map reports (truck, progress, batch list, district scope): the
+// collector is on a task that is not completed, of an assigned/in_progress
+// batch whose date window contains today's company-local date. Expects
+// aliases trc (task_resources), tk (tasks), b (batches); empExpr/todayExpr
+// are SQL expressions (e.g. '$1', '$2::date').
+function activeWorkWhere(empExpr, todayExpr) {
+  return `trc.resource_type = 'collector' AND trc.resource_id = ${empExpr}
+         AND b.status IN ('assigned', 'in_progress') AND tk.status <> 'completed'
+         AND b.start_date <= ${todayExpr} AND (b.end_date IS NULL OR b.end_date >= ${todayExpr})`;
+}
+const ACTIVE_WORK_FROM = `task_resources trc
+         JOIN tasks tk ON tk.id = trc.task_id
+         JOIN batches b ON b.id = tk.batch_id`;
+
+module.exports = { recordLocationHistory, pruneLocationHistory, activeWorkWhere, ACTIVE_WORK_FROM, RETENTION_DAYS };
