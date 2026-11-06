@@ -68,7 +68,8 @@ async function resolvePermissions(roleId, client = pool) {
 
 async function resolveAccessContext(userId, client = pool) {
   const userRes = await client.query(
-    `SELECT id, username, role, role_id, zone, is_active, token_version, auth_source
+    `SELECT id, username, role, role_id, zone, is_active, token_version, auth_source,
+            two_factor_enabled, must_change_password
      FROM v2_users WHERE id = $1`,
     [userId]
   );
@@ -116,6 +117,9 @@ async function resolveAccessContext(userId, client = pool) {
     isActive: user.is_active,
     tokenVersion: user.token_version,
     authSource: user.auth_source,
+    // Account security gates (middleware/auth.js) — additive fields.
+    twoFactorEnabled: !!user.two_factor_enabled,
+    mustChangePassword: !!user.must_change_password,
   };
 }
 

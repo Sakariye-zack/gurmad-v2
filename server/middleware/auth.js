@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { resolveAccessContext } = require('../lib/accessResolution');
+const { checkSession, evaluateSecurityGates } = require('../lib/accountSecurity');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -40,6 +41,13 @@ async function authenticateToken(req, res, next) {
     if (err) {
       return res.status(401).json({ error: { message: 'Invalid or expired token.', code: 'AUTH_INVALID' } });
     }
+    // A purpose-scoped token (e.g. the 5-minute '2fa_pending' token from
+    // POST /auth/login) is never a session token — without this check it
+    // would authenticate as a full session (tokenVersion ?? 0 matches a
+    // never-bumped account), bypassing the second factor entirely.
+    if (decoded && decoded.purpose !== undefined) {
+      return res.status(401).json({ error: { message: 'Invalid or expired token.', code: 'AUTH_INVALID' } });
+    }
     try {
       const ctx = await resolveAccessContext(decoded.id);
 
@@ -64,6 +72,18 @@ async function authenticateToken(req, res, next) {
         if (!ctx.authorized) {
           return res.status(403).json({ error: { message: 'You do not have permission to perform this action.', code: 'FORBIDDEN' } });
         }
+        // Account security — session revocation. A token carrying a
+        // `sid` is only valid while its user_sessions row is open. Tokens
+        // issued before sessions existed carry no sid and stay valid
+        // until their own expiry (deploy safety).
+        if (decoded.sid !== undefined && !(await checkSession(decoded.sid, ctx.userId))) {
+          return res.status(401).json({ error: { message: 'This session has been signed out.', code: 'SESSION_REVOKED' } });
+        }
+        // Forced password change / mandatory 2FA gates — only a small
+        // allow-list of routes (auth/*, my-permissions, ...) stays open
+        // until the user resolves them (lib/accountSecurity.js).
+        const gate = evaluateSecurityGates(ctx, req.originalUrl);
+        if (gate) return res.status(gate.status).json(gate.body);
         req.user = {
           id: ctx.userId,
           username: ctx.username,
@@ -74,6 +94,9 @@ async function authenticateToken(req, res, next) {
           // consumed only by GET /v2/auth/my-permissions today. Every
           // existing requireRole() call site ignores this entirely.
           permissions: ctx.permissions || [],
+          sid: decoded.sid || null,
+          twoFactorEnabled: ctx.twoFactorEnabled,
+          mustChangePassword: ctx.mustChangePassword,
         };
         return next();
       }
@@ -113,8 +136,11 @@ function requireRole(...roles) {
 // transition (Spec §6/§14), and vice versa. 24h lifetime, unchanged from
 // today — no approved decision calls for shortening it.
 const STAFF_TOKEN_TTL = '24h';
-function issueStaffToken({ id, username, role, zone, tokenVersion }) {
-  return jwt.sign({ id, username, role, zone, tokenVersion }, JWT_SECRET, { expiresIn: STAFF_TOKEN_TTL });
+// `sid` (account security): the user_sessions row this token belongs to.
+function issueStaffToken({ id, username, role, zone, tokenVersion, sid }) {
+  const claims = { id, username, role, zone, tokenVersion };
+  if (sid) claims.sid = sid;
+  return jwt.sign(claims, JWT_SECRET, { expiresIn: STAFF_TOKEN_TTL });
 }
 
 module.exports = { authenticateToken, requireRole, issueStaffToken, JWT_SECRET };

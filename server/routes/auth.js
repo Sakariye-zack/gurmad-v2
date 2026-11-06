@@ -8,6 +8,8 @@ const QRCode = require('qrcode');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, issueStaffToken, JWT_SECRET } = require('../middleware/auth');
 const { resolveAccessContext } = require('../lib/accessResolution');
+const { validatePassword, policyErrorBody } = require('../lib/passwordPolicy');
+const sec = require('../lib/accountSecurity');
 
 // User & Access Administration — Implementation Spec §16 (API Route
 // Inventory), §9 (Login Security). Directly mirrors
@@ -36,8 +38,18 @@ const BACKUP_CODE_COUNT = 8;
 const GENERIC_LOGIN_FAIL = { error: { message: 'Invalid username or password.', code: 'AUTH_INVALID' } };
 const GENERIC_RESET_RESPONSE = { data: { message: 'If an account exists for that username, password reset instructions have been generated.' } };
 
-function clientIp(req) {
-  return req.headers['x-forwarded-for']?.toString().split(',')[0].trim() || req.socket.remoteAddress || null;
+// req.ip — honours app.set('trust proxy', 1) (index.js), so this is the
+// real client IP behind nginx, not a spoofable X-Forwarded-For entry.
+const clientIp = sec.requestIp;
+
+// The one place a real staff session is created: a user_sessions row,
+// a token carrying its sid, and the login-history/new-device bookkeeping.
+async function completeLogin(req, user, ctx) {
+  const sid = await sec.createSession(req, user.id);
+  await sec.recordSuccessfulLogin(req, user);
+  const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: user.token_version, sid });
+  const flags = sec.securityFlags({ role: ctx.role, twoFactorEnabled: user.two_factor_enabled, mustChangePassword: user.must_change_password });
+  return { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName, ...flags } };
 }
 
 const authLimiter = rateLimit({
@@ -60,6 +72,7 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM v2_users WHERE username = $1', [username.trim()]);
     if (r.rows.length === 0) {
+      await sec.recordAuthEvent(req, { username: username.trim(), event: 'login_failed' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
     const user = r.rows[0];
@@ -74,10 +87,12 @@ router.post('/login', authLimiter, async (req, res) => {
 
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_failed', entityType: 'v2_user', entityId: user.id, after: { reason: 'locked' } });
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'locked' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
     if (!user.is_active) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_failed', entityType: 'v2_user', entityId: user.id, after: { reason: 'disabled' } });
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'login_failed' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
 
@@ -90,6 +105,7 @@ router.post('/login', authLimiter, async (req, res) => {
         actorId: user.id, actorUsername: user.username,
         action: lockUntil ? 'account_locked' : 'login_failed', entityType: 'v2_user', entityId: user.id,
       });
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: lockUntil ? 'locked' : 'login_failed' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
 
@@ -100,6 +116,7 @@ router.post('/login', authLimiter, async (req, res) => {
     const ctx = await resolveAccessContext(user.id);
     if (!ctx || !ctx.authorized) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_failed', entityType: 'v2_user', entityId: user.id, after: { reason: 'employee_inactive' } });
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'login_failed' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
 
@@ -121,8 +138,7 @@ router.post('/login', authLimiter, async (req, res) => {
 
     // token_version is NOT bumped on login (OD-3, approved) — a new
     // login/device is not itself a compromise signal.
-    const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: user.token_version });
-    return res.json({ data: { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName } } });
+    return res.json({ data: await completeLogin(req, user, ctx) });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Login failed.', code: 'INTERNAL' } });
   }
@@ -139,7 +155,7 @@ router.post('/login', authLimiter, async (req, res) => {
 router.get('/2fa/status', authenticateToken, async (req, res) => {
   try {
     const r = await pool.query('SELECT two_factor_enabled FROM v2_users WHERE id = $1', [req.user.id]);
-    return res.json({ data: { enabled: !!r.rows[0]?.two_factor_enabled } });
+    return res.json({ data: { enabled: !!r.rows[0]?.two_factor_enabled, required: sec.roleRequires2fa(req.user.role) } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to load 2FA status.', code: 'INTERNAL' } });
   }
@@ -206,12 +222,16 @@ router.post('/2fa/disable', authenticateToken, async (req, res) => {
   if (typeof password !== 'string' || !password) {
     return res.status(400).json({ error: { message: 'Your current password is required.', code: 'VALIDATION' } });
   }
+  if (sec.roleRequires2fa(req.user.role)) {
+    return res.status(403).json({ error: { message: 'Two-factor authentication is mandatory for your role and cannot be turned off.', code: 'TWO_FACTOR_MANDATORY' } });
+  }
   try {
     const r = await pool.query('SELECT password_hash FROM v2_users WHERE id = $1', [req.user.id]);
     const ok = await bcrypt.compare(password, r.rows[0]?.password_hash || '');
     if (!ok) return res.status(401).json({ error: { message: 'Incorrect password.', code: 'AUTH_INVALID' } });
     await pool.query(`UPDATE v2_users SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_backup_codes = '{}' WHERE id = $1`, [req.user.id]);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_disabled', entityType: 'v2_user', entityId: req.user.id });
+    await sec.notifySecurityEvent(req.user.id, 'security.2fa_disabled', 'Two-factor authentication was turned off for your account', null);
     return res.json({ data: { message: 'Two-factor authentication disabled.' } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to disable 2FA.', code: 'INTERNAL' } });
@@ -260,6 +280,7 @@ router.post('/2fa/verify-login', authLimiter, async (req, res) => {
 
     if (!ok) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_2fa_failed', entityType: 'v2_user', entityId: user.id });
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: '2fa_failed' });
       return res.status(401).json({ error: { message: 'Incorrect code.', code: 'AUTH_INVALID' } });
     }
 
@@ -270,10 +291,12 @@ router.post('/2fa/verify-login', authLimiter, async (req, res) => {
     }
 
     const ctx = await resolveAccessContext(user.id);
+    if (!ctx || !ctx.authorized) {
+      return res.status(401).json({ error: { message: 'Invalid token.', code: 'AUTH_INVALID' } });
+    }
     await pool.query('UPDATE v2_users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1', [user.id]);
     await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login', entityType: 'v2_user', entityId: user.id });
-    const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: user.token_version });
-    return res.json({ data: { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName } } });
+    return res.json({ data: await completeLogin(req, user, ctx) });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Verification failed.', code: 'INTERNAL' } });
   }
@@ -295,18 +318,26 @@ router.get('/my-permissions', authenticateToken, (req, res) => {
 // LOGOUT / LOGOUT-ALL
 // ==================================================================
 
-// A single-device logout has no server-side action beyond an audit
-// record — the token still naturally expires, and other devices must
-// remain logged in (same reasoning as the Customer Portal's own design).
+// A single-device logout revokes THIS device's session (its sid) —
+// other devices stay logged in. A pre-sessions token (no sid) has
+// nothing to revoke server-side and simply expires naturally.
 router.post('/logout', authenticateToken, async (req, res) => {
-  await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'logout', entityType: 'v2_user', entityId: req.user.id });
-  return res.json({ data: { message: 'Logged out.' } });
+  try {
+    if (req.user.sid) await sec.revokeSession(req.user.id, req.user.sid);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'logout', entityType: 'v2_user', entityId: req.user.id });
+    await sec.recordAuthEvent(req, { userId: req.user.id, username: req.user.username, event: 'logout' });
+    return res.json({ data: { message: 'Logged out.' } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to log out.', code: 'INTERNAL' } });
+  }
 });
 
 router.post('/logout-all', authenticateToken, async (req, res) => {
   try {
     await pool.query('UPDATE v2_users SET token_version = token_version + 1, updated_at = NOW() WHERE id = $1', [req.user.id]);
+    await sec.revokeAllSessions(req.user.id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'logout_all', entityType: 'v2_user', entityId: req.user.id });
+    await sec.recordAuthEvent(req, { userId: req.user.id, username: req.user.username, event: 'logout' });
     return res.json({ data: { message: 'Logged out of all devices.' } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to log out of all devices.', code: 'INTERNAL' } });
@@ -319,15 +350,20 @@ router.post('/logout-all', authenticateToken, async (req, res) => {
 
 router.post('/password/change', authenticateToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || newPassword.length < 8) {
-    return res.status(400).json({ error: { message: 'currentPassword and a newPassword of at least 8 characters are required.', code: 'VALIDATION' } });
+  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+    return res.status(400).json({ error: { message: 'currentPassword and newPassword are required.', code: 'VALIDATION' } });
   }
+  const policy = validatePassword(newPassword, req.user.username);
+  if (!policy.ok) return res.status(400).json(policyErrorBody(policy));
   try {
     const r = await pool.query('SELECT * FROM v2_users WHERE id = $1', [req.user.id]);
     const user = r.rows[0];
     if (!user) return res.status(404).json({ error: { message: 'Account not found.', code: 'NOT_FOUND' } });
     const ok = await bcrypt.compare(currentPassword, user.password_hash);
     if (!ok) return res.status(401).json({ error: { message: 'Current password is incorrect.', code: 'AUTH_INVALID' } });
+    if (await bcrypt.compare(newPassword, user.password_hash)) {
+      return res.status(400).json({ error: { message: 'The new password must be different from the current one.', code: 'VALIDATION', reasons: ['same_as_current'] } });
+    }
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     // OD-3: password change bumps token_version — invalidates every token
     // issued before this change, everywhere. Matches the Customer
@@ -335,13 +371,23 @@ router.post('/password/change', authenticateToken, async (req, res) => {
     // embedding the new version, so THIS device/request stays logged in
     // uninterrupted while every other outstanding token dies.
     const updated = await pool.query(
-      'UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, updated_at = NOW() WHERE id = $2 RETURNING token_version',
+      'UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2 RETURNING token_version',
       [newHash, user.id]
     );
+    // Every other session dies with the token_version bump — mark them
+    // revoked too so the Active Sessions list stays truthful. THIS
+    // device keeps its session (same sid, fresh 24h token). A
+    // pre-sessions token (no sid) gets a brand-new session here.
+    let sid = req.user.sid;
+    if (sid) await sec.extendSession(sid);
+    else sid = await sec.createSession(req, user.id);
+    await sec.revokeAllSessions(user.id, sid);
     const ctx = await resolveAccessContext(user.id);
-    const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: updated.rows[0].token_version });
+    const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: updated.rows[0].token_version, sid });
     await logAudit({ actorId: user.id, actorUsername: user.username, action: 'password_change', entityType: 'v2_user', entityId: user.id });
-    return res.json({ data: { message: 'Password changed. You remain signed in on this device — other devices will need to sign in again.', token } });
+    await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'password_changed' });
+    await sec.notifySecurityEvent(user.id, 'security.password_changed', 'Your password was changed', null);
+    return res.json({ data: { message: 'Password changed. You remain signed in on this device — other devices will need to sign in again.', token, ...sec.securityFlags({ role: ctx.role, twoFactorEnabled: ctx.twoFactorEnabled, mustChangePassword: false }) } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to change password.', code: 'INTERNAL' } });
   }
@@ -385,8 +431,8 @@ router.post('/password/reset/request', authLimiter, async (req, res) => {
 
 router.post('/password/reset/confirm', authLimiter, async (req, res) => {
   const { token, newPassword } = req.body || {};
-  if (typeof token !== 'string' || !token || typeof newPassword !== 'string' || newPassword.length < 8) {
-    return res.status(400).json({ error: { message: 'A valid token and a newPassword of at least 8 characters are required.', code: 'VALIDATION' } });
+  if (typeof token !== 'string' || !token || typeof newPassword !== 'string') {
+    return res.status(400).json({ error: { message: 'A valid token and a newPassword are required.', code: 'VALIDATION' } });
   }
   try {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -398,13 +444,63 @@ router.post('/password/reset/confirm', authLimiter, async (req, res) => {
       return res.status(400).json({ error: { message: 'This reset link is invalid or has expired.', code: 'RESET_INVALID' } });
     }
     const reset = r.rows[0];
+    const owner = await pool.query('SELECT username FROM v2_users WHERE id = $1', [reset.user_id]);
+    const policy = validatePassword(newPassword, owner.rows[0]?.username);
+    if (!policy.ok) return res.status(400).json(policyErrorBody(policy));
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    await pool.query('UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, failed_login_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = $2', [newHash, reset.user_id]);
+    await pool.query('UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, must_change_password = FALSE, failed_login_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = $2', [newHash, reset.user_id]);
     await pool.query('UPDATE v2_password_resets SET used_at = NOW() WHERE id = $1', [reset.id]);
+    await sec.revokeAllSessions(reset.user_id);
     await logAudit({ actorId: reset.user_id, action: 'password_reset', entityType: 'v2_user', entityId: reset.user_id, after: { stage: 'confirmed' } });
+    await sec.recordAuthEvent(req, { userId: reset.user_id, username: owner.rows[0]?.username, event: 'password_changed' });
+    await sec.notifySecurityEvent(reset.user_id, 'security.password_changed', 'Your password was reset', null);
     return res.json({ data: { message: 'Password reset. Please log in with your new password.' } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to reset password.', code: 'INTERNAL' } });
+  }
+});
+
+// ==================================================================
+// ACCOUNT SECURITY — status, login history, active sessions
+// ==================================================================
+
+// What the client needs to decide whether to force the Change Password
+// screen / the mandatory-2FA banner (survives a page reload, unlike the
+// login response). Reachable while either gate is active.
+router.get('/security-status', authenticateToken, (req, res) => {
+  // A not-yet-migrated (legacy-claims) user has no v2_users row, so the
+  // server gates never apply to them — report nothing pending.
+  if (req.user.twoFactorEnabled === undefined) {
+    return res.json({ data: { must_change_password: false, must_enroll_2fa: false, two_factor_required: false, two_factor_enabled: false } });
+  }
+  return res.json({ data: { ...sec.securityFlags({ role: req.user.role, twoFactorEnabled: req.user.twoFactorEnabled, mustChangePassword: req.user.mustChangePassword }), two_factor_enabled: !!req.user.twoFactorEnabled } });
+});
+
+router.get('/login-history', authenticateToken, async (req, res) => {
+  try {
+    return res.json({ data: await sec.loginHistory(req.user.id, 50) });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load login history.', code: 'INTERNAL' } });
+  }
+});
+
+router.get('/sessions', authenticateToken, async (req, res) => {
+  try {
+    return res.json({ data: await sec.listSessions(req.user.id, req.user.sid) });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load sessions.', code: 'INTERNAL' } });
+  }
+});
+
+// Own sessions only — a not-found-or-not-owned id is a 404 either way.
+router.post('/sessions/:id/revoke', authenticateToken, async (req, res) => {
+  try {
+    const ok = await sec.revokeSession(req.user.id, req.params.id);
+    if (!ok) return res.status(404).json({ error: { message: 'Session not found.', code: 'NOT_FOUND' } });
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'session_revoke', entityType: 'v2_user', entityId: req.user.id, after: { session_id: req.params.id } });
+    return res.json({ data: { message: 'Session signed out.', current: req.params.id === req.user.sid } });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to revoke session.', code: 'INTERNAL' } });
   }
 });
 

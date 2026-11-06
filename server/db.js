@@ -1951,6 +1951,43 @@ async function runMigrations() {
     FROM roles
     WHERE v2_users.role = roles.key AND v2_users.role_id IS NULL
   `);
+
+  // ============================================================
+  // Account security (feat/account-security) — fully additive.
+  // must_change_password defaults FALSE so every existing account keeps
+  // working unchanged; only admin-created users and admin password
+  // resets set it TRUE (routes/users.js).
+  // ============================================================
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // Login history. user_id is NULL for an unknown username attempt.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auth_events (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES v2_users(id) ON DELETE CASCADE,
+      username_attempted VARCHAR(100),
+      event VARCHAR(30) NOT NULL CHECK (event IN ('login_success', 'login_failed', 'locked', '2fa_failed', 'logout', 'password_changed')),
+      ip VARCHAR(64),
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_events_user_created ON auth_events(user_id, created_at DESC);`);
+  // Active sessions. The JWT carries `sid` = user_sessions.id; tokens
+  // issued before this table existed carry no sid and stay valid until
+  // their own expiry (middleware/auth.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id UUID PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP NOT NULL,
+      ip VARCHAR(64),
+      user_agent TEXT,
+      revoked_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id) WHERE revoked_at IS NULL;`);
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {

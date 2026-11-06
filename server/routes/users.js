@@ -7,6 +7,8 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sniffFileType } = require('../lib/fileSniff');
 const { rejectIfInfected } = require('../lib/virusScan');
+const { validatePassword, policyErrorBody } = require('../lib/passwordPolicy');
+const { revokeAllSessions, loginHistory } = require('../lib/accountSecurity');
 
 // User & Access Administration — Implementation Spec §16/§17. Admin-only
 // user-management surface (Preconditions §9's default, not separately
@@ -124,7 +126,7 @@ router.get('/', authenticateToken, requireRole('admin'), async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT u.id, u.username, u.full_name, u.role, u.zone, u.is_active, u.auth_source,
-              u.failed_login_count, u.locked_until, u.last_login_at, u.created_at,
+              u.failed_login_count, u.locked_until, u.last_login_at, u.created_at, u.two_factor_enabled, u.must_change_password,
               e.id AS employee_id, e.name AS employee_name, e.status AS employee_status
        FROM v2_users u
        LEFT JOIN employees e ON e.user_id = u.id
@@ -142,7 +144,7 @@ router.get('/:id', authenticateToken, requireRole('admin'), async (req, res) => 
   try {
     const r = await pool.query(
       `SELECT u.id, u.username, u.full_name, u.role, u.zone, u.is_active, u.auth_source,
-              u.failed_login_count, u.locked_until, u.last_login_at, u.created_at,
+              u.failed_login_count, u.locked_until, u.last_login_at, u.created_at, u.two_factor_enabled, u.must_change_password,
               e.id AS employee_id, e.name AS employee_name, e.status AS employee_status
        FROM v2_users u
        LEFT JOIN employees e ON e.user_id = u.id
@@ -164,7 +166,7 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
   const { username, password, full_name, role, role_id, zone, employee_id } = req.body || {};
   const errors = [];
   if (typeof username !== 'string' || !username.trim()) errors.push('username is required.');
-  if (typeof password !== 'string' || password.length < 8) errors.push('password (min 8 characters) is required.');
+  if (typeof password !== 'string' || !password) errors.push('password is required.');
   if (role === undefined && role_id === undefined) errors.push('role or role_id is required.');
   let employeeIdNum = null;
   if (employee_id !== undefined && employee_id !== null) {
@@ -172,6 +174,8 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
     if (employeeIdNum === null) errors.push('employee_id must be a positive integer or null.');
   }
   if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
+  const policy = validatePassword(password, username);
+  if (!policy.ok) return res.status(400).json(policyErrorBody(policy));
 
   const client = await pool.connect();
   try {
@@ -183,9 +187,11 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
     }
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const ins = await client.query(
-      `INSERT INTO v2_users (username, password_hash, full_name, role, role_id, zone, is_active, auth_source)
-       VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'v2')
-       RETURNING id, username, full_name, role, role_id, zone, is_active, auth_source, created_at`,
+      // must_change_password: the admin chose this password, so the user
+      // must replace it with their own on first sign-in.
+      `INSERT INTO v2_users (username, password_hash, full_name, role, role_id, zone, is_active, auth_source, must_change_password)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'v2', TRUE)
+       RETURNING id, username, full_name, role, role_id, zone, is_active, auth_source, must_change_password, created_at`,
       [username.trim(), passwordHash, full_name || null, roleAssignment.role, roleAssignment.role_id, zone || null]
     );
     const user = ins.rows[0];
@@ -273,6 +279,7 @@ router.put('/:id/disable', authenticateToken, requireRole('admin'), async (req, 
       [id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    await revokeAllSessions(id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'account_disable', entityType: 'v2_user', entityId: id });
     return res.json({ data: r.rows[0] });
   } catch (err) {
@@ -311,6 +318,7 @@ router.put('/:id/revoke', authenticateToken, requireRole('admin'), async (req, r
       [id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    await revokeAllSessions(id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'token_revoke', entityType: 'v2_user', entityId: id });
     return res.json({ data: r.rows[0] });
   } catch (err) {
@@ -329,22 +337,42 @@ router.put('/:id/password', authenticateToken, requireRole('admin'), async (req,
     return res.status(400).json({ error: { message: 'Use Account Security to change your own password.', code: 'VALIDATION' } });
   }
   const { password } = req.body || {};
-  if (typeof password !== 'string' || password.length < 8) {
-    return res.status(400).json({ error: { message: 'password (min 8 characters) is required.', code: 'VALIDATION' } });
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ error: { message: 'password is required.', code: 'VALIDATION' } });
   }
   try {
+    const target = await pool.query('SELECT username FROM v2_users WHERE id = $1', [id]);
+    if (target.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    const policy = validatePassword(password, target.rows[0].username);
+    if (!policy.ok) return res.status(400).json(policyErrorBody(policy));
     const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    // must_change_password: an admin-chosen password is temporary — the
+    // user must replace it on their next sign-in.
     const r = await pool.query(
-      `UPDATE v2_users SET password_hash = $1, token_version = token_version + 1,
+      `UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, must_change_password = TRUE,
               failed_login_count = 0, locked_until = NULL, updated_at = NOW()
        WHERE id = $2 RETURNING id, username`,
       [hash, id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    await revokeAllSessions(id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'password_reset_by_admin', entityType: 'v2_user', entityId: id });
     return res.json({ data: r.rows[0] });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to reset password.', code: 'INTERNAL' } });
+  }
+});
+
+// Account security — a user's sign-in history (last 50), admin-only.
+router.get('/:id/login-history', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+  try {
+    const u = await pool.query('SELECT id FROM v2_users WHERE id = $1', [id]);
+    if (u.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    return res.json({ data: await loginHistory(id, 50) });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to load login history.', code: 'INTERNAL' } });
   }
 });
 

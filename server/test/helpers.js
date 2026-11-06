@@ -10,10 +10,10 @@ if (process.env.DB_NAME !== 'gurmad_v2_test') throw new Error('Tests must run ag
 const PASSWORD = 'TestPass123!';
 const db = new Pool({ host: process.env.DB_HOST, port: process.env.DB_PORT, database: 'gurmad_v2_test', user: process.env.DB_USER, password: process.env.DB_PASSWORD });
 
-async function api(method, url, { token, body } = {}) {
+async function api(method, url, { token, body, headers } = {}) {
   const res = await fetch(BASE + '/api/v2' + url, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(headers || {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   let json = null;
