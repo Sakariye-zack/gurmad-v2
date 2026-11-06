@@ -607,6 +607,10 @@ router.post('/fuel', authenticateToken, requireRole(...CREATE_ROLES), async (req
   }
 });
 
+// Edit-accountability columns shared by list + detail reads.
+const FUEL_EDIT_COLS = `(SELECT COALESCE(NULLIF(u.full_name, ''), u.username) FROM v2_users u WHERE u.id = f.edited_by) AS edited_by_name,
+  (SELECT COUNT(*)::int FROM truck_fuel_record_revisions rv WHERE rv.fuel_record_id = f.id) AS revision_count`;
+
 // Shared filter set for the fuel list and its CSV export.
 async function queryFuel(req) {
   const myZoneId = await resolveUserZoneId(req.user);
@@ -635,7 +639,7 @@ async function queryFuel(req) {
   }
   const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const result = await pool.query(
-    `SELECT f.*, t.plate_number FROM truck_fuel_records f JOIN trucks t ON f.truck_id = t.id ${whereSql} ORDER BY f.record_date DESC, f.created_at DESC`,
+    `SELECT f.*, t.plate_number, ${FUEL_EDIT_COLS} FROM truck_fuel_records f JOIN trucks t ON f.truck_id = t.id ${whereSql} ORDER BY f.record_date DESC, f.created_at DESC`,
     params
   );
   let rows = await annotateFuelRows(result.rows);
@@ -677,7 +681,7 @@ router.get('/fuel.csv', authenticateToken, requireRole(...VIEW_ROLES), async (re
 
 async function loadFuelForUser(user, id) {
   const result = await pool.query(
-    `SELECT f.*, t.plate_number, t.zone_id AS truck_zone_id FROM truck_fuel_records f JOIN trucks t ON f.truck_id = t.id WHERE f.id = $1`,
+    `SELECT f.*, t.plate_number, t.zone_id AS truck_zone_id, ${FUEL_EDIT_COLS} FROM truck_fuel_records f JOIN trucks t ON f.truck_id = t.id WHERE f.id = $1`,
     [id]
   );
   if (result.rows.length === 0) return { error: { status: 404, message: 'Fuel record not found.', code: 'NOT_FOUND' } };
@@ -698,6 +702,145 @@ router.get('/fuel/:id', authenticateToken, requireRole(...VIEW_ROLES), async (re
     res.json({ data: annotated });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load fuel record.', code: 'INTERNAL' } });
+  }
+});
+
+// ---------- Fuel edit + revision history ----------
+
+const EDITABLE_FUEL_FIELDS = ['truck_id', 'record_date', 'liters', 'cost', 'currency', 'price_per_liter', 'odometer_reading', 'station', 'notes'];
+const NUMERIC_FUEL_FIELDS = ['liters', 'cost', 'price_per_liter'];
+const isBlank = (v) => v === undefined || v === null || v === '';
+
+// Validates a partial edit (absent field = unchanged) with the same rules as
+// create, returning the full next-state of the editable fields.
+function parseFuelEdit(body, cur) {
+  const next = {
+    truck_id: cur.truck_id, record_date: dateStr(cur.record_date), liters: Number(cur.liters), cost: Number(cur.cost),
+    currency: cur.currency, price_per_liter: cur.price_per_liter === null ? null : Number(cur.price_per_liter),
+    odometer_reading: cur.odometer_reading, station: cur.station, notes: cur.notes,
+  };
+  if (body.truck_id !== undefined) {
+    const tid = parseStrictId(body.truck_id);
+    if (tid === null) return { error: 'truck_id must be a valid truck id.' };
+    next.truck_id = tid;
+  }
+  if (body.record_date !== undefined) {
+    if (typeof body.record_date !== 'string' || !isValidDate(body.record_date)) return { error: 'record_date must be YYYY-MM-DD.' };
+    next.record_date = body.record_date;
+  }
+  if (body.liters !== undefined) {
+    const l = parseFloat(body.liters);
+    if (isNaN(l) || l <= 0) return { error: 'liters must be a positive number.' };
+    next.liters = l;
+  }
+  if (body.currency !== undefined) {
+    if (!CURRENCIES.includes(body.currency)) return { error: 'currency must be USD or SLSH.' };
+    next.currency = body.currency;
+  }
+  let pplGiven = false;
+  if (body.price_per_liter !== undefined && !isBlank(body.price_per_liter)) {
+    const p = parseFloat(body.price_per_liter);
+    if (isNaN(p) || p <= 0) return { error: 'price_per_liter must be a positive number.' };
+    next.price_per_liter = p; pplGiven = true;
+  }
+  const costGiven = !isBlank(body.cost);
+  if (costGiven) {
+    const c = parseFloat(body.cost);
+    if (isNaN(c) || c <= 0) return { error: 'cost must be a positive number.' };
+    next.cost = c;
+  } else if (pplGiven) {
+    next.cost = round(next.price_per_liter * next.liters);
+  }
+  if (!(next.cost > 0)) return { error: 'cost must be a positive number.' };
+  // Keep price/L consistent with cost unless the caller set it explicitly.
+  if (!pplGiven && (costGiven || body.liters !== undefined || next.price_per_liter === null)) next.price_per_liter = round(next.cost / next.liters, 4);
+  if (body.odometer_reading !== undefined) {
+    if (isBlank(body.odometer_reading)) next.odometer_reading = null;
+    else {
+      const o = parseInt(body.odometer_reading, 10);
+      if (isNaN(o) || o < 0) return { error: 'odometer_reading must be a non-negative integer.' };
+      next.odometer_reading = o;
+    }
+  }
+  if (body.station !== undefined) next.station = isBlank(body.station) ? null : (String(body.station).trim().slice(0, 150) || null);
+  if (body.notes !== undefined) next.notes = isBlank(body.notes) ? null : (String(body.notes).trim() || null);
+  return { next };
+}
+
+function sameFuelValue(k, a, b) {
+  if (NUMERIC_FUEL_FIELDS.includes(k) && a !== null && b !== null && a !== undefined && b !== undefined) return Math.abs(Number(a) - Number(b)) < 0.00005;
+  return (a ?? null) === (b ?? null);
+}
+
+router.put('/fuel/:id', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return bad(res, 'Invalid fuel record id.');
+  const body = req.body || {};
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (reason.length < 3 || reason.length > 300) return bad(res, 'reason is required (3-300 characters).');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const lock = await client.query('SELECT f.*, t.zone_id AS truck_zone_id FROM truck_fuel_records f JOIN trucks t ON t.id = f.truck_id WHERE f.id = $1 FOR UPDATE OF f', [id]);
+    if (!lock.rows[0]) { await client.query('ROLLBACK'); return bad(res, 'Fuel record not found.', 404, 'NOT_FOUND'); }
+    const cur = lock.rows[0];
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && cur.truck_zone_id !== null && cur.truck_zone_id !== myZoneId) {
+      await client.query('ROLLBACK'); return bad(res, 'You do not have access to this record.', 403, 'FORBIDDEN');
+    }
+    const parsed = parseFuelEdit(body, cur);
+    if (parsed.error) { await client.query('ROLLBACK'); return bad(res, parsed.error); }
+    const next = parsed.next;
+    let snapshotZone = cur.zone_snapshot_id;
+    if (next.truck_id !== cur.truck_id) {
+      const access = await loadTruckWithAccessCheck(req.user, next.truck_id);
+      if (access.error) { await client.query('ROLLBACK'); return bad(res, access.error.message, access.error.status, access.error.code); }
+      snapshotZone = access.truck.zone_id;
+    }
+    const before = {}; const after = {};
+    for (const k of EDITABLE_FUEL_FIELDS) {
+      let was = k === 'record_date' ? dateStr(cur[k]) : cur[k];
+      if (NUMERIC_FUEL_FIELDS.includes(k) && was !== null && was !== undefined) was = Number(was);
+      if (!sameFuelValue(k, was, next[k])) { before[k] = was ?? null; after[k] = next[k]; }
+    }
+    if (cur.currency_confirmed === false) { before.currency_confirmed = false; after.currency_confirmed = true; }
+    if (Object.keys(after).length === 0) { await client.query('ROLLBACK'); return bad(res, 'No changes to save.', 400, 'NO_CHANGES'); }
+
+    await client.query(
+      `UPDATE truck_fuel_records SET truck_id=$1, record_date=$2, liters=$3, cost=$4, currency=$5, price_per_liter=$6, odometer_reading=$7,
+         station=$8, notes=$9, zone_snapshot_id=$10, currency_confirmed=TRUE, edited_at=CURRENT_TIMESTAMP, edited_by=$11 WHERE id=$12`,
+      [next.truck_id, next.record_date, next.liters, next.cost, next.currency, next.price_per_liter, next.odometer_reading, next.station, next.notes, snapshotZone, req.user.id, id]);
+    await client.query(
+      `INSERT INTO truck_fuel_record_revisions (fuel_record_id, changed_by, reason, before, after) VALUES ($1,$2,$3,$4,$5)`,
+      [id, req.user.id, reason, JSON.stringify(before), JSON.stringify(after)]);
+    await client.query('COMMIT');
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'fleet.fuel.update', entityType: 'truck_fuel_record', entityId: id, before: { ...before, reason }, after });
+    const r = await loadFuelForUser(req.user, id);
+    const [annotated] = await annotateFuelRows([r.row]);
+    res.json({ data: annotated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: { message: 'Failed to update fuel record.', code: 'INTERNAL' } });
+  } finally {
+    client.release();
+  }
+});
+
+router.get('/fuel/:id/revisions', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return bad(res, 'Invalid fuel record id.');
+  try {
+    const r = await loadFuelForUser(req.user, id);
+    if (r.error) return bad(res, r.error.message, r.error.status, r.error.code);
+    const rows = await pool.query(
+      `SELECT rv.id, rv.fuel_record_id, rv.changed_by, rv.changed_at, rv.reason, rv.before, rv.after,
+              COALESCE(NULLIF(u.full_name, ''), u.username) AS changed_by_name
+       FROM truck_fuel_record_revisions rv LEFT JOIN v2_users u ON u.id = rv.changed_by
+       WHERE rv.fuel_record_id = $1 ORDER BY rv.changed_at DESC, rv.id DESC`, [id]);
+    res.json({ data: rows.rows });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load revisions.', code: 'INTERNAL' } });
   }
 });
 
