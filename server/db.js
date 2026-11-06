@@ -2042,13 +2042,20 @@ async function runFleetUpgradeMigrations() {
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
+      await c.query(`SET LOCAL lock_timeout = '5s'`);
       await c.query('LOCK TABLE truck_fuel_records IN SHARE ROW EXCLUSIVE MODE');
-      await c.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS currency_confirmed BOOLEAN NOT NULL DEFAULT TRUE`);
-      await c.query(`UPDATE truck_fuel_records SET currency_confirmed = FALSE`);
+      // Another booting instance may have added it while we waited.
+      const again = await c.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'truck_fuel_records' AND column_name = 'currency_confirmed'`);
+      if (!again.rows.length) {
+        await c.query(`ALTER TABLE truck_fuel_records ADD COLUMN currency_confirmed BOOLEAN NOT NULL DEFAULT TRUE`);
+        await c.query(`UPDATE truck_fuel_records SET currency_confirmed = FALSE`);
+      }
       await c.query('COMMIT');
     } catch (err) {
       await c.query('ROLLBACK').catch(() => {});
-      throw err;
+      if (err.code !== '55P03') throw err; // lock_not_available
+      console.warn('[fleet migration] truck_fuel_records is busy; legacy-currency migration skipped, will retry on next boot.');
     } finally {
       c.release();
     }

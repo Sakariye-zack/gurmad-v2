@@ -80,18 +80,29 @@ function computeEfficiency(records) {
     // than it (odometer_backwards = needs_review) or more than 2000 km past
     // it (odometer_suspect, e.g. a 120,000 typed for 12,000) never becomes
     // the base for the next fill, so one typo cannot poison the series.
+    // Re-anchoring: a flagged reading becomes the base once the NEXT reading
+    // is plausible relative to it (>= it and <= it + 2000 km) — a genuine
+    // long gap or a replaced odometer is then accepted after one flag, while
+    // a one-off typo is not (the next reading only fits the old base).
     const dated = [...list].sort(byRecordDate);
     const series = [];
     let base = null;
+    let pending = null; // last flagged reading, candidate new base
     for (const cur of dated) {
-      const e = { needs_review: false, odometer_suspect: false, prev_odometer: base ? Number(base.odometer_reading) : null, km_since_last: null, km_per_liter: null };
-      out.set(cur.id, e);
       const odo = Number(cur.odometer_reading);
-      if (!base) { base = cur; continue; }
-      const km = odo - Number(base.odometer_reading);
-      if (km < 0) { e.needs_review = true; continue; }
-      if (km > MAX_KM_BETWEEN_FILLS) { e.odometer_suspect = true; continue; }
+      let ref = base;
+      if (pending) {
+        const k = odo - Number(pending.odometer_reading);
+        if (k >= 0 && k <= MAX_KM_BETWEEN_FILLS) ref = pending;
+      }
+      const e = { needs_review: false, odometer_suspect: false, prev_odometer: ref ? Number(ref.odometer_reading) : null, km_since_last: null, km_per_liter: null };
+      out.set(cur.id, e);
+      if (!ref) { base = cur; continue; }
+      const km = odo - Number(ref.odometer_reading);
+      if (km < 0) { e.needs_review = true; pending = cur; continue; }
+      if (km > MAX_KM_BETWEEN_FILLS) { e.odometer_suspect = true; pending = cur; continue; }
       base = cur;
+      pending = null;
       if (km === 0) continue;
       e.km_since_last = km;
       e.km_per_liter = num(cur.liters) > 0 ? km / Number(cur.liters) : null;

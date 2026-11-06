@@ -89,9 +89,40 @@ test('fleet: efficiency ignores an odometer typo as base, flags high km/L and su
   const back = await log(12100, 40, 6);
   assert.ok(back.flags.includes('odometer_backwards'));
   const next = await log(12600, 40, 7);
-  assert.equal(next.km_since_last, 400, 'a backwards reading is not used as the base');
+  assert.equal(next.km_since_last, 500, 'plausible after the flagged reading -> re-anchored on it');
+  assert.deepEqual(next.flags, []);
   const high = await log(13600, 40, 8); // 25 km/L vs median 10
   assert.deepEqual(high.flags, ['high_efficiency']);
+});
+
+test('fleet: efficiency re-anchors after a genuine gap or a replaced odometer', async () => {
+  const w = await setupWorld();
+  const { day } = await today();
+  const series = async (readings) => {
+    const t = await mkTruck(w.zoneA.id);
+    const out = [];
+    for (let i = 0; i < readings.length; i++) {
+      const r = await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 40, cost: 40, odometer_reading: readings[i], record_date: addDays(day, i - 20) } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+    }
+    const list = await api('GET', `/fleet/fuel?truck_id=${t.id}`, { token: w.tokens.admin });
+    for (const odo of readings) out.push(list.data.find((x) => x.odometer_reading === odo));
+    return out;
+  };
+  // Missed logs: a real 2500 km gap.
+  const gap = await series([10000, 10400, 10800, 13300, 13700, 14100]);
+  assert.deepEqual(gap[3].flags, ['odometer_suspect']);
+  assert.deepEqual(gap[4].flags, []);
+  assert.equal(gap[4].km_since_last, 400);
+  assert.equal(gap[5].km_per_liter, 10);
+  assert.deepEqual(gap[5].flags, []);
+  // Odometer replaced: reads 500 after 120,000.
+  const rep = await series([119200, 119600, 120000, 500, 900, 1300]);
+  assert.deepEqual(rep[3].flags, ['odometer_backwards']);
+  assert.deepEqual(rep[4].flags, []);
+  assert.equal(rep[4].km_since_last, 400);
+  assert.deepEqual(rep[5].flags, []);
+  assert.equal(rep[5].km_per_liter, 10);
 });
 
 test('fleet: fuel currency, price/L, efficiency, low-efficiency + odometer flags, totals, CSV', async () => {

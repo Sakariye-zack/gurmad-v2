@@ -309,6 +309,15 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
       // Re-read under a row lock so two concurrent edits cannot both decide
       // the assignment changed from the same stale value.
       const locked = (await client.query('SELECT * FROM trucks WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!locked) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: { message: 'Truck not found.', code: 'NOT_FOUND' } });
+      }
+      // Authorize against the locked (current) row, not the earlier read.
+      if (!(await assertZoneWritable(req.user, locked.zone_id))) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: { message: 'You do not have access to this truck.', code: 'FORBIDDEN' } });
+      }
       const result = await client.query(
         `UPDATE trucks SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
         values
@@ -329,6 +338,7 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     } finally {
       client.release();
     }
+    if (!truck) return; // response already sent (404/403 inside the transaction)
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.update', entityType: 'truck', entityId: truck.id, before: current, after: truck });
     res.json({ data: truck });
   } catch (err) {
