@@ -44,11 +44,18 @@ export default function LoginScreen() {
     setError(null);
     try {
       const result = await login(username, password, '');
-      if (result.require2FA) {
+      if (result.require2FA || result.requiresV2TwoFA) {
         setError(t('collector.login.no2fa'));
         return;
       }
       await deriveKeyFromToken(apiClient.getToken());
+      // Account security: a role that must enrol in 2FA (admin/gudoomiye)
+      // is sent to Account Security; a forced password change is handled
+      // by CollectorRequireAuth on the /collector route itself.
+      if (result.user?.must_enroll_2fa && !result.user?.must_change_password) {
+        navigate('/account/security');
+        return;
+      }
       navigate('/collector');
     } catch (err) {
       setError(err.message || t('collector.reauth.failed'));

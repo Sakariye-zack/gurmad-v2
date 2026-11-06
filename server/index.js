@@ -71,6 +71,10 @@ const searchRouter = require('./routes/search');
 
 const app = express();
 
+// Account security — opt-in proxy trust (TRUST_PROXY=1, loopback hops
+// only). Off by default; see lib/trustProxy.js before enabling.
+require('./lib/trustProxy').configureTrustProxy(app);
+
 // Production Readiness (T) — O-7/Security Hardening, Implementation Spec
 // §5/§9. Standard security-header set (CSP left at helmet's own safe
 // default; this is an API-only backend serving JSON, not HTML, so the

@@ -1951,6 +1951,103 @@ async function runMigrations() {
     FROM roles
     WHERE v2_users.role = roles.key AND v2_users.role_id IS NULL
   `);
+
+  // ============================================================
+  // Account security (feat/account-security) — fully additive.
+  // must_change_password defaults FALSE so every existing account keeps
+  // working unchanged; only admin-created users and admin password
+  // resets set it TRUE (routes/users.js).
+  // ============================================================
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // Login history. user_id is NULL for an unknown username attempt.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auth_events (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES v2_users(id) ON DELETE CASCADE,
+      username_attempted VARCHAR(100),
+      event VARCHAR(30) NOT NULL,
+      ip VARCHAR(64),
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_events_user_created ON auth_events(user_id, created_at DESC);`);
+  await ensureAuthEventsCheck();
+  // Consecutive wrong 2FA codes at verify-login; 5 locks the account
+  // exactly like the password lockout (locked_until, 15 minutes).
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS two_factor_failed_count INTEGER NOT NULL DEFAULT 0;`);
+  // Active sessions. The JWT carries `sid` = user_sessions.id; tokens
+  // issued before this table existed carry no sid and stay valid until
+  // their own expiry (middleware/auth.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id UUID PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP NOT NULL,
+      ip VARCHAR(64),
+      user_agent TEXT,
+      revoked_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id) WHERE revoked_at IS NULL;`);
+}
+
+// Allowed auth_events.event values. Adding one here is picked up on the
+// next boot by ensureAuthEventsCheck() below.
+const AUTH_EVENT_TYPES = ['login_success', 'login_failed', 'locked', '2fa_failed', '2fa_enabled', '2fa_reset_by_admin', 'logout', 'password_changed'];
+
+// The CHECK constraint is replaced ONLY when its current value list
+// differs from AUTH_EVENT_TYPES — a normal boot touches nothing. The
+// replacement runs in one transaction behind a self-conflicting table
+// lock, re-reading the definition after the lock is held, so two
+// processes booting at once can't both drop/add (the loser sees the
+// winner's constraint and does nothing). It is added NOT VALID (no full
+// scan under the exclusive lock) and validated afterwards under the
+// weaker SHARE UPDATE EXCLUSIVE lock.
+function constraintValues(def) {
+  if (!def) return null;
+  return [...def.matchAll(/'([^']*)'/g)].map((m) => m[1]).sort();
+}
+async function readAuthEventsCheck(client) {
+  const r = await client.query(
+    `SELECT pg_get_constraintdef(c.oid) AS def, c.convalidated
+     FROM pg_constraint c
+     WHERE c.conrelid = 'auth_events'::regclass AND c.conname = 'auth_events_event_check'`
+  );
+  return r.rows[0] || null;
+}
+async function ensureAuthEventsCheck() {
+  const wanted = [...AUTH_EVENT_TYPES].sort();
+  const same = (row) => row && JSON.stringify(constraintValues(row.def)) === JSON.stringify(wanted);
+  const current = await readAuthEventsCheck(pool);
+  if (same(current) && current.convalidated) return;
+
+  const client = await pool.connect();
+  let needsValidate = false;
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE auth_events IN SHARE ROW EXCLUSIVE MODE');
+    const locked = await readAuthEventsCheck(client);
+    if (!same(locked)) {
+      const list = AUTH_EVENT_TYPES.map((e) => `'${e.replace(/'/g, "''")}'`).join(', ');
+      await client.query('ALTER TABLE auth_events DROP CONSTRAINT IF EXISTS auth_events_event_check');
+      await client.query(`ALTER TABLE auth_events ADD CONSTRAINT auth_events_event_check CHECK (event IN (${list})) NOT VALID`);
+      needsValidate = true;
+    } else {
+      needsValidate = !locked.convalidated;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  if (needsValidate) {
+    await pool.query('ALTER TABLE auth_events VALIDATE CONSTRAINT auth_events_event_check');
+  }
 }
 
 async function logPortalAudit({ portalAccountId = null, customerId = null, action, ipAddress = null, details = null }) {
@@ -1969,4 +2066,4 @@ async function logAudit({ actorId, actorUsername, action, entityType, entityId, 
   );
 }
 
-module.exports = { pool, runMigrations, logAudit, logPortalAudit };
+module.exports = { pool, runMigrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };

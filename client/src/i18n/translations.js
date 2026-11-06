@@ -18,6 +18,7 @@ import { PHASE2D } from './phase2d.js';
 import { PHASE2C } from './phase2c.js';
 import { PHASE2B } from './phase2b.js';
 import { PHASE2 } from './phase2.js';
+import { ACCOUNT_SECURITY } from './accountSecurity.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -28,6 +29,7 @@ export const TRANSLATIONS = {
   ...PHASE2C,
   ...PHASE2B,
   ...PHASE2,
+  ...ACCOUNT_SECURITY,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

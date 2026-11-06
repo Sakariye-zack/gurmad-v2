@@ -9,6 +9,17 @@ function getToken() {
   return localStorage.getItem('gurmad_v2_token');
 }
 
+// Account security — the server answers 403 PASSWORD_CHANGE_REQUIRED /
+// TWO_FACTOR_REQUIRED (gated account) or 401 SESSION_REVOKED (this
+// device was signed out remotely). AuthContext listens for this event
+// and reacts once, app-wide, instead of every page handling it.
+export const AUTH_GATE_EVENT = 'gurmad:auth-gate';
+const GATE_CODES = ['PASSWORD_CHANGE_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_REVOKED'];
+function notifyAuthGate(code) {
+  if (!GATE_CODES.includes(code)) return;
+  try { window.dispatchEvent(new CustomEvent(AUTH_GATE_EVENT, { detail: { code } })); } catch { /* non-browser */ }
+}
+
 async function request(path, options = {}) {
   const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
@@ -35,6 +46,8 @@ async function request(path, options = {}) {
     const err = new Error(message);
     err.status = res.status;
     err.code = errBody && typeof errBody === 'object' ? errBody.code : undefined;
+    err.reasons = errBody && typeof errBody === 'object' ? errBody.reasons : undefined;
+    notifyAuthGate(err.code);
     throw err;
   }
   return body;
@@ -58,6 +71,8 @@ async function uploadFile(path, formData) {
     const message = (errBody && typeof errBody === 'object' ? errBody.message : errBody) || `Request failed (${res.status})`;
     const err = new Error(message);
     err.status = res.status;
+    err.code = errBody && typeof errBody === 'object' ? errBody.code : undefined;
+    notifyAuthGate(err.code);
     throw err;
   }
   return body;

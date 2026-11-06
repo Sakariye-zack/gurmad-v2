@@ -55,6 +55,15 @@ export function useResetUserPassword() {
   });
 }
 
+// Account security — admin clears another user's 2FA (lost device + codes).
+export function useResetUserTwoFactor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiClient.post(`/v2/users/${id}/2fa/reset`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'users'] }),
+  });
+}
+
 export function useRevokeUser() {
   const qc = useQueryClient();
   return useMutation({

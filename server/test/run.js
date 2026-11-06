@@ -40,7 +40,14 @@ async function waitHealthy(base, tries = 60) {
 (async () => {
   await recreateDb();
   const clam = await stubclamd.start(Number(CLAM_PORT));
-  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  // MANDATORY_2FA_ROLES: the mandatory-2FA gate (lib/accountSecurity.js)
+  // defaults to admin + gudoomiye, which would gate every existing test's
+  // t_admin/t_gudoomiye. The suite points it at a dedicated test-only role
+  // instead; security.test.js exercises the gate end-to-end with a user of
+  // that role and unit-tests the production default separately.
+  // TRUST_PROXY=1: the opt-in proxy trust (lib/trustProxy.js) is on for the
+  // suite so the X-Forwarded-For handling is exercised; off by default in prod.
+  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });
@@ -49,7 +56,7 @@ async function waitHealthy(base, tries = 60) {
   let code = 1;
   try {
     await waitHealthy(base);
-    const files = require('fs').readdirSync(__dirname).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(__dirname, f));
+    const files = require('fs').readdirSync(__dirname).filter((f) => f.endsWith('.test.js') && (!process.env.TEST_ONLY || f.includes(process.env.TEST_ONLY))).sort().map((f) => path.join(__dirname, f));
     code = await new Promise((resolve) => {
       const t = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files], { env: { ...env, TEST_BASE: base }, stdio: 'inherit' });
       t.on('exit', (c) => resolve(c ?? 1));
