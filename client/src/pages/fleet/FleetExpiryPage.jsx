@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { PageHeader, DataTable, StatusBadge, FilterBar } from '../../components/ui/index.js';
+import { PageHeader, DataTable, StatusBadge, FilterBar, Button } from '../../components/ui/index.js';
+import RoleGate from '../../components/RoleGate.jsx';
 import { useFleetExpiry } from '../../hooks/useFleet.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
+import { RenewModal, fmtDate, cellStyle, selectStyle } from './fleetShared.jsx';
 
 const STATUS_MAP = { expired: 'danger', expiring_soon: 'warning' };
-const DOC_LABELS = { insurance: 'Insurance', registration: 'Registration', road_tax: 'Road Tax' };
 
 export default function FleetExpiryPage() {
+  const { t } = useI18n();
   const [statusFilter, setStatusFilter] = useState('');
+  const [renewTarget, setRenewTarget] = useState(null);
   const { data, isLoading, error, refetch } = useFleetExpiry({ status: statusFilter || undefined });
   const rows = data?.data || [];
 
@@ -29,24 +33,24 @@ export default function FleetExpiryPage() {
         onRetry={refetch}
         isEmpty={!isLoading && !error && rows.length === 0}
         emptyTitle="No documents expiring or expired"
-        columns={[{ label: 'Truck' }, { label: 'Zone' }, { label: 'Document' }, { label: 'Expiry Date' }, { label: 'Status' }]}
+        columns={[{ label: t('fleet.common.truck') }, { label: t('fleet.common.zone') }, { label: t('fleet.common.document') }, { label: t('fleet.common.expiry') }, { label: t('fleet.m.status') }, { label: t('fleet.common.actions') }]}
       >
         {rows.map((r, i) => (
           <tr key={`${r.truck_id}-${r.document_type}-${i}`} style={{ borderBottom: '1px solid var(--border)' }}>
             <td style={cellStyle}><strong>{r.plate_number}</strong></td>
             <td style={cellStyle}>{r.zone_name || '—'}</td>
-            <td style={cellStyle}>{DOC_LABELS[r.document_type] || r.document_type}</td>
-            <td style={cellStyle} className="tabular-nums">{new Date(r.expiry_date).toLocaleDateString()}</td>
+            <td style={cellStyle}>{t(`fleet.doc.${r.document_type}`, r.document_type)}</td>
+            <td style={cellStyle} className="tabular-nums">{fmtDate(r.expiry_date)}</td>
             <td style={cellStyle}><StatusBadge status={r.status} map={STATUS_MAP} /></td>
+            <td style={cellStyle}>
+              <RoleGate roles={['admin', 'gudoomiye']}>
+                <Button variant="secondary" onClick={() => setRenewTarget({ truckId: r.truck_id, document: r.document_type, plate: r.plate_number, current: r.expiry_date })}>{t('fleet.renew')}</Button>
+              </RoleGate>
+            </td>
           </tr>
         ))}
       </DataTable>
+      <RenewModal target={renewTarget} onClose={() => setRenewTarget(null)} />
     </div>
   );
 }
-
-const cellStyle = { padding: '12px 14px' };
-const selectStyle = {
-  padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-  background: 'var(--surface)', color: 'var(--text)', fontSize: '13px',
-};

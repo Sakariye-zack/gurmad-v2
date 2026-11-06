@@ -37,6 +37,7 @@ const PayrollHistoryPage = lazy(() => import('../pages/payroll/PayrollHistoryPag
 const FleetMaintenanceListPage = lazy(() => import('../pages/fleet/FleetMaintenanceListPage.jsx'));
 const FleetFuelListPage = lazy(() => import('../pages/fleet/FleetFuelListPage.jsx'));
 const FleetExpiryPage = lazy(() => import('../pages/fleet/FleetExpiryPage.jsx'));
+const FleetOverviewPage = lazy(() => import('../pages/fleet/FleetOverviewPage.jsx'));
 // Master Functional Completion Program — Phase 3: Procurement.
 const SuppliersListPage = lazy(() => import('../pages/procurement/SuppliersListPage.jsx'));
 const SupplierDetailPage = lazy(() => import('../pages/procurement/SupplierDetailPage.jsx'));
@@ -179,6 +180,7 @@ export const router = createBrowserRouter([
       { path: 'payroll/records/:id', element: <PayrollRecordDetailPage /> },
       { path: 'payroll/history', element: <PayrollHistoryPage /> },
       // Phase 2 Fleet Management — nav entry added in Sidebar.jsx (Phase 8 audit).
+      { path: 'fleet', element: <FleetOverviewPage /> },
       { path: 'fleet/maintenance', element: <FleetMaintenanceListPage /> },
       { path: 'fleet/fuel', element: <FleetFuelListPage /> },
       { path: 'fleet/expiry', element: <FleetExpiryPage /> },

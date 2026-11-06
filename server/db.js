@@ -2009,6 +2009,149 @@ async function runMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id) WHERE revoked_at IS NULL;`);
+  await runFleetUpgradeMigrations();
+}
+
+// Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance
+// workflow, truck photo, assignment history, expiry alerts, GPS trips).
+// Additive and idempotent: ADD COLUMN IF NOT EXISTS, CREATE TABLE IF NOT
+// EXISTS, and every constraint change guarded by a pg_constraint lookup.
+async function addCheckIfMissing(table, name, expr) {
+  const r = await pool.query(
+    `SELECT 1 FROM pg_constraint WHERE conrelid = $1::regclass AND conname = $2`, [table, name]);
+  if (r.rows.length) return;
+  await pool.query(`ALTER TABLE ${table} ADD CONSTRAINT ${name} CHECK (${expr})`);
+}
+
+async function runFleetUpgradeMigrations() {
+  // Fuel: currency, price per liter, station, receipt file.
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS currency VARCHAR(4) NOT NULL DEFAULT 'USD';`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS price_per_liter NUMERIC(14,4);`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS station VARCHAR(150);`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS receipt_storage_path TEXT;`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS receipt_original_filename VARCHAR(255);`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS receipt_mime_type VARCHAR(100);`);
+  await addCheckIfMissing('truck_fuel_records', 'truck_fuel_records_currency_check', `currency IN ('USD', 'SLSH')`);
+  // Rows logged before currency existed defaulted to 'USD', but nobody knows
+  // whether those amounts were USD or SLSH: mark exactly those rows
+  // unconfirmed, once, when the flag column is first created. New rows are
+  // always confirmed.
+  const hasConfirmed = await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'truck_fuel_records' AND column_name = 'currency_confirmed'`);
+  if (!hasConfirmed.rows.length) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(`SET LOCAL lock_timeout = '5s'`);
+      await c.query('LOCK TABLE truck_fuel_records IN SHARE ROW EXCLUSIVE MODE');
+      // Another booting instance may have added it while we waited.
+      const again = await c.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'truck_fuel_records' AND column_name = 'currency_confirmed'`);
+      if (!again.rows.length) {
+        await c.query(`ALTER TABLE truck_fuel_records ADD COLUMN currency_confirmed BOOLEAN NOT NULL DEFAULT TRUE`);
+        await c.query(`UPDATE truck_fuel_records SET currency_confirmed = FALSE`);
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      if (err.code !== '55P03') throw err; // lock_not_available
+      console.warn('[fleet migration] truck_fuel_records is busy; legacy-currency migration skipped, will retry on next boot.');
+    } finally {
+      c.release();
+    }
+  }
+
+  // Maintenance: status workflow. Existing rows default to 'completed'
+  // (they were all finished jobs); completed_at is backfilled from created_at.
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'completed';`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS scheduled_date DATE;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS odometer_at_service INTEGER;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS next_service_km INTEGER;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS interval_km INTEGER;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS interval_days INTEGER;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS parts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS currency VARCHAR(4) NOT NULL DEFAULT 'USD';`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS receipt_storage_path TEXT;`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS receipt_original_filename VARCHAR(255);`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS receipt_mime_type VARCHAR(100);`);
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;`);
+  await pool.query(`UPDATE truck_maintenance_records SET completed_at = created_at WHERE status = 'completed' AND completed_at IS NULL;`);
+  await addCheckIfMissing('truck_maintenance_records', 'truck_maintenance_records_status_check', `status IN ('scheduled', 'in_progress', 'completed')`);
+  await addCheckIfMissing('truck_maintenance_records', 'truck_maintenance_records_currency_check', `currency IN ('USD', 'SLSH')`);
+  await addCheckIfMissing('truck_maintenance_records', 'truck_maintenance_records_cost_nonneg_check', 'cost >= 0');
+  // Relax the original inline CHECK (cost > 0) so a scheduled job can carry
+  // cost 0 — dropped ONLY when its definition is exactly that rule. The route
+  // still requires cost > 0 for a completed job.
+  const oldChecks = await pool.query(
+    `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+     WHERE conrelid = 'truck_maintenance_records'::regclass AND contype = 'c'`);
+  for (const c of oldChecks.rows) {
+    if (c.conname === 'truck_maintenance_records_cost_nonneg_check' || !/\bcost\b/.test(c.def)) continue;
+    if (/^CHECK \(\(cost > \(?0\)?(::numeric)?\)\)$/.test(c.def)) {
+      await pool.query(`ALTER TABLE truck_maintenance_records DROP CONSTRAINT ${c.conname}`);
+    } else {
+      console.warn(`[fleet migration] left maintenance cost constraint ${c.conname} in place (unexpected definition: ${c.def}); scheduled jobs with cost 0 may be rejected.`);
+    }
+  }
+  // Truck status before a job put it into maintenance (restored on completion).
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS truck_status_before VARCHAR(20);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_maintenance_status ON truck_maintenance_records(truck_id, status);`);
+
+  // Truck photo.
+  await pool.query(`ALTER TABLE trucks ADD COLUMN IF NOT EXISTS photo_storage_path TEXT;`);
+  await pool.query(`ALTER TABLE trucks ADD COLUMN IF NOT EXISTS photo_mime_type VARCHAR(100);`);
+
+  // Collector/driver assignment history, written by PUT /trucks/:id.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS truck_assignment_history (
+      id SERIAL PRIMARY KEY,
+      truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+      collector_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      driver_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      from_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      to_at TIMESTAMPTZ,
+      changed_by INTEGER
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_assignment_history_truck ON truck_assignment_history(truck_id, from_at DESC);`);
+  // Seed the current assignment for trucks that have none recorded yet.
+  await pool.query(`
+    INSERT INTO truck_assignment_history (truck_id, collector_id, driver_id, from_at)
+    SELECT t.id, t.collector_id, t.driver_id, COALESCE(t.updated_at, t.created_at, NOW())
+    FROM trucks t
+    WHERE (t.collector_id IS NOT NULL OR t.driver_id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM truck_assignment_history h WHERE h.truck_id = t.id);
+  `);
+
+  // One row per alert already sent (document expiry thresholds, maintenance
+  // due per record per day) so the hourly monitor never repeats itself.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fleet_alerts_sent (
+      id SERIAL PRIMARY KEY,
+      truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+      kind VARCHAR(40) NOT NULL,
+      ref_id INTEGER NOT NULL DEFAULT 0,
+      threshold INTEGER NOT NULL DEFAULT 0,
+      for_date DATE NOT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (truck_id, kind, ref_id, threshold, for_date)
+    );
+  `);
+
+  // GPS distance per truck per company-local day (materialised hourly).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS truck_daily_distance (
+      id SERIAL PRIMARY KEY,
+      truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+      day DATE NOT NULL,
+      km NUMERIC(10,2) NOT NULL DEFAULT 0,
+      points INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (truck_id, day)
+    );
+  `);
 }
 
 // Allowed auth_events.event values. Adding one here is picked up on the
