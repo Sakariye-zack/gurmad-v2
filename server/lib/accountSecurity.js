@@ -51,6 +51,8 @@ const PASSWORD_CHANGE_ALLOWED = [
   ['GET', /^\/api\/v2\/auth\/my-permissions$/],
   ['GET', /^\/api\/v2\/auth\/security-status$/],
   ['GET', /^\/api\/v2\/settings\/company(\/.*)?$/],
+  // Own avatar (top bar): read-only and harmless; blocking it only produced console 403s.
+  ['GET', /^\/api\/v2\/users\/me\/avatar$/],
 ];
 const TWO_FACTOR_ALLOWED = [
   ['GET', /^\/api\/v2\/auth\/2fa\/status$/],
@@ -63,6 +65,7 @@ const TWO_FACTOR_ALLOWED = [
   ['GET', /^\/api\/v2\/auth\/login-history$/],
   ['GET', /^\/api\/v2\/settings\/company(\/.*)?$/],
   ['GET', /^\/api\/v2\/staff-notifications(\/.*)?$/],
+  ['GET', /^\/api\/v2\/users\/me\/avatar$/],
 ];
 function allowed(list, method, path) {
   const m = (method || 'GET').toUpperCase();
