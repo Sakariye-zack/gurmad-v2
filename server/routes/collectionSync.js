@@ -8,6 +8,7 @@ const { sniffFileType } = require('../lib/fileSniff');
 const { putFile, getFileStream, fileExists } = require('../lib/documentStorage');
 const logger = require('../lib/logger');
 const { rejectIfInfected } = require('../lib/virusScan');
+const { recordLocationHistory } = require('../lib/locationHistory');
 
 const router = express.Router();
 
@@ -160,6 +161,9 @@ router.post('/location', requireRole('collector', 'admin'), async (req, res) => 
        ON CONFLICT (employee_id) DO UPDATE SET lat = $2, lng = $3, recorded_at = CURRENT_TIMESTAMP`,
       [employeeId, lat, lng]
     );
+    // Live trucks: also append to the short-lived history ("route today",
+    // speed estimate) — lib/locationHistory.js prunes rows older than 3 days.
+    await recordLocationHistory(employeeId, lat, lng);
     res.json({ data: { recorded: true } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to record location.', code: 'INTERNAL' } });

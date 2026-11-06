@@ -1777,6 +1777,22 @@ async function runMigrations() {
       recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  // Live trucks (Map): short-lived ping history behind "route today" and the
+  // speed estimate. Same write gate as collector_locations (only while the
+  // collector owns an assigned/in_progress batch); rows older than 3 days
+  // are pruned by lib/locationHistory.js. TIMESTAMPTZ so "today" can be
+  // taken in the company timezone without guessing the session timezone.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collector_location_history (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      lat NUMERIC(10,6) NOT NULL,
+      lng NUMERIC(10,6) NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_collector_location_history_emp_time ON collector_location_history(employee_id, recorded_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_collector_location_history_time ON collector_location_history(recorded_at);`);
 
   // General staff Todo/Task tracker (user-requested, disambiguated from
   // the Collection Cycles/Batches 'tasks' table above, which is a
