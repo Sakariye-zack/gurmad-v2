@@ -2060,10 +2060,15 @@ async function runFleetUpgradeMigrations() {
     `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
      WHERE conrelid = 'truck_maintenance_records'::regclass AND contype = 'c'`);
   for (const c of oldChecks.rows) {
-    if (c.conname !== 'truck_maintenance_records_cost_nonneg_check' && /^CHECK \(\(cost > \(?0\)?(::numeric)?\)\)$/.test(c.def)) {
+    if (c.conname === 'truck_maintenance_records_cost_nonneg_check' || !/\bcost\b/.test(c.def)) continue;
+    if (/^CHECK \(\(cost > \(?0\)?(::numeric)?\)\)$/.test(c.def)) {
       await pool.query(`ALTER TABLE truck_maintenance_records DROP CONSTRAINT ${c.conname}`);
+    } else {
+      console.warn(`[fleet migration] left maintenance cost constraint ${c.conname} in place (unexpected definition: ${c.def}); scheduled jobs with cost 0 may be rejected.`);
     }
   }
+  // Truck status before a job put it into maintenance (restored on completion).
+  await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS truck_status_before VARCHAR(20);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_truck_maintenance_status ON truck_maintenance_records(truck_id, status);`);
 
   // Truck photo.

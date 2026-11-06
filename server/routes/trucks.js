@@ -306,12 +306,15 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     let truck;
     try {
       await client.query('BEGIN');
+      // Re-read under a row lock so two concurrent edits cannot both decide
+      // the assignment changed from the same stale value.
+      const locked = (await client.query('SELECT * FROM trucks WHERE id = $1 FOR UPDATE', [id])).rows[0];
       const result = await client.query(
         `UPDATE trucks SET ${setSql}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length} RETURNING *`,
         values
       );
       truck = result.rows[0];
-      if (truck.collector_id !== current.collector_id || truck.driver_id !== current.driver_id) {
+      if (truck.collector_id !== locked.collector_id || truck.driver_id !== locked.driver_id) {
         await client.query('UPDATE truck_assignment_history SET to_at = NOW() WHERE truck_id = $1 AND to_at IS NULL', [id]);
         if (truck.collector_id || truck.driver_id) {
           await client.query(
@@ -418,6 +421,7 @@ router.put('/:id/renew', authenticateToken, requireRole(...WRITE_ROLES), async (
     if (!existing.rows[0]) return bad(res, 'Truck not found.', 404, 'NOT_FOUND');
     const current = existing.rows[0];
     if (!(await assertZoneWritable(req.user, current.zone_id))) return bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN');
+    if (current.status === 'retired') return bad(res, 'This truck is Retired — its documents cannot be renewed.', 409, 'RETIRED_TERMINAL');
     const r = await pool.query(`UPDATE trucks SET ${col} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`, [newExpiry, id]);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.document_renew', entityType: 'truck', entityId: id,
       before: { document: req.body.document, expiry: current[col] }, after: { document: req.body.document, expiry: newExpiry } });
@@ -427,18 +431,31 @@ router.put('/:id/renew', authenticateToken, requireRole(...WRITE_ROLES), async (
   }
 });
 
-router.post('/:id/photo', authenticateToken, requireRole(...WRITE_ROLES), uploads.single(uploads.photoUpload), async (req, res) => {
+// Scope check before multer writes anything.
+async function preloadWritableTruck(req, res, next) {
   const id = parseStrictId(req.params.id);
-  if (id === null) { uploads.discard(req); return bad(res, 'Invalid truck id.'); }
+  if (id === null) return bad(res, 'Invalid truck id.');
+  try {
+    const existing = await pool.query('SELECT id, zone_id FROM trucks WHERE id = $1', [id]);
+    if (!existing.rows[0]) return bad(res, 'Truck not found.', 404, 'NOT_FOUND');
+    if (!(await assertZoneWritable(req.user, existing.rows[0].zone_id))) return bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN');
+    req.truckId = id;
+    next();
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to save truck photo.', code: 'INTERNAL' } });
+  }
+}
+
+// A replaced photo's file is kept on disk (never deleted); both paths are audited.
+router.post('/:id/photo', authenticateToken, requireRole(...WRITE_ROLES), preloadWritableTruck, uploads.single(uploads.photoUpload), async (req, res) => {
+  const id = req.truckId;
   if (await uploads.rejectBadFile(req, res, { kindsLabel: 'JPEG, PNG or WEBP', label: 'truck_photo' })) return;
   try {
-    const existing = await pool.query('SELECT id, zone_id, photo_storage_path FROM trucks WHERE id = $1', [id]);
-    if (!existing.rows[0]) { uploads.discard(req); return bad(res, 'Truck not found.', 404, 'NOT_FOUND'); }
-    if (!(await assertZoneWritable(req.user, existing.rows[0].zone_id))) { uploads.discard(req); return bad(res, 'You do not have access to this truck.', 403, 'FORBIDDEN'); }
+    const prev = await pool.query('SELECT photo_storage_path FROM trucks WHERE id = $1', [id]);
     await pool.query('UPDATE trucks SET photo_storage_path = $1, photo_mime_type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [req.file.filename, req.file.mimetype, id]);
-    const old = existing.rows[0].photo_storage_path;
-    if (old && old !== req.file.filename) uploads.removeStored(old);
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.photo_update', entityType: 'truck', entityId: id, before: null, after: { mime: req.file.mimetype } });
+    const old = prev.rows[0]?.photo_storage_path || null;
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck.photo_update', entityType: 'truck', entityId: id,
+      before: old ? { photo: old } : null, after: { photo: req.file.filename, mime: req.file.mimetype } });
     res.json({ data: { id, photo_url: `/v2/trucks/${id}/photo` } });
   } catch (err) {
     uploads.discard(req);

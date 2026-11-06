@@ -8,6 +8,8 @@ const { getTimezone, localParts } = require('./autoBilling');
 // distance trips. Pure helpers are exported for unit use.
 
 const LOW_EFFICIENCY_RATIO = 0.6; // km/L below 60% of the truck's 90-day median
+const HIGH_EFFICIENCY_RATIO = 2; // km/L above 2x the median: likely a missed fill / odometer error
+const MAX_KM_BETWEEN_FILLS = 2000; // more than this since the last trusted reading = odometer_suspect
 const MEDIAN_WINDOW_DAYS = 90;
 const MEDIAN_MIN_SAMPLES = 3;
 const DUE_DAYS = 7;
@@ -74,24 +76,25 @@ function computeEfficiency(records) {
     byTruck.get(r.truck_id).push(r);
   }
   for (const list of byTruck.values()) {
-    // Existing advisory check (unchanged rule): odometer lower than the
-    // truck's previous ENTERED reading.
-    const created = [...list].sort(byCreated);
-    for (let i = 0; i < created.length; i++) {
-      const prev = i > 0 ? created[i - 1] : null;
-      out.set(created[i].id, { needs_review: !!prev && Number(created[i].odometer_reading) < Number(prev.odometer_reading) });
-    }
-    // Efficiency: in fill-date order, km since the previous fill / liters now.
+    // Fill-date order. `base` is the last TRUSTED reading: a reading lower
+    // than it (odometer_backwards = needs_review) or more than 2000 km past
+    // it (odometer_suspect, e.g. a 120,000 typed for 12,000) never becomes
+    // the base for the next fill, so one typo cannot poison the series.
     const dated = [...list].sort(byRecordDate);
     const series = [];
-    for (let i = 0; i < dated.length; i++) {
-      const cur = dated[i];
-      const prev = i > 0 ? dated[i - 1] : null;
-      const e = out.get(cur.id);
-      e.prev_odometer = prev ? Number(prev.odometer_reading) : null;
-      const km = prev ? Number(cur.odometer_reading) - Number(prev.odometer_reading) : null;
-      e.km_since_last = km !== null && km > 0 ? km : null;
-      e.km_per_liter = e.km_since_last && num(cur.liters) > 0 ? e.km_since_last / Number(cur.liters) : null;
+    let base = null;
+    for (const cur of dated) {
+      const e = { needs_review: false, odometer_suspect: false, prev_odometer: base ? Number(base.odometer_reading) : null, km_since_last: null, km_per_liter: null };
+      out.set(cur.id, e);
+      const odo = Number(cur.odometer_reading);
+      if (!base) { base = cur; continue; }
+      const km = odo - Number(base.odometer_reading);
+      if (km < 0) { e.needs_review = true; continue; }
+      if (km > MAX_KM_BETWEEN_FILLS) { e.odometer_suspect = true; continue; }
+      base = cur;
+      if (km === 0) continue;
+      e.km_since_last = km;
+      e.km_per_liter = num(cur.liters) > 0 ? km / Number(cur.liters) : null;
       if (e.km_per_liter !== null) series.push({ date: dateStr(cur.record_date), kpl: e.km_per_liter, id: cur.id });
     }
     for (const s of series) {
@@ -99,6 +102,7 @@ function computeEfficiency(records) {
       const e = out.get(s.id);
       e.median_km_per_liter = window.length >= MEDIAN_MIN_SAMPLES ? median(window) : null;
       e.low_efficiency = e.median_km_per_liter !== null && s.kpl < LOW_EFFICIENCY_RATIO * e.median_km_per_liter;
+      e.high_efficiency = e.median_km_per_liter !== null && s.kpl > HIGH_EFFICIENCY_RATIO * e.median_km_per_liter;
     }
   }
   return out;
@@ -124,7 +128,9 @@ async function annotateFuelRows(rows, client = pool, { rate } = {}) {
     const ppl = num(row.price_per_liter) ?? (liters ? num(row.cost) / liters : null);
     const flags = [];
     if (e.needs_review) flags.push('odometer_backwards');
+    if (e.odometer_suspect) flags.push('odometer_suspect');
     if (e.low_efficiency) flags.push('low_efficiency');
+    if (e.high_efficiency) flags.push('high_efficiency');
     const { receipt_storage_path: receiptPath, ...rest } = row;
     return {
       ...rest,
@@ -224,21 +230,32 @@ function haversineMeters(a, b) {
 const NOISE_JUMP_M = 2000;
 const NOISE_WINDOW_S = 30;
 const GAP_S = 600;
+const MIN_MOVE_M = 25;
+const MAX_SPEED_KMH = 150;
 
 // Sum of segment lengths over time-ordered points {lat, lng, t (epoch s)}.
-// A jump > 2 km within 30 s is GPS noise: that point is dropped and the
-// previous good point stays the anchor. A gap > 10 min is not counted (the
-// phone was off / not tracking) but the anchor moves on.
+// Rules (the anchor is the last point counted):
+//  - a gap > 10 min since the previous received point is not counted (phone
+//    off / not tracking); the anchor restarts there;
+//  - a point implying > 150 km/h from the anchor (whatever the gap), or a
+//    jump > 2 km within 30 s, is GPS noise and is dropped;
+//  - a move < 25 m from the anchor is jitter (parked truck): not counted,
+//    the anchor stays.
 function distanceKm(points) {
   let meters = 0;
   let used = 0;
   let anchor = null;
+  let last = null;
   for (const p of points) {
-    if (!anchor) { anchor = p; used = 1; continue; }
+    if (!anchor) { anchor = p; last = p; used = 1; continue; }
+    if (p.t - last.t > GAP_S) { anchor = p; last = p; used += 1; continue; }
     const dt = p.t - anchor.t;
     const d = haversineMeters(anchor, p);
-    if (dt <= NOISE_WINDOW_S && d > NOISE_JUMP_M) continue; // noise
-    if (dt <= GAP_S) meters += d;
+    if (dt <= NOISE_WINDOW_S && d > NOISE_JUMP_M) continue;
+    if (dt <= 0 ? d > MIN_MOVE_M : (d / dt) * 3.6 > MAX_SPEED_KMH) continue;
+    last = p;
+    if (d < MIN_MOVE_M) continue;
+    meters += d;
     anchor = p;
     used += 1;
   }

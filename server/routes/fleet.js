@@ -53,11 +53,16 @@ async function loadTruckWithAccessCheck(user, truckId) {
   if (r.rows.length === 0) return { error: { status: 404, message: 'Truck not found.', code: 'NOT_FOUND' } };
   const truck = r.rows[0];
   const myZoneId = await resolveUserZoneId(user);
-  if (myZoneId !== null && truck.zone_id !== myZoneId) {
+  // Company-wide (no-zone) trucks are visible to zone-scoped roles, same as
+  // GET /trucks and the overview.
+  if (myZoneId !== null && truck.zone_id !== null && truck.zone_id !== myZoneId) {
     return { error: { status: 403, message: 'You do not have access to this truck.', code: 'FORBIDDEN' } };
   }
   return { truck };
 }
+
+// Live status (last seen) is Map-level information: same roles as routes/map.js.
+const LIVE_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashiers'];
 
 function optInt(body, key, errors, { min = 0 } = {}) {
   const v = body[key];
@@ -132,18 +137,34 @@ function presentMaintenance(row, next) {
 }
 
 // Moves the truck's lifecycle status as a side effect of a maintenance job
-// (inside the caller's transaction). Retired is terminal and never touched.
-async function syncTruckStatus(client, truckId, target, actor, excludeRecordId) {
+// (inside the caller's transaction).
+//  start: only an 'active' truck goes to 'maintenance'; the previous status
+//         is remembered on the job (truck_status_before).
+//  finish: when no other job is still in progress and the truck is still in
+//         'maintenance', restore the status a job remembered.
+// Retired / inactive trucks are never moved.
+async function syncTruckStatus(client, truckId, phase, recordId) {
   const t = (await client.query('SELECT id, status FROM trucks WHERE id = $1 FOR UPDATE', [truckId])).rows[0];
-  if (!t || t.status === 'retired' || t.status === target) return null;
-  if (target === 'active') {
-    if (t.status !== 'maintenance') return null; // only return a truck to service that maintenance took out
-    const other = await client.query(
-      `SELECT 1 FROM truck_maintenance_records WHERE truck_id = $1 AND status = 'in_progress' AND id <> $2 LIMIT 1`, [truckId, excludeRecordId]);
-    if (other.rows.length) return null;
+  if (!t) return null;
+  if (phase === 'start') {
+    if (t.status !== 'active') return null;
+    await client.query('UPDATE truck_maintenance_records SET truck_status_before = $1 WHERE id = $2', [t.status, recordId]);
+    await client.query(`UPDATE trucks SET status = 'maintenance', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [truckId]);
+    return { before: t.status, after: 'maintenance' };
   }
-  await client.query('UPDATE trucks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [target, truckId]);
-  return { before: t.status, after: target, actor };
+  if (t.status !== 'maintenance') return null;
+  const other = await client.query(
+    `SELECT 1 FROM truck_maintenance_records WHERE truck_id = $1 AND status = 'in_progress' AND id <> $2 LIMIT 1`, [truckId, recordId]);
+  if (other.rows.length) return null;
+  const prev = await client.query(
+    `SELECT truck_status_before FROM truck_maintenance_records
+     WHERE truck_id = $1 AND truck_status_before IS NOT NULL
+       AND (id = $2 OR completed_at >= (SELECT started_at FROM truck_maintenance_records WHERE id = $2))
+     ORDER BY (id = $2) DESC, started_at DESC NULLS LAST, id DESC LIMIT 1`, [truckId, recordId]);
+  const restore = prev.rows[0]?.truck_status_before;
+  if (!restore || restore === 'maintenance' || restore === 'retired') return null;
+  await client.query('UPDATE trucks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [restore, truckId]);
+  return { before: 'maintenance', after: restore };
 }
 
 async function auditTruckStatus(change, truckId, req, recordId) {
@@ -183,6 +204,7 @@ router.get('/overview', authenticateToken, requireRole(...VIEW_ROLES), async (re
     const trucks = trucksRes.rows;
     const ids = trucks.map((t) => t.id);
     const rate = await currentRate();
+    const canSeeLive = LIVE_ROLES.includes((req.user.role || '').toLowerCase());
 
     const [fuelRes, maintRes, distRes, liveRes, next] = await Promise.all([
       pool.query(
@@ -201,7 +223,8 @@ router.get('/overview', authenticateToken, requireRole(...VIEW_ROLES), async (re
         [ids, monthStart, nextMonth]),
       // Live status (map logic): the truck's collector/driver, or the
       // collector working a task with this truck today; freshest ping wins.
-      pool.query(
+      // Only for the Map roles — everyone else gets live: null.
+      !canSeeLive ? Promise.resolve({ rows: [] }) : pool.query(
         `WITH cand AS (
            SELECT id AS truck_id, collector_id AS emp FROM trucks WHERE id = ANY($1::int[]) AND collector_id IS NOT NULL
            UNION SELECT id, driver_id FROM trucks WHERE id = ANY($1::int[]) AND driver_id IS NOT NULL
@@ -272,7 +295,7 @@ router.get('/overview', authenticateToken, requireRole(...VIEW_ROLES), async (re
         next_maintenance: nm && { record_id: nm.record_id, description: nm.description, next_service_date: nm.next_service_date, next_service_km: nm.next_service_km,
           current_odometer: nm.current_odometer, days_remaining: nm.days_remaining, km_remaining: nm.km_remaining, due: nm.due, due_reasons: nm.due_reasons },
         nearest_document: docs[0] || null,
-        live: {
+        live: !canSeeLive ? null : {
           status: secs === null ? 'no_signal' : secs < 120 ? 'live' : secs < 600 ? 'idle' : 'offline',
           seconds_ago: secs, last_seen_at: live ? live.last_seen_at : null,
         },
@@ -316,6 +339,7 @@ router.post('/maintenance', authenticateToken, requireRole(...CREATE_ROLES), asy
   try {
     const access = await loadTruckWithAccessCheck(req.user, truckId);
     if (access.error) return bad(res, access.error.message, access.error.status, access.error.code);
+    if (access.truck.status === 'retired') return bad(res, 'This truck is Retired — no new maintenance can be logged.', 409, 'RETIRED_TERMINAL');
 
     const tz = await getTimezone();
     const today = localParts(new Date(), tz).date;
@@ -337,7 +361,8 @@ router.post('/maintenance', authenticateToken, requireRole(...CREATE_ROLES), asy
        JSON.stringify(parts), data.currency || 'USD']
     );
     const record = inserted.rows[0];
-    const change = status === 'in_progress' ? await syncTruckStatus(client, truckId, 'maintenance', req.user.id, record.id) : null;
+    const change = status === 'in_progress' ? await syncTruckStatus(client, truckId, 'start', record.id) : null;
+    if (change) record.truck_status_before = change.before;
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck_maintenance_record.create', entityType: 'truck_maintenance_record', entityId: record.id, before: null, after: record });
     await auditTruckStatus(change, truckId, req, record.id);
@@ -355,7 +380,7 @@ router.get('/maintenance', authenticateToken, requireRole(...VIEW_ROLES), async 
     const myZoneId = await resolveUserZoneId(req.user);
     const params = [];
     const filters = [];
-    if (myZoneId !== null) { params.push(myZoneId); filters.push(`t.zone_id = $${params.length}`); }
+    if (myZoneId !== null) { params.push(myZoneId); filters.push(`(t.zone_id = $${params.length} OR t.zone_id IS NULL)`); }
     if (req.query.truck_id) {
       const tid = parseStrictId(req.query.truck_id);
       if (tid === null) return bad(res, 'Invalid truck_id.');
@@ -399,7 +424,7 @@ async function loadMaintenanceForUser(user, id) {
   );
   if (result.rows.length === 0) return { error: { status: 404, message: 'Maintenance record not found.', code: 'NOT_FOUND' } };
   const myZoneId = await resolveUserZoneId(user);
-  if (myZoneId !== null && result.rows[0].truck_zone_id !== myZoneId) {
+  if (myZoneId !== null && result.rows[0].truck_zone_id !== null && result.rows[0].truck_zone_id !== myZoneId) {
     return { error: { status: 403, message: 'You do not have access to this record.', code: 'FORBIDDEN' } };
   }
   return { row: result.rows[0] };
@@ -466,7 +491,7 @@ router.put('/maintenance/:id/status', authenticateToken, requireRole(...CREATE_R
       [status, next.started_at, next.completed_at || null, next.cost, JSON.stringify(next.parts || []), next.currency, next.provider,
        next.scheduled_date, next.odometer_at_service, next.next_service_km, next.interval_km, next.interval_days, next.next_service_date, id]
     );
-    change = await syncTruckStatus(client, cur.truck_id, status === 'in_progress' ? 'maintenance' : 'active', req.user.id, id);
+    change = await syncTruckStatus(client, cur.truck_id, status === 'in_progress' ? 'start' : 'finish', id);
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck_maintenance_record.status_change', entityType: 'truck_maintenance_record', entityId: id,
       before: { status: cur.status, cost: cur.cost }, after: { status, cost: upd.rows[0].cost } });
@@ -484,21 +509,34 @@ router.put('/maintenance/:id/status', authenticateToken, requireRole(...CREATE_R
 // ---------- Receipts (fuel + maintenance) ----------
 
 function receiptRoutes(kind, table, loader) {
-  router.post(`/${kind}/:id/receipt`, authenticateToken, requireRole(...CREATE_ROLES), uploads.single(uploads.receiptUpload), async (req, res) => {
+  const exists = () => ({ status: 409, message: 'A receipt is already attached to this record. Receipts are evidence and cannot be replaced.', code: 'RECEIPT_EXISTS' });
+  // Ownership/scope + "already has a receipt" are checked BEFORE multer
+  // writes or the scanner reads anything.
+  const preload = async (req, res, next) => {
     const id = parseStrictId(req.params.id);
-    if (id === null) { uploads.discard(req); return bad(res, 'Invalid record id.'); }
-    if (await uploads.rejectBadFile(req, res, { kindsLabel: RECEIPT_KINDS, label: `${kind}_receipt` })) return;
+    if (id === null) return bad(res, 'Invalid record id.');
     try {
       const r = await loader(req.user, id);
-      if (r.error) { uploads.discard(req); return bad(res, r.error.message, r.error.status, r.error.code); }
-      const old = r.row.receipt_storage_path;
-      await pool.query(
-        `UPDATE ${table} SET receipt_storage_path = $1, receipt_original_filename = $2, receipt_mime_type = $3 WHERE id = $4`,
+      if (r.error) return bad(res, r.error.message, r.error.status, r.error.code);
+      if (r.row.receipt_storage_path) { const e = exists(); return bad(res, e.message, e.status, e.code); }
+      req.fleetRecordId = id;
+      next();
+    } catch (err) {
+      res.status(500).json({ error: { message: 'Failed to save receipt.', code: 'INTERNAL' } });
+    }
+  };
+  router.post(`/${kind}/:id/receipt`, authenticateToken, requireRole(...CREATE_ROLES), preload, uploads.single(uploads.receiptUpload), async (req, res) => {
+    const id = req.fleetRecordId;
+    if (await uploads.rejectBadFile(req, res, { kindsLabel: RECEIPT_KINDS, label: `${kind}_receipt` })) return;
+    try {
+      // Conditional write: a concurrent upload that won the race keeps its file.
+      const upd = await pool.query(
+        `UPDATE ${table} SET receipt_storage_path = $1, receipt_original_filename = $2, receipt_mime_type = $3 WHERE id = $4 AND receipt_storage_path IS NULL`,
         [req.file.filename, String(req.file.originalname || '').slice(0, 255), req.file.mimetype, id]
       );
-      if (old && old !== req.file.filename) uploads.removeStored(old);
+      if (upd.rowCount === 0) { uploads.discard(req); const e = exists(); return bad(res, e.message, e.status, e.code); }
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: `${table.replace(/s$/, '')}.receipt_upload`, entityType: table.replace(/s$/, ''), entityId: id,
-        before: old ? { receipt: r.row.receipt_original_filename } : null, after: { receipt: req.file.originalname, mime: req.file.mimetype } });
+        before: null, after: { receipt: req.file.originalname, stored_as: req.file.filename, mime: req.file.mimetype } });
       res.status(201).json({ data: { id, has_receipt: true, receipt_url: `/v2/fleet/${kind}/${id}/receipt`, receipt_mime_type: req.file.mimetype } });
     } catch (err) {
       uploads.discard(req);
@@ -574,7 +612,7 @@ async function queryFuel(req) {
   const myZoneId = await resolveUserZoneId(req.user);
   const params = [];
   const filters = [];
-  if (myZoneId !== null) { params.push(myZoneId); filters.push(`t.zone_id = $${params.length}`); }
+  if (myZoneId !== null) { params.push(myZoneId); filters.push(`(t.zone_id = $${params.length} OR t.zone_id IS NULL)`); }
   if (req.query.truck_id) {
     const tid = parseStrictId(req.query.truck_id);
     if (tid === null) return { error: 'Invalid truck_id.' };
@@ -644,7 +682,7 @@ async function loadFuelForUser(user, id) {
   );
   if (result.rows.length === 0) return { error: { status: 404, message: 'Fuel record not found.', code: 'NOT_FOUND' } };
   const myZoneId = await resolveUserZoneId(user);
-  if (myZoneId !== null && result.rows[0].truck_zone_id !== myZoneId) {
+  if (myZoneId !== null && result.rows[0].truck_zone_id !== null && result.rows[0].truck_zone_id !== myZoneId) {
     return { error: { status: 403, message: 'You do not have access to this record.', code: 'FORBIDDEN' } };
   }
   return { row: result.rows[0] };

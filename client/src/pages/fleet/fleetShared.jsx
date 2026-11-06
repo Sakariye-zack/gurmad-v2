@@ -38,7 +38,7 @@ export function FlagChips({ flags }) {
   if (!flags || !flags.length) return null;
   return (
     <span style={{ display: 'inline-flex', gap: '4px', flexWrap: 'wrap' }}>
-      {flags.map((f) => <Pill key={f} variant={f === 'odometer_backwards' ? 'danger' : 'warning'}>{t(`fleet.fuel.flag.${f}`, f)}</Pill>)}
+      {flags.map((f) => <Pill key={f} variant={f.startsWith('odometer') ? 'danger' : 'warning'}>{t(`fleet.fuel.flag.${f}`, f)}</Pill>)}
     </span>
   );
 }
@@ -52,6 +52,8 @@ export function ReceiptLink({ path }) {
     try {
       const url = await apiClient.fetchAuthorizedFileUrl(path);
       if (w) w.location.href = url; else window.location.href = url;
+      // The new tab has loaded the blob by then; free it.
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (err) {
       if (w) w.close();
       toast.error(err.message);
@@ -66,7 +68,10 @@ export function TruckPhoto({ path, size = 56, radius = 'var(--radius-sm)' }) {
   useEffect(() => {
     let url = null; let cancelled = false;
     if (path) {
-      apiClient.fetchAuthorizedFileUrl(path).then((u) => { url = u; if (!cancelled) setLoaded({ path, url: u }); }).catch(() => {});
+      apiClient.fetchAuthorizedFileUrl(path).then((u) => {
+        if (cancelled) { URL.revokeObjectURL(u); return; } // path changed / unmounted before it arrived
+        url = u; setLoaded({ path, url: u });
+      }).catch(() => {});
     }
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
   }, [path]);
@@ -148,7 +153,7 @@ function CompleteModal({ record, onClose }) {
   async function submit(e) {
     e.preventDefault();
     setError('');
-    const body = { id: record.id, status: 'completed', parts };
+    const body = { id: record.id, status: 'completed', parts: cleanParts(parts) };
     if (cost !== '') body.cost = parseFloat(cost);
     if (odometer !== '') body.odometer_at_service = parseInt(odometer, 10);
     if (nextKm !== '') body.next_service_km = parseInt(nextKm, 10);

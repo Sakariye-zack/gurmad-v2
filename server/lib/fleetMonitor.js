@@ -48,10 +48,29 @@ async function claimAlert({ truckId, kind, refId = 0, threshold = 0, forDate }, 
   return r.rows.length > 0;
 }
 
+async function releaseAlert({ truckId, kind, refId = 0, threshold = 0, forDate }, client = pool) {
+  await client.query(
+    `DELETE FROM fleet_alerts_sent WHERE truck_id = $1 AND kind = $2 AND ref_id = $3 AND threshold = $4 AND for_date = $5`,
+    [truckId, kind, refId, threshold, forDate]);
+}
+
+// Returns how many notifications were delivered.
 async function notifyAll(recipients, payload) {
+  let ok = 0;
   for (const id of recipients) {
-    try { await createStaffNotification({ recipientId: id, ...payload }); } catch (e) { logNotificationFailure(payload.eventType, e); }
+    try { await createStaffNotification({ recipientId: id, ...payload }); ok += 1; } catch (e) { logNotificationFailure(payload.eventType, e); }
   }
+  return ok;
+}
+
+// Claim the slot, send, and release the claim if nothing was delivered so
+// the next hourly run retries.
+async function sendClaimed(slot, recipients, payload, client = pool) {
+  if (!(await claimAlert(slot, client))) return false;
+  let delivered = 0;
+  try { delivered = await notifyAll(recipients, payload); } catch (e) { delivered = 0; }
+  if (recipients.length > 0 && delivered === 0) { await releaseAlert(slot, client); return false; }
+  return true;
 }
 
 async function sendExpiryAlerts(today, client = pool) {
@@ -70,42 +89,55 @@ async function sendExpiryAlerts(today, client = pool) {
   for (const row of r.rows) {
     const days = Number(row.days_left);
     const threshold = days <= 7 ? 7 : 30;
-    const claimed = await claimAlert({ truckId: row.truck_id, kind: `expiry_${row.document_type}`, threshold, forDate: row.expiry_date }, client);
-    if (!claimed) continue;
     const plate = cleanText(row.plate_number, 50);
     const label = DOC_LABELS[row.document_type] || { en: row.document_type, so: row.document_type };
-    await notifyAll(await recipientsForZone(row.zone_id, client), {
-      eventType: 'fleet.document_expiry',
-      title: cleanText(`${plate}: ${label.so} wuxuu dhacayaa ${days} maalmood gudahood / ${label.en} expires in ${days} days`, 255),
-      body: `Truck ${plate} — ${label.en} expires on ${row.expiry_date}. Renew it from Fleet > Document Expiry.`,
-      entityType: 'truck',
-      entityId: row.truck_id,
-    });
-    sent += 1;
+    const ok = await sendClaimed(
+      { truckId: row.truck_id, kind: `expiry_${row.document_type}`, threshold, forDate: row.expiry_date },
+      await recipientsForZone(row.zone_id, client),
+      {
+        eventType: 'fleet.document_expiry',
+        title: cleanText(`${plate}: ${label.so} wuxuu dhacayaa ${days} maalmood gudahood / ${label.en} expires in ${days} days`, 255),
+        body: `Truck ${plate} — ${label.en} expires on ${row.expiry_date}. Renew it from Fleet > Document Expiry.`,
+        entityType: 'truck',
+        entityId: row.truck_id,
+      }, client);
+    if (ok) sent += 1;
   }
   return sent;
 }
 
+// Once per due item per 3 days; skipped while a job is already scheduled or
+// in progress for that truck (somebody is on it).
+const DUE_REPEAT_DAYS = 3;
 async function sendMaintenanceDueAlerts(today, client = pool) {
   const next = await getNextMaintenance({ today }, client);
   let sent = 0;
   for (const m of next.values()) {
     if (!m.due) continue;
-    const claimed = await claimAlert({ truckId: m.truck_id, kind: 'maintenance_due', refId: m.record_id, forDate: today }, client);
-    if (!claimed) continue;
+    const open = await client.query(
+      `SELECT 1 FROM truck_maintenance_records WHERE truck_id = $1 AND status IN ('scheduled', 'in_progress') LIMIT 1`, [m.truck_id]);
+    if (open.rows.length) continue;
+    const recent = await client.query(
+      `SELECT 1 FROM fleet_alerts_sent WHERE truck_id = $1 AND kind = 'maintenance_due' AND ref_id = $2
+         AND for_date > $3::date - $4::int AND for_date <= $3::date LIMIT 1`,
+      [m.truck_id, m.record_id, today, DUE_REPEAT_DAYS]);
+    if (recent.rows.length) continue;
     const plate = cleanText(m.plate_number, 50);
     const what = cleanText(m.description, 120);
     const parts = [];
     if (m.next_service_date) parts.push(`date ${m.next_service_date}`);
     if (m.next_service_km !== null && m.next_service_km !== undefined) parts.push(`${m.next_service_km} km (now ${m.current_odometer ?? '?'} km)`);
-    await notifyAll(await recipientsForZone(m.zone_id, client), {
-      eventType: 'fleet.maintenance_due',
-      title: cleanText(`${plate}: dayactir ayaa la gaaray / maintenance due`, 255),
-      body: `Truck ${plate} — next service due (${parts.join(', ')}). Last service: ${what}.`,
-      entityType: 'truck',
-      entityId: m.truck_id,
-    });
-    sent += 1;
+    const ok = await sendClaimed(
+      { truckId: m.truck_id, kind: 'maintenance_due', refId: m.record_id, forDate: today },
+      await recipientsForZone(m.zone_id, client),
+      {
+        eventType: 'fleet.maintenance_due',
+        title: cleanText(`${plate}: dayactir ayaa la gaaray / maintenance due`, 255),
+        body: `Truck ${plate} — next service due (${parts.join(', ')}). Last service: ${what}.`,
+        entityType: 'truck',
+        entityId: m.truck_id,
+      }, client);
+    if (ok) sent += 1;
   }
   return sent;
 }

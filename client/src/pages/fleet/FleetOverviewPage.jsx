@@ -20,6 +20,7 @@ export default function FleetOverviewPage() {
   if (isLoading) return <LoadingState label={t('common.loading')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   const d = data?.data;
+  if (!d || !d.kpis) return <ErrorState message={t('fleet.truck.noData')} onRetry={refetch} />;
   const k = d.kpis;
 
   return (
@@ -58,11 +59,13 @@ function TruckCard({ tr }) {
             <StatusBadge status={tr.status} map={{ maintenance: 'warning', inactive: 'info' }} />
           </div>
           <div style={muted}>{tr.model || '—'}{tr.zone_name ? ` · ${tr.zone_name}` : ''}</div>
-          <div style={{ marginTop: '4px' }}>
-            <Pill variant={LIVE_MAP[tr.live.status]}>
-              {t(`fleet.live.${tr.live.status}`)}{tr.live.seconds_ago !== null ? ` · ${t('fleet.live.lastSeen', undefined, { t: ago(tr.live.seconds_ago) })}` : ''}
-            </Pill>
-          </div>
+          {tr.live && (
+            <div style={{ marginTop: '4px' }}>
+              <Pill variant={LIVE_MAP[tr.live.status]}>
+                {t(`fleet.live.${tr.live.status}`)}{tr.live.seconds_ago !== null ? ` · ${t('fleet.live.lastSeen', undefined, { t: ago(tr.live.seconds_ago) })}` : ''}
+              </Pill>
+            </div>
+          )}
         </div>
       </div>
 

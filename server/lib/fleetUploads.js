@@ -69,22 +69,20 @@ function resolveStored(name) {
   return fs.existsSync(p) ? p : null;
 }
 
-function removeStored(name) {
-  const p = resolveStored(name);
-  if (p) fs.unlink(p, () => {});
-}
-
 function sendStored(res, { name, mime, filename }) {
   const p = resolveStored(name);
   if (!p) return res.status(404).json({ error: { message: 'File not found.', code: 'NOT_FOUND' } });
   res.setHeader('Content-Type', mime || 'application/octet-stream');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
   const safeName = String(filename || path.basename(p)).replace(/[^\w.\- ]/g, '_').slice(0, 120);
-  res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+  // Images may render inline; anything else (PDF) is downloaded.
+  const disposition = PHOTO_MIME.includes(mime) ? 'inline' : 'attachment';
+  res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
   return res.sendFile(p);
 }
 
 module.exports = {
-  receiptUpload, photoUpload, single, rejectBadFile, discard, resolveStored, removeStored, sendStored,
+  receiptUpload, photoUpload, single, rejectBadFile, discard, resolveStored, sendStored,
   UPLOAD_DIR, RECEIPT_MIME, PHOTO_MIME,
 };

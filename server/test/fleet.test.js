@@ -57,6 +57,41 @@ test('fleet: overview returns KPIs + one card per truck, zone-scoped', async () 
   assert.ok(g.data.trucks.some((t) => t.id === a.id));
   assert.ok(!g.data.trucks.some((t) => t.id === b.id), 'zone B truck hidden from zone A gudoomiye');
   assert.equal((await api('GET', '/fleet/overview', { token: w.tokens.head })).status, 403);
+  // Live status is Map-level: only the Map roles get it.
+  assert.ok(g.data.trucks.find((x) => x.id === a.id).live);
+  for (const role of ['cashier', 'collector']) {
+    const r2 = await api('GET', '/fleet/overview', { token: w.tokens[role] });
+    assert.equal(r2.status, 200, role);
+    assert.ok(r2.data.trucks.length > 0);
+    assert.ok(r2.data.trucks.every((x) => x.live === null), role);
+  }
+});
+
+test('fleet: efficiency ignores an odometer typo as base, flags high km/L and suspect jumps', async () => {
+  const w = await setupWorld();
+  const t = await mkTruck(w.zoneA.id);
+  const { day } = await today();
+  const log = async (odo, liters, n) => {
+    const r = await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters, cost: 40, odometer_reading: odo, record_date: addDays(day, n - 20) } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return r.data;
+  };
+  await log(11000, 40, 1);
+  await log(11400, 40, 2);
+  await log(11800, 40, 3);
+  const typo = await log(120000, 40, 4); // 12,000 typed as 120,000
+  assert.deepEqual(typo.flags, ['odometer_suspect']);
+  assert.equal(typo.km_per_liter, null);
+  const after = await log(12200, 40, 5);
+  assert.deepEqual(after.flags, [], 'the corrected reading is measured from the last trusted one');
+  assert.equal(after.km_since_last, 400);
+  assert.equal(after.km_per_liter, 10);
+  const back = await log(12100, 40, 6);
+  assert.ok(back.flags.includes('odometer_backwards'));
+  const next = await log(12600, 40, 7);
+  assert.equal(next.km_since_last, 400, 'a backwards reading is not used as the base');
+  const high = await log(13600, 40, 8); // 25 km/L vs median 10
+  assert.deepEqual(high.flags, ['high_efficiency']);
 });
 
 test('fleet: fuel currency, price/L, efficiency, low-efficiency + odometer flags, totals, CSV', async () => {
@@ -120,20 +155,41 @@ test('fleet: fuel receipt upload accepts image/pdf, rejects other types; downloa
   const tb = await mkTruck(w.zoneB.id);
   const f = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 10, cost: 12 } })).data;
   const fb = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: tb.id, liters: 10, cost: 12 } })).data;
-  const ok = await upload(`/fleet/fuel/${f.id}/receipt`, w.tokens.gudoomiye, 'file', PNG, 'r.png', 'image/png');
-  assert.equal(ok.status, 201, JSON.stringify(ok.body));
   const txt = await upload(`/fleet/fuel/${f.id}/receipt`, w.tokens.admin, 'file', Buffer.from('hello'), 'r.txt', 'text/plain');
   assert.equal(txt.status, 400);
   const fake = await upload(`/fleet/fuel/${f.id}/receipt`, w.tokens.admin, 'file', Buffer.from('MZ not a png'), 'r.png', 'image/png');
   assert.equal(fake.status, 400);
+  const ok = await upload(`/fleet/fuel/${f.id}/receipt`, w.tokens.gudoomiye, 'file', PNG, 'r.png', 'image/png');
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  const stored = (await db.query('SELECT receipt_storage_path FROM truck_fuel_records WHERE id = $1', [f.id])).rows[0].receipt_storage_path;
+  const again = await upload(`/fleet/fuel/${f.id}/receipt`, w.tokens.admin, 'file', PNG, 'r2.png', 'image/png');
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, 'RECEIPT_EXISTS');
+  assert.equal((await db.query('SELECT receipt_storage_path FROM truck_fuel_records WHERE id = $1', [f.id])).rows[0].receipt_storage_path, stored, 'evidence kept');
   const pdf = await upload(`/fleet/fuel/${fb.id}/receipt`, w.tokens.admin, 'file', Buffer.from('%PDF-1.4\n%%EOF'), 'r.pdf', 'application/pdf');
   assert.equal(pdf.status, 201);
   const cross = await upload(`/fleet/fuel/${fb.id}/receipt`, w.tokens.gudoomiye, 'file', PNG, 'r.png', 'image/png');
   assert.equal(cross.status, 403);
 
+  // Maintenance receipts are immutable too.
+  const m = (await api('POST', '/fleet/maintenance', { token: w.tokens.admin, body: { truck_id: t.id, description: 'Filter', cost: 9 } })).data;
+  assert.equal((await upload(`/fleet/maintenance/${m.id}/receipt`, w.tokens.admin, 'file', PNG, 'm.png', 'image/png')).status, 201);
+  assert.equal((await upload(`/fleet/maintenance/${m.id}/receipt`, w.tokens.admin, 'file', PNG, 'm2.png', 'image/png')).status, 409);
+
+  // Company-wide truck: visible to the zone gudoomiye.
+  const tc = await mkTruck(null);
+  const fc = (await api('POST', '/fleet/fuel', { token: w.tokens.gudoomiye, body: { truck_id: tc.id, liters: 10, cost: 12 } }));
+  assert.equal(fc.status, 201, JSON.stringify(fc.body));
+  assert.equal((await upload(`/fleet/fuel/${fc.data.id}/receipt`, w.tokens.gudoomiye, 'file', PNG, 'c.png', 'image/png')).status, 201);
+
   const get = await fetch(`${BASE}/api/v2/fleet/fuel/${f.id}/receipt`, { headers: { Authorization: 'Bearer ' + w.tokens.cashier } });
   assert.equal(get.status, 200);
   assert.equal(get.headers.get('content-type'), 'image/png');
+  assert.equal(get.headers.get('content-security-policy'), 'sandbox');
+  assert.match(get.headers.get('content-disposition'), /^inline/);
+  const getPdf = await fetch(`${BASE}/api/v2/fleet/fuel/${fb.id}/receipt`, { headers: { Authorization: 'Bearer ' + w.tokens.admin } });
+  assert.equal(getPdf.status, 200);
+  assert.match(getPdf.headers.get('content-disposition'), /^attachment/);
   const denied = await fetch(`${BASE}/api/v2/fleet/fuel/${fb.id}/receipt`, { headers: { Authorization: 'Bearer ' + w.tokens.gudoomiye } });
   assert.equal(denied.status, 403);
   const listed = await api('GET', `/fleet/fuel/${f.id}`, { token: w.tokens.admin });
@@ -173,6 +229,19 @@ test('fleet: maintenance status workflow moves the truck status', async () => {
 
   const illegal = await api('PUT', `/fleet/maintenance/${s.data.id}/status`, { token: w.tokens.admin, body: { status: 'in_progress' } });
   assert.equal(illegal.status, 409);
+
+  // An inactive truck is not moved by a job, and stays inactive afterwards.
+  const idle = await mkTruck(w.zoneA.id, { status: 'inactive' });
+  const j = await api('POST', '/fleet/maintenance', { token: w.tokens.admin, body: { truck_id: idle.id, description: 'Check', status: 'in_progress' } });
+  assert.equal(j.status, 201);
+  assert.equal((await db.query('SELECT status FROM trucks WHERE id=$1', [idle.id])).rows[0].status, 'inactive');
+  await api('PUT', `/fleet/maintenance/${j.data.id}/status`, { token: w.tokens.admin, body: { status: 'completed', cost: 5 } });
+  assert.equal((await db.query('SELECT status FROM trucks WHERE id=$1', [idle.id])).rows[0].status, 'inactive');
+
+  // Retired: no new maintenance, no renew.
+  const old = await mkTruck(w.zoneA.id, { status: 'retired' });
+  assert.equal((await api('POST', '/fleet/maintenance', { token: w.tokens.admin, body: { truck_id: old.id, description: 'x', cost: 5 } })).status, 409);
+  assert.equal((await api('PUT', `/trucks/${old.id}/renew`, { token: w.tokens.admin, body: { document: 'insurance', new_expiry: '2031-01-01' } })).status, 409);
 });
 
 test('fleet: maintenance due by date and by km; due alerts once per day', async () => {
@@ -199,6 +268,7 @@ test('fleet: maintenance due by date and by km; due alerts once per day', async 
   const { sendMaintenanceDueAlerts } = require('../lib/fleetMonitor');
   await sendMaintenanceDueAlerts(day);
   await sendMaintenanceDueAlerts(day);
+  await sendMaintenanceDueAlerts(addDays(day, 1)); // within 3 days: no repeat
   const n = await db.query(`SELECT n.title, n.body, u.username FROM v2_staff_notifications n JOIN v2_users u ON u.id = n.recipient_id
                             WHERE n.event_type = 'fleet.maintenance_due' AND n.entity_id = $1`, [byKm.id]);
   const users = n.rows.map((r) => r.username);
@@ -207,6 +277,18 @@ test('fleet: maintenance due by date and by km; due alerts once per day', async 
   assert.ok(!n.rows.some((r) => /[<>]/.test(r.body)), 'user text sanitised');
   const none = await db.query(`SELECT 1 FROM v2_staff_notifications WHERE event_type = 'fleet.maintenance_due' AND entity_id = $1`, [notDue.id]);
   assert.equal(none.rows.length, 0);
+  const adminCount = async (truckId) => (await db.query(
+    `SELECT COUNT(*)::int AS n FROM v2_staff_notifications n JOIN v2_users u ON u.id = n.recipient_id
+     WHERE n.event_type = 'fleet.maintenance_due' AND n.entity_id = $1 AND u.username = 't_admin'`, [truckId])).rows[0].n;
+  await sendMaintenanceDueAlerts(addDays(day, 3)); // 3 days later: reminded again
+  assert.equal(await adminCount(byKm.id), 2);
+
+  // A job already scheduled for the truck suppresses the reminder.
+  const planned = await mkTruck(w.zoneA.id);
+  await mk(planned, { next_service_date: addDays(day, 1) });
+  await api('POST', '/fleet/maintenance', { token: w.tokens.admin, body: { truck_id: planned.id, description: 'Booked', status: 'scheduled' } });
+  await sendMaintenanceDueAlerts(day);
+  assert.equal(await adminCount(planned.id), 0);
 });
 
 test('fleet: expiry alerts once per threshold; renew updates the date + audit', async () => {
@@ -283,6 +365,15 @@ test('fleet: trips km from GPS points, a noise jump ignored', async () => {
 
   const unit = require('../lib/fleetInsights').distanceKm([{ lat: 0, lng: 0, t: 0 }, { lat: 0.01, lng: 0, t: 1200 }]);
   assert.equal(unit.km, 0, 'a gap over 10 minutes is not counted');
+  const { distanceKm } = require('../lib/fleetInsights');
+  // Parked: 60 pings over 20 minutes jittering within ~10 m.
+  const drift = [];
+  for (let i = 0; i < 60; i++) drift.push({ lat: 9.56 + (i % 2 ? 0.00008 : -0.00008), lng: 44.06 + (i % 3 ? 0.00005 : 0), t: i * 20 });
+  assert.ok(distanceKm(drift).km < 0.05, `parked drift ${distanceKm(drift).km}`);
+  // A 3 km spike 45 s after a good point (240 km/h) adds nothing.
+  const spike = [{ lat: 9.56, lng: 44.06, t: 0 }, { lat: 9.587, lng: 44.06, t: 45 }, { lat: 9.5609, lng: 44.06, t: 65 }];
+  const sk = distanceKm(spike).km;
+  assert.ok(sk > 0.09 && sk < 0.11, `spike ${sk}`);
   const s = await api('GET', `/trucks/${t.id}/summary`, { token: w.tokens.admin });
   assert.equal(s.status, 200);
   assert.equal(s.data.chart.length, 6);
@@ -305,6 +396,13 @@ test('fleet: non-write roles get 403 on fleet writes', async () => {
   }
   const photo = await upload(`/trucks/${t.id}/photo`, w.tokens.admin, 'file', PNG, 'p.png', 'image/png');
   assert.equal(photo.status, 200, JSON.stringify(photo.body));
+  const first = (await db.query('SELECT photo_storage_path FROM trucks WHERE id = $1', [t.id])).rows[0].photo_storage_path;
+  assert.equal((await upload(`/trucks/${t.id}/photo`, w.tokens.admin, 'file', PNG, 'p2.png', 'image/png')).status, 200);
+  const { resolveStored } = require('../lib/fleetUploads');
+  assert.ok(resolveStored(first), 'replaced photo file is kept');
+  const aud = await db.query(`SELECT before_data, after_data FROM v2_audit_log WHERE action = 'truck.photo_update' AND entity_id = $1 ORDER BY id DESC LIMIT 1`, [t.id]);
+  assert.equal(aud.rows[0].before_data.photo, first);
+  assert.ok(aud.rows[0].after_data.photo && aud.rows[0].after_data.photo !== first);
   const get = await fetch(`${BASE}/api/v2/trucks/${t.id}/photo`, { headers: { Authorization: 'Bearer ' + w.tokens.collector } });
   assert.equal(get.status, 200);
 });
