@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { MapPin, ListFilter, Route as RouteIcon, Layers, Search, CalendarCheck, ChevronDown, ChevronUp, MapPinOff } from 'lucide-react';
-import { PageHeader, LoadingState, ErrorState } from '../../components/ui/index.js';
-import { useMapCustomers, useMapMissingLocation, useMapTrucks } from '../../hooks/useMap.js';
+import { MapPin, ListFilter, Route as RouteIcon, Layers, Search, CalendarCheck, ChevronDown, ChevronUp, MapPinOff, Crosshair, Truck, Radio, X } from 'lucide-react';
+import { PageHeader, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
+import { useMapCustomers, useMapMissingLocation, useMapTrucks, useTruckTrail } from '../../hooks/useMap.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
@@ -17,6 +18,8 @@ import { PAYMENT_STATUSES, PAYMENT_COLORS, TODAY_STATUSES, TODAY_COLORS, custome
 // data fetching, search, the legend/counts, the "Today" toggle and the
 // missing-location side panel; MapCanvas owns the Mapbox instance.
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'head_of_cashiers'];
+// Same roles PUT /api/v2/customers/:id allows (zone-write checks apply server-side).
+const LOCATION_EDIT_ROLES = ['admin', 'gudoomiye'];
 
 export default function MapPage() {
   const { t } = useI18n();
@@ -31,6 +34,11 @@ export default function MapPage() {
   const [query, setQuery] = useState('');
   const [searchMsg, setSearchMsg] = useState('');
   const [focus, setFocus] = useState(null);
+  const [pickTarget, setPickTarget] = useState(null); // customer being placed on the map
+  const [trailEmployeeId, setTrailEmployeeId] = useState(null);
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const canEditLocation = LOCATION_EDIT_ROLES.includes((user?.role || '').toLowerCase());
 
   const isZoneScoped = ZONE_SCOPED_ROLES.includes((user?.role || '').toLowerCase());
   const { data: zonesData } = useZonesList();
@@ -63,8 +71,28 @@ export default function MapPage() {
   const { data: missingData } = useMapMissingLocation(filters);
   const missing = useMemo(() => missingData?.data || [], [missingData]);
 
-  const { data: trucksData } = useMapTrucks({ zoneId: isZoneScoped ? undefined : (zoneId || undefined) });
-  const trucks = trucksData?.data || [];
+  const { data: trucksData, dataUpdatedAt: trucksUpdatedAt } = useMapTrucks({ zoneId: isZoneScoped ? undefined : (zoneId || undefined) });
+  const trucks = useMemo(() => trucksData?.data || [], [trucksData]);
+  const truckCounts = useMemo(() => ({
+    live: trucks.filter((x) => x.status === 'live').length,
+    idle: trucks.filter((x) => x.status !== 'live').length,
+  }), [trucks]);
+  const { data: trailData } = useTruckTrail(trailEmployeeId);
+  const trail = useMemo(() => trailData?.data?.points || [], [trailData]);
+  const trailTruck = trucks.find((x) => String(x.employee_id) === String(trailEmployeeId));
+  const toggleTrail = useCallback((id) => setTrailEmployeeId((cur) => (String(cur) === String(id) ? null : id)), []);
+  const cancelPick = useCallback(() => setPickTarget(null), []);
+
+  const confirmPick = useCallback(async (customer, { lat, lng }) => {
+    try {
+      await apiClient.put(`/v2/customers/${customer.id}`, { lat, lng });
+      toast.success(t('map.location_saved', undefined, { c: customer.customer_number || customer.name || '' }));
+      setPickTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ['v2', 'map'] });
+    } catch (err) {
+      toast.error(err?.message || t('map.location_save_failed'));
+    }
+  }, [queryClient, t, toast]);
 
   const payCounts = useMemo(() => {
     const c = { clear: 0, partial: 0, unpaid: 0, none: 0 };
@@ -150,6 +178,10 @@ export default function MapPage() {
           <MapPinOff size={14} /> {t('map.no_location_count', undefined, { n: missing.length })}
           {panelOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
+        <span title={t('map.live')} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', borderRadius: '999px', border: '1px solid var(--border)', background: 'var(--surface)', fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
+          <Radio size={13} style={{ color: '#2e9e5b' }} />
+          {t('map.live_chip', undefined, { time: trucksUpdatedAt ? new Date(trucksUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—' })}
+        </span>
         {searchMsg && <span role="status" style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600 }}>{searchMsg}</span>}
       </div>
 
@@ -159,6 +191,21 @@ export default function MapPage() {
         {PAYMENT_STATUSES.map((s) => (
           <LegendItem key={s} color={PAYMENT_COLORS[s]} label={t('map.pay.' + s)} count={payCounts[s]} />
         ))}
+        <span style={{ color: 'var(--text-muted)' }}>|</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <Truck size={13} />
+          {t('map.trucks_legend', undefined, { live: truckCounts.live, idle: truckCounts.idle })}
+        </span>
+        {trailEmployeeId && (
+          <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', gap: '5px', padding: '2px 4px 2px 8px', borderRadius: '999px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+            <span style={{ width: '14px', height: '3px', background: '#1565c0', display: 'inline-block', borderRadius: '2px' }} />
+            {t('map.route_today')}: {trailTruck?.collector_name || '—'}
+            {trail.length < 2 && <span style={{ color: 'var(--text-muted)' }}>— {t('map.route_empty')}</span>}
+            <button type="button" onClick={() => setTrailEmployeeId(null)} aria-label={t('map.hide_route')} title={t('map.hide_route')} style={{ display: 'inline-flex', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px' }}>
+              <X size={13} />
+            </button>
+          </span>
+        )}
         {showToday && (
           <>
             <span style={{ color: 'var(--text-muted)' }}>|</span>
@@ -181,6 +228,15 @@ export default function MapPage() {
               showToday={showToday}
               focus={focus}
               onOpenCustomer={(id) => navigate(`/customers/${id}`)}
+              canEditLocation={canEditLocation}
+              pickTarget={pickTarget}
+              onRequestMove={setPickTarget}
+              onPickConfirm={confirmPick}
+              onPickCancel={cancelPick}
+              trail={trail}
+              trailEmployeeId={trailEmployeeId}
+              onToggleTrail={toggleTrail}
+              fitKey={[filters.zoneId, filters.groupId, filters.groupZoneId, filters.routeId].map((v) => v || '').join('|')}
             />
             {points.length === 0 && trucks.length === 0 && (
               <div style={{
@@ -207,14 +263,25 @@ export default function MapPage() {
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>{t('map.no_location_hint')}</div>
               {missing.length === 0 && <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('map.no_location_empty')}</div>}
               {missing.map((c) => (
-                <Link
-                  key={c.id}
-                  to={`/customers/${c.id}`}
-                  style={{ display: 'block', padding: '7px 4px', borderTop: '1px solid var(--border)', textDecoration: 'none', color: 'var(--text)', fontSize: '13px' }}
-                >
-                  <div style={{ fontWeight: 600 }}>{c.customer_number} · {c.name}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{customerPath(c) || '—'}</div>
-                </Link>
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 4px', borderTop: '1px solid var(--border)' }}>
+                  <Link
+                    to={`/customers/${c.id}`}
+                    style={{ display: 'block', flex: 1, minWidth: 0, textDecoration: 'none', color: 'var(--text)', fontSize: '13px' }}
+                  >
+                    <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{c.customer_number} · {c.name}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{customerPath(c) || '—'}</div>
+                  </Link>
+                  {canEditLocation && (
+                    <button
+                      type="button"
+                      onClick={() => setPickTarget(c)}
+                      aria-pressed={pickTarget?.id === c.id}
+                      style={{ ...btnStyle(pickTarget?.id === c.id), padding: '5px 8px', fontSize: '12px', flex: 'none' }}
+                    >
+                      <Crosshair size={13} /> {t('map.set_on_map')}
+                    </button>
+                  )}
+                </div>
               ))}
             </aside>
           )}

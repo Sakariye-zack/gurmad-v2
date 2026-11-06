@@ -8,6 +8,8 @@ const { sniffFileType } = require('../lib/fileSniff');
 const { putFile, getFileStream, fileExists } = require('../lib/documentStorage');
 const logger = require('../lib/logger');
 const { rejectIfInfected } = require('../lib/virusScan');
+const { recordLocationHistory, activeWorkWhere, ACTIVE_WORK_FROM } = require('../lib/locationHistory');
+const { getTimezone, localParts } = require('../lib/autoBilling');
 
 const router = express.Router();
 
@@ -143,14 +145,15 @@ router.post('/location', requireRole('collector', 'admin'), async (req, res) => 
     const employeeId = await resolveEmployeeIdForUser(req.user);
     if (employeeId === null) return res.json({ data: { recorded: false } });
 
+    // Tracked only during real work TODAY (company-local date): a task that
+    // is not completed, on an assigned/in_progress batch whose date window
+    // contains today — never for a batch that is only scheduled later.
+    const tz = await getTimezone();
     const eligible = await pool.query(
-      `SELECT 1 FROM task_resources tr
-       JOIN tasks t ON t.id = tr.task_id
-       JOIN batches b ON b.id = t.batch_id
-       WHERE tr.resource_type = 'collector' AND tr.resource_id = $1
-         AND b.status IN ('assigned', 'in_progress')
+      `SELECT 1 FROM ${ACTIVE_WORK_FROM}
+       WHERE ${activeWorkWhere('$1', '$2::date')}
        LIMIT 1`,
-      [employeeId]
+      [employeeId, localParts(new Date(), tz).date]
     );
     if (eligible.rows.length === 0) return res.json({ data: { recorded: false } });
 
@@ -160,6 +163,9 @@ router.post('/location', requireRole('collector', 'admin'), async (req, res) => 
        ON CONFLICT (employee_id) DO UPDATE SET lat = $2, lng = $3, recorded_at = CURRENT_TIMESTAMP`,
       [employeeId, lat, lng]
     );
+    // Live trucks: also append to the short-lived history ("route today",
+    // speed estimate) — lib/locationHistory.js prunes rows older than 3 days.
+    await recordLocationHistory(employeeId, lat, lng);
     res.json({ data: { recorded: true } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to record location.', code: 'INTERNAL' } });

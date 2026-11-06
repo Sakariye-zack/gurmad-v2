@@ -112,3 +112,6 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Top bar: hide the user name on phones (avatar only) so it never overflows a 375px screen. */
+@media (max-width: 480px) { .gv2-topbar-name { display: none; } }

@@ -13,37 +13,53 @@ import { useCompanyName } from '../hooks/useSettings.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
 import LanguageToggle from '../components/LanguageToggle.jsx';
 
-// Live truck location — Phase 10, user-requested ('ilaa gawaadhidii ay ka
-// soo muuqato': trucks should appear on the Map). Every 2 minutes while
-// this shell is mounted (i.e. the collector is logged in and the app is
-// open — the shell wraps every screen), take one current position reading
-// and POST it. Mirrors CollectionActionScreen.jsx's own captureGps()
-// exactly: bounded 5s timeout, missing/denied permission resolves to
-// nothing rather than blocking or erroring, and the request itself is
-// fire-and-forget from the UI's perspective — a failed or ineligible ping
-// (POST /v2/collection-sync/location silently no-ops when this collector
-// has no active batch today, per that route's own comment) never
-// surfaces to the collector, who has no action to take about it either
-// way. getCurrentPosition, not watchPosition — a single fresh fix every
-// interval is enough for "roughly where is this truck right now" and
-// avoids holding a continuous GPS lock (battery) for a use case that only
-// needs a periodic snapshot.
-const LOCATION_PING_INTERVAL_MS = 2 * 60 * 1000;
+// Live truck location (Map → live trucks). Every 30 s while this shell is
+// mounted (the collector is logged in and the app is open — the shell wraps
+// every screen), take one current position reading and POST it. Bounded 5 s
+// timeout; missing/denied permission silently skips the cycle; a failed or
+// ineligible ping (POST /v2/collection-sync/location no-ops when this
+// collector has no active batch) never surfaces to the collector. A new
+// cycle is skipped while the previous reading/request is still in flight,
+// so a slow GPS fix or network never stacks requests. getCurrentPosition,
+// not watchPosition: one fresh fix per interval, no continuous GPS lock.
+// maximumAge lets the OS reuse a fix up to 20 s old instead of waking the
+// GPS radio again (battery). No pings while the page is hidden.
+const LOCATION_PING_INTERVAL_MS = 30 * 1000;
 function useLocationPing() {
   useEffect(() => {
     if (!navigator.geolocation) return undefined;
+    let inFlight = false;
+    let cancelled = false;
+    let lastPingAt = 0;
     function ping() {
+      if (inFlight || cancelled || document.hidden) return;
+      inFlight = true;
+      lastPingAt = Date.now();
+      let settled = false;
+      const done = () => { if (settled) return; settled = true; clearTimeout(geoGuard); inFlight = false; };
+      // Safety net for a geolocation request that never answers (e.g. a
+      // permission prompt left open). Cleared as soon as a position arrives,
+      // so it never releases the lock while the POST itself is in flight.
+      const geoGuard = setTimeout(done, 60000);
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          apiClient.post('/v2/collection-sync/location', { lat: pos.coords.latitude, lng: pos.coords.longitude }).catch(() => {});
+          clearTimeout(geoGuard);
+          if (cancelled) return done();
+          apiClient.post('/v2/collection-sync/location', { lat: pos.coords.latitude, lng: pos.coords.longitude })
+            .catch(() => {})
+            .finally(done); // released only when the POST settles
         },
-        () => {}, // denied/unavailable — silently skip this cycle, try again next interval
-        { timeout: 5000 }
+        done, // denied/unavailable — silently skip this cycle, try again next interval
+        { timeout: 5000, maximumAge: 20000 }
       );
     }
     ping(); // first ping immediately on mount, not after waiting a full interval
     const id = setInterval(ping, LOCATION_PING_INTERVAL_MS);
-    return () => clearInterval(id);
+    // Hidden (screen off / other app): no pings. On return, ping at once —
+    // but at most once per 25 s, so app switching cannot spam pings.
+    const onVisible = () => { if (!document.hidden && Date.now() - lastPingAt >= 25000) ping(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
 }
 

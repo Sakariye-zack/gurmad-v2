@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { getTimezone, localParts } = require('../lib/autoBilling');
+const { activeWorkWhere, ACTIVE_WORK_FROM } = require('../lib/locationHistory');
 
 const router = express.Router();
 
@@ -191,55 +192,204 @@ router.get('/customers/missing-location', async (req, res) => {
   }
 });
 
-// GET /api/v2/map/trucks — Phase 10, user-requested ('ilaa gawaadhidii ay
-// ka soo muuqato'). Reads collector_locations (last-known-position only,
-// written by POST /v2/collection-sync/location — see that route's own
-// comment for the full write-side eligibility gate). Only rows recorded
-// within the last 10 minutes are returned — an idle/offline collector's
-// stale last position silently disappears from the map rather than
-// showing a truck as "live" when it may have been parked for hours.
-// Same zone-forcing pattern as GET /customers above (non-Admin roles
-// cannot widen their own scope via zone_id).
+// GET /api/v2/map/trucks — live trucks. Reads collector_locations (last
+// known position, written by POST /v2/collection-sync/location — see that
+// route for the write-side eligibility gate: only while the collector owns
+// an assigned/in_progress batch). Only positions from the last 10 minutes
+// are returned, so a parked/offline phone's stale position ages off the map.
+// status: 'live' (< 2 min since the last ping) / 'idle' (2–10 min).
+// speed_kmh is estimated from the last two collector_location_history
+// points. progress counts today's work across the collector's active
+// batches (serviced/missed by company-local status date, pending = still
+// open). Zone-forcing is the same as GET /customers: scoped roles only see
+// collectors of their own district.
 const TRUCK_LOCATION_FRESHNESS_MINUTES = 10;
-router.get('/trucks', async (req, res) => {
-  const { zone_id } = req.query;
+const TRUCK_LIVE_SECONDS = 120;
+const TRAIL_POINT_CAP = 2000;
+// Today's route is more sensitive than "where is the truck now": admin and
+// gudoomiye only (ruling).
+const TRAIL_ROLES = ['admin', 'gudoomiye'];
+// "Working today" for the collector e.id (same rule as the ping gate).
+const WORK_TODAY = activeWorkWhere('e.id', '$2::date');
+
+// In-scope collector: home district, or the district of a batch worked
+// today. zoneExpr is a SQL parameter reference; today is always $2.
+function collectorInZoneSql(zoneExpr) {
+  return `(e.zone_id = ${zoneExpr} OR EXISTS (
+            SELECT 1 FROM ${ACTIVE_WORK_FROM}
+            WHERE ${WORK_TODAY} AND b.zone_id = ${zoneExpr}))`;
+}
+
+async function truckZoneScope(req) {
   let requestedZoneId = null;
-  if (zone_id !== undefined) {
-    requestedZoneId = parseStrictId(zone_id);
-    if (requestedZoneId === null) return res.status(400).json({ error: { message: 'Invalid zone id.', code: 'VALIDATION' } });
+  if (req.query.zone_id !== undefined) {
+    requestedZoneId = parseStrictId(req.query.zone_id);
+    if (requestedZoneId === null) return { error: { status: 400, body: { error: { message: 'Invalid zone id.', code: 'VALIDATION' } } } };
   }
+  const role = (req.user.role || '').toLowerCase();
+  if (ZONE_SCOPED_ROLES.includes(role)) {
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId === null) return { empty: true };
+    return { zoneId: myZoneId };
+  }
+  return { zoneId: requestedZoneId };
+}
+
+function haversineMeters(a, b) {
+  const R = 6371000;
+  const rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Last two pings -> km/h. Null when there is nothing sensible to say
+// (single point, pings too far apart in time, or GPS jitter giving an
+// impossible speed).
+function estimateSpeedKmh(points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  const [p1, p0] = points; // newest first
+  const dt = Number(p1.t) - Number(p0.t);
+  if (!(dt >= 5 && dt <= 600)) return null;
+  const kmh = (haversineMeters(p0, p1) / dt) * 3.6;
+  if (!Number.isFinite(kmh) || kmh > 150) return null;
+  return Math.round(kmh * 10) / 10;
+}
+
+router.get('/trucks', async (req, res) => {
   try {
-    let effectiveZoneId = requestedZoneId;
-    const role = (req.user.role || '').toLowerCase();
-    if (ZONE_SCOPED_ROLES.includes(role)) {
-      const myZoneId = await resolveUserZoneId(req.user);
-      effectiveZoneId = myZoneId;
-      if (effectiveZoneId === null) return res.json({ data: [] });
+    const scope = await truckZoneScope(req);
+    if (scope.error) return res.status(scope.error.status).json(scope.error.body);
+    if (scope.empty) return res.json({ data: [] });
+
+    const tz = await getTimezone();
+    const params = [tz, localParts(new Date(), tz).date];
+    let where = `cl.recorded_at >= LOCALTIMESTAMP - INTERVAL '${TRUCK_LOCATION_FRESHNESS_MINUTES} minutes'`;
+    if (scope.zoneId !== null) {
+      params.push(scope.zoneId);
+      where += ` AND ${collectorInZoneSql(`$${params.length}::int`)}`;
     }
 
-    const params = [];
-    let where = `cl.recorded_at >= NOW() - INTERVAL '${TRUCK_LOCATION_FRESHNESS_MINUTES} minutes'`;
-    if (effectiveZoneId !== null) {
-      params.push(effectiveZoneId);
-      where += ` AND e.zone_id = $${params.length}`;
-    }
-
+    // Truck: the truck assigned on the collector's active task wins (that is
+    // what they are driving today); otherwise their standing assignment in
+    // trucks.collector_id / driver_id.
     const result = await pool.query(
-      `SELECT cl.employee_id, cl.lat, cl.lng, cl.recorded_at,
+      `SELECT cl.employee_id, cl.lat::float AS lat, cl.lng::float AS lng, cl.recorded_at,
+              GREATEST(0, EXTRACT(EPOCH FROM (LOCALTIMESTAMP - cl.recorded_at)))::int AS seconds_ago,
               e.name AS collector_name, e.zone_id, z.name AS zone_name,
-              t.id AS truck_id, t.plate_number
+              COALESCE(ttk.id, atk.id) AS truck_id,
+              COALESCE(ttk.plate_number, atk.plate_number) AS plate_number,
+              CASE WHEN ttk.id IS NOT NULL THEN ttk.model ELSE atk.model END AS truck_name,
+              COALESCE(wk.serviced, 0) AS serviced, COALESCE(wk.missed, 0) AS missed, COALESCE(wk.pending, 0) AS pending,
+              COALESCE(bl.batch_codes, '{}') AS batch_codes, COALESCE(bl.sub_zone_names, '{}') AS sub_zone_names,
+              hp.points AS last_points
        FROM collector_locations cl
        JOIN employees e ON e.id = cl.employee_id
        LEFT JOIN zones z ON z.id = e.zone_id
-       LEFT JOIN trucks t ON (t.driver_id = e.id OR t.collector_id = e.id) AND t.status = 'active'
+       LEFT JOIN LATERAL (
+         SELECT t.id, t.plate_number, t.model
+         FROM ${ACTIVE_WORK_FROM}
+         JOIN task_resources trt ON trt.task_id = trc.task_id AND trt.resource_type = 'truck'
+         JOIN trucks t ON t.id = trt.resource_id AND t.status = 'active'
+         WHERE ${WORK_TODAY}
+         ORDER BY (tk.status = 'in_progress') DESC, tk.id DESC
+         LIMIT 1
+       ) ttk ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT t.id, t.plate_number, t.model
+         FROM trucks t
+         WHERE (t.collector_id = e.id OR t.driver_id = e.id) AND t.status = 'active'
+         ORDER BY (t.collector_id = e.id) DESC, t.id ASC
+         LIMIT 1
+       ) atk ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (WHERE bc.status = 'serviced'
+                  AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $1::text)::date = $2::date)::int AS serviced,
+                COUNT(*) FILTER (WHERE bc.status = 'missed'
+                  AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $1::text)::date = $2::date)::int AS missed,
+                COUNT(*) FILTER (WHERE bc.status = 'pending')::int AS pending
+         FROM batch_customers bc
+         WHERE bc.batch_id IN (
+           SELECT tk.batch_id FROM ${ACTIVE_WORK_FROM}
+           WHERE ${WORK_TODAY})
+       ) wk ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT array_agg(DISTINCT b.batch_code) AS batch_codes,
+                array_remove(array_agg(DISTINCT COALESCE(r.name, r.code)), NULL) AS sub_zone_names
+         FROM ${ACTIVE_WORK_FROM}
+         LEFT JOIN routes r ON r.id = b.route_id
+         WHERE ${WORK_TODAY}
+       ) bl ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT json_agg(json_build_object('lat', h.lat::float, 'lng', h.lng::float, 't', EXTRACT(EPOCH FROM h.recorded_at)) ORDER BY h.recorded_at DESC) AS points
+         FROM (SELECT lat, lng, recorded_at FROM collector_location_history
+               WHERE employee_id = e.id ORDER BY recorded_at DESC LIMIT 2) h
+       ) hp ON TRUE
        WHERE ${where}
        ORDER BY cl.employee_id ASC`,
       params
     );
 
-    res.json({ data: result.rows });
+    const data = result.rows.map((r) => {
+      const status = r.seconds_ago < TRUCK_LIVE_SECONDS ? 'live' : 'idle';
+      const total = r.serviced + r.missed + r.pending;
+      const { last_points: lastPoints, serviced, missed, pending, ...rest } = r;
+      return {
+        ...rest,
+        status,
+        // An idle phone has stopped reporting: its last speed is not "now".
+        speed_kmh: status === 'live' ? estimateSpeedKmh(lastPoints) : null,
+        progress: { serviced, missed, pending, total },
+      };
+    });
+    res.json({ data });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load truck locations.', code: 'INTERNAL' } });
+  }
+});
+
+// GET /api/v2/map/trucks/:employeeId/trail?since=today — the collector's
+// own pings for the company-local day, oldest first (capped). Admin and
+// gudoomiye only (403 for the other map roles). Same district scoping as
+// the trucks list: a gudoomiye asking for a collector outside its district
+// gets 404 (no existence leak).
+router.get('/trucks/:employeeId/trail', requireRole(...TRAIL_ROLES), async (req, res) => {
+  const employeeId = parseStrictId(req.params.employeeId);
+  if (employeeId === null) return res.status(400).json({ error: { message: 'Invalid employee id.', code: 'VALIDATION' } });
+  if (req.query.since !== undefined && req.query.since !== 'today') {
+    return res.status(400).json({ error: { message: 'since must be "today".', code: 'VALIDATION' } });
+  }
+  try {
+    const scope = await truckZoneScope(req);
+    if (scope.error) return res.status(scope.error.status).json(scope.error.body);
+    const notFound = () => res.status(404).json({ error: { message: 'Collector not found.', code: 'NOT_FOUND' } });
+    if (scope.empty) return notFound();
+    const tz = await getTimezone();
+    const today = localParts(new Date(), tz).date;
+    const empParams = [employeeId, today];
+    let empWhere = 'e.id = $1 AND $2::date IS NOT NULL';
+    if (scope.zoneId !== null) {
+      empParams.push(scope.zoneId);
+      empWhere += ` AND ${collectorInZoneSql('$3::int')}`;
+    }
+    const emp = await pool.query(`SELECT e.id FROM employees e WHERE ${empWhere}`, empParams);
+    if (!emp.rows[0]) return notFound();
+    const r = await pool.query(
+      `SELECT lat, lng, recorded_at FROM (
+         SELECT lat::float AS lat, lng::float AS lng, recorded_at
+         FROM collector_location_history
+         WHERE employee_id = $1
+           AND recorded_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+           AND recorded_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+         ORDER BY recorded_at DESC
+         LIMIT ${TRAIL_POINT_CAP}
+       ) x ORDER BY recorded_at ASC`,
+      [employeeId, today, tz]
+    );
+    res.json({ data: { employee_id: employeeId, date: today, points: r.rows } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load the route.', code: 'INTERNAL' } });
   }
 });
 
