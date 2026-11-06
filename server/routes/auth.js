@@ -33,6 +33,7 @@ const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const LOCK_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const PENDING_2FA_TTL = '5m';
+const TWO_FACTOR_LOCK_THRESHOLD = 5; // consecutive wrong codes at verify-login
 const BACKUP_CODE_COUNT = 8;
 
 const GENERIC_LOGIN_FAIL = { error: { message: 'Invalid username or password.', code: 'AUTH_INVALID' } };
@@ -48,7 +49,7 @@ async function completeLogin(req, user, ctx) {
   const sid = await sec.createSession(req, user.id);
   await sec.recordSuccessfulLogin(req, user);
   const token = issueStaffToken({ id: user.id, username: user.username, role: ctx.role, zone: ctx.zoneName, tokenVersion: user.token_version, sid });
-  const flags = sec.securityFlags({ role: ctx.role, twoFactorEnabled: user.two_factor_enabled, mustChangePassword: user.must_change_password });
+  const flags = sec.securityFlags({ role: ctx.role, authSource: user.auth_source, twoFactorEnabled: user.two_factor_enabled, mustChangePassword: user.must_change_password });
   return { token, user: { id: user.id, username: user.username, full_name: user.full_name, role: ctx.role, zone: ctx.zoneName, ...flags } };
 }
 
@@ -72,7 +73,9 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM v2_users WHERE username = $1', [username.trim()]);
     if (r.rows.length === 0) {
-      await sec.recordAuthEvent(req, { username: username.trim(), event: 'login_failed' });
+      // username_attempted stays NULL here: an unknown "username" is
+      // often a password typed into the wrong field — never store it.
+      await sec.recordAuthEvent(req, { username: null, event: 'login_failed' });
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
     const user = r.rows[0];
@@ -155,7 +158,7 @@ router.post('/login', authLimiter, async (req, res) => {
 router.get('/2fa/status', authenticateToken, async (req, res) => {
   try {
     const r = await pool.query('SELECT two_factor_enabled FROM v2_users WHERE id = $1', [req.user.id]);
-    return res.json({ data: { enabled: !!r.rows[0]?.two_factor_enabled, required: sec.roleRequires2fa(req.user.role) } });
+    return res.json({ data: { enabled: !!r.rows[0]?.two_factor_enabled, required: sec.requires2fa({ role: req.user.role, authSource: req.user.authSource }) } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to load 2FA status.', code: 'INTERNAL' } });
   }
@@ -173,8 +176,21 @@ function generateBackupCodes() {
 // TOTP secret, and return it as both a raw string (manual entry) and a
 // scannable QR. Calling this again before /2fa/enable simply overwrites
 // the not-yet-confirmed secret — no partial state to clean up.
+// Refused once 2FA is ON: re-keying an enabled account must go through
+// disable (password re-check) or an admin 2FA reset — otherwise a stolen
+// session could silently swap in the attacker's own authenticator.
+async function refuseIfEnabled(req, res) {
+  const r = await pool.query('SELECT two_factor_enabled FROM v2_users WHERE id = $1', [req.user.id]);
+  if (r.rows[0]?.two_factor_enabled) {
+    res.status(409).json({ error: { message: 'Two-factor authentication is already enabled.', code: 'TWO_FACTOR_ALREADY_ENABLED' } });
+    return true;
+  }
+  return false;
+}
+
 router.post('/2fa/setup', authenticateToken, async (req, res) => {
   try {
+    if (await refuseIfEnabled(req, res)) return;
     const secret = authenticator.generateSecret();
     await pool.query('UPDATE v2_users SET two_factor_secret = $1 WHERE id = $2', [secret, req.user.id]);
     const otpauth = authenticator.keyuri(req.user.username, 'GURMAD', secret);
@@ -198,6 +214,7 @@ router.post('/2fa/enable', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: { message: 'A verification code is required.', code: 'VALIDATION' } });
   }
   try {
+    if (await refuseIfEnabled(req, res)) return;
     const r = await pool.query('SELECT two_factor_secret FROM v2_users WHERE id = $1', [req.user.id]);
     const secret = r.rows[0]?.two_factor_secret;
     if (!secret) return res.status(400).json({ error: { message: 'Start 2FA setup first.', code: 'VALIDATION' } });
@@ -206,8 +223,10 @@ router.post('/2fa/enable', authenticateToken, async (req, res) => {
     }
     const rawCodes = generateBackupCodes();
     const hashedCodes = await Promise.all(rawCodes.map((c) => bcrypt.hash(c, BCRYPT_ROUNDS)));
-    await pool.query('UPDATE v2_users SET two_factor_enabled = TRUE, two_factor_backup_codes = $1 WHERE id = $2', [hashedCodes, req.user.id]);
+    await pool.query('UPDATE v2_users SET two_factor_enabled = TRUE, two_factor_backup_codes = $1, two_factor_failed_count = 0 WHERE id = $2', [hashedCodes, req.user.id]);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_enabled', entityType: 'v2_user', entityId: req.user.id });
+    await sec.recordAuthEvent(req, { userId: req.user.id, username: req.user.username, event: '2fa_enabled' });
+    await sec.notify2faEnabled(req, { id: req.user.id, username: req.user.username });
     return res.json({ data: { message: 'Two-factor authentication enabled.', backupCodes: rawCodes } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to enable 2FA.', code: 'INTERNAL' } });
@@ -222,7 +241,7 @@ router.post('/2fa/disable', authenticateToken, async (req, res) => {
   if (typeof password !== 'string' || !password) {
     return res.status(400).json({ error: { message: 'Your current password is required.', code: 'VALIDATION' } });
   }
-  if (sec.roleRequires2fa(req.user.role)) {
+  if (sec.requires2fa({ role: req.user.role, authSource: req.user.authSource })) {
     return res.status(403).json({ error: { message: 'Two-factor authentication is mandatory for your role and cannot be turned off.', code: 'TWO_FACTOR_MANDATORY' } });
   }
   try {
@@ -265,6 +284,13 @@ router.post('/2fa/verify-login', authLimiter, async (req, res) => {
     if (!user || !user.two_factor_enabled) {
       return res.status(401).json({ error: { message: 'Invalid token.', code: 'AUTH_INVALID' } });
     }
+    // Per-account 2FA attempt limit — the same lock (locked_until, 15
+    // minutes) as the password lockout, so a stolen password plus a
+    // still-valid pendingToken can't be used to brute-force the code.
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'locked' });
+      return res.status(401).json({ error: { message: 'Too many incorrect codes. Please try again later.', code: 'AUTH_LOCKED' } });
+    }
 
     const trimmed = code.trim();
     let ok = authenticator.check(trimmed, user.two_factor_secret);
@@ -281,8 +307,22 @@ router.post('/2fa/verify-login', authLimiter, async (req, res) => {
     if (!ok) {
       await logAudit({ actorId: user.id, actorUsername: user.username, action: 'login_2fa_failed', entityType: 'v2_user', entityId: user.id });
       await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: '2fa_failed' });
+      const upd = await pool.query(
+        'UPDATE v2_users SET two_factor_failed_count = two_factor_failed_count + 1, updated_at = NOW() WHERE id = $1 RETURNING two_factor_failed_count',
+        [user.id]
+      );
+      if (upd.rows[0].two_factor_failed_count >= TWO_FACTOR_LOCK_THRESHOLD) {
+        await pool.query(
+          'UPDATE v2_users SET locked_until = $1, two_factor_failed_count = 0, updated_at = NOW() WHERE id = $2',
+          [new Date(Date.now() + LOCK_WINDOW_MS), user.id]
+        );
+        await logAudit({ actorId: user.id, actorUsername: user.username, action: 'account_locked', entityType: 'v2_user', entityId: user.id, after: { reason: '2fa_attempts' } });
+        await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'locked' });
+        return res.status(401).json({ error: { message: 'Too many incorrect codes. Please try again later.', code: 'AUTH_LOCKED' } });
+      }
       return res.status(401).json({ error: { message: 'Incorrect code.', code: 'AUTH_INVALID' } });
     }
+    await pool.query('UPDATE v2_users SET two_factor_failed_count = 0 WHERE id = $1', [user.id]);
 
     if (usedBackupCode) {
       const remaining = user.two_factor_backup_codes.filter((h) => h !== usedBackupCode);
@@ -387,7 +427,7 @@ router.post('/password/change', authenticateToken, async (req, res) => {
     await logAudit({ actorId: user.id, actorUsername: user.username, action: 'password_change', entityType: 'v2_user', entityId: user.id });
     await sec.recordAuthEvent(req, { userId: user.id, username: user.username, event: 'password_changed' });
     await sec.notifySecurityEvent(user.id, 'security.password_changed', 'Your password was changed', null);
-    return res.json({ data: { message: 'Password changed. You remain signed in on this device — other devices will need to sign in again.', token, ...sec.securityFlags({ role: ctx.role, twoFactorEnabled: ctx.twoFactorEnabled, mustChangePassword: false }) } });
+    return res.json({ data: { message: 'Password changed. You remain signed in on this device — other devices will need to sign in again.', token, ...sec.securityFlags({ role: ctx.role, authSource: ctx.authSource, twoFactorEnabled: ctx.twoFactorEnabled, mustChangePassword: false }) } });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to change password.', code: 'INTERNAL' } });
   }
@@ -473,7 +513,7 @@ router.get('/security-status', authenticateToken, (req, res) => {
   if (req.user.twoFactorEnabled === undefined) {
     return res.json({ data: { must_change_password: false, must_enroll_2fa: false, two_factor_required: false, two_factor_enabled: false } });
   }
-  return res.json({ data: { ...sec.securityFlags({ role: req.user.role, twoFactorEnabled: req.user.twoFactorEnabled, mustChangePassword: req.user.mustChangePassword }), two_factor_enabled: !!req.user.twoFactorEnabled } });
+  return res.json({ data: { ...sec.securityFlags({ role: req.user.role, authSource: req.user.authSource, twoFactorEnabled: req.user.twoFactorEnabled, mustChangePassword: req.user.mustChangePassword }), two_factor_enabled: !!req.user.twoFactorEnabled } });
 });
 
 router.get('/login-history', authenticateToken, async (req, res) => {

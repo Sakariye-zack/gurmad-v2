@@ -8,7 +8,7 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sniffFileType } = require('../lib/fileSniff');
 const { rejectIfInfected } = require('../lib/virusScan');
 const { validatePassword, policyErrorBody } = require('../lib/passwordPolicy');
-const { revokeAllSessions, loginHistory } = require('../lib/accountSecurity');
+const { revokeAllSessions, loginHistory, notifySecurityEvent } = require('../lib/accountSecurity');
 
 // User & Access Administration — Implementation Spec §16/§17. Admin-only
 // user-management surface (Preconditions §9's default, not separately
@@ -294,7 +294,7 @@ router.put('/:id/enable', authenticateToken, requireRole('admin'), async (req, r
     // Re-enable does NOT bump token_version (matches the Customer
     // Portal's own precedent — re-enabling isn't a compromise event).
     const r = await pool.query(
-      'UPDATE v2_users SET is_active = TRUE, failed_login_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, username, is_active',
+      'UPDATE v2_users SET is_active = TRUE, failed_login_count = 0, two_factor_failed_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, username, is_active',
       [id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
@@ -350,7 +350,7 @@ router.put('/:id/password', authenticateToken, requireRole('admin'), async (req,
     // user must replace it on their next sign-in.
     const r = await pool.query(
       `UPDATE v2_users SET password_hash = $1, token_version = token_version + 1, must_change_password = TRUE,
-              failed_login_count = 0, locked_until = NULL, updated_at = NOW()
+              failed_login_count = 0, two_factor_failed_count = 0, locked_until = NULL, updated_at = NOW()
        WHERE id = $2 RETURNING id, username`,
       [hash, id]
     );
@@ -360,6 +360,33 @@ router.put('/:id/password', authenticateToken, requireRole('admin'), async (req,
     return res.json({ data: r.rows[0] });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to reset password.', code: 'INTERNAL' } });
+  }
+});
+
+// Account security — admin 2FA reset (lost authenticator AND backup
+// codes). Clears secret/enabled/backup codes, revokes every session,
+// audits, notifies the user. Not on self: an admin who lost their own
+// device must be reset by another admin (or the server operator).
+router.post('/:id/2fa/reset', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+  if (id === req.user.id) {
+    return res.status(400).json({ error: { message: 'You cannot reset your own two-factor authentication.', code: 'VALIDATION' } });
+  }
+  try {
+    const r = await pool.query(
+      `UPDATE v2_users SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_backup_codes = '{}',
+              two_factor_failed_count = 0, token_version = token_version + 1, updated_at = NOW()
+       WHERE id = $1 RETURNING id, username, two_factor_enabled`,
+      [id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: { message: 'User not found.', code: 'NOT_FOUND' } });
+    await revokeAllSessions(id);
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: '2fa_reset_by_admin', entityType: 'v2_user', entityId: id });
+    await notifySecurityEvent(id, 'security.2fa_reset', `Two-factor authentication was reset by an administrator (${req.user.username})`, null);
+    return res.json({ data: r.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: { message: 'Failed to reset two-factor authentication.', code: 'INTERNAL' } });
   }
 });
 

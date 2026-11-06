@@ -30,41 +30,68 @@ const MANDATORY_2FA_ROLES = parseMandatory2faRoles(process.env.MANDATORY_2FA_ROL
 function roleRequires2fa(role) {
   return MANDATORY_2FA_ROLES.includes(role);
 }
+// Only V2-native accounts are held to mandatory 2FA — an account still on
+// auth_source 'legacy' signs in through the old backend, which never asks
+// for the V2 second factor, so gating it here would only lock it out.
+function requires2fa({ role, authSource }) {
+  return authSource === 'v2' && roleRequires2fa(role);
+}
 
 // ------------------------------------------------------------------
 // Request gates (called from middleware/auth.js after authentication).
 // Paths are matched against the full /api/v2/... path.
 // ------------------------------------------------------------------
+// Each entry: [method or '*', path regex]. Kept deliberately narrow — a
+// held account can only resolve the hold, look at its own security
+// state, and sign out.
+const ANY = '*';
 const PASSWORD_CHANGE_ALLOWED = [
-  /^\/api\/v2\/auth\/password\/change$/,
-  /^\/api\/v2\/auth\/logout(-all)?$/,
-  /^\/api\/v2\/auth\/my-permissions$/,
-  /^\/api\/v2\/auth\/security-status$/,
-  /^\/api\/v2\/settings\/company(\/.*)?$/,
+  ['POST', /^\/api\/v2\/auth\/password\/change$/],
+  ['POST', /^\/api\/v2\/auth\/logout(-all)?$/],
+  ['GET', /^\/api\/v2\/auth\/my-permissions$/],
+  ['GET', /^\/api\/v2\/auth\/security-status$/],
+  ['GET', /^\/api\/v2\/settings\/company(\/.*)?$/],
 ];
 const TWO_FACTOR_ALLOWED = [
-  /^\/api\/v2\/auth(\/.*)?$/, // includes 2fa/setup, 2fa/enable, my-permissions, logout, sessions, history
-  /^\/api\/v2\/settings\/company(\/.*)?$/,
-  /^\/api\/v2\/staff-notifications(\/.*)?$/,
+  ['GET', /^\/api\/v2\/auth\/2fa\/status$/],
+  ['POST', /^\/api\/v2\/auth\/2fa\/(setup|enable)$/],
+  ['POST', /^\/api\/v2\/auth\/logout(-all)?$/],
+  ['GET', /^\/api\/v2\/auth\/sessions$/],
+  ['POST', /^\/api\/v2\/auth\/sessions\/[^/]+\/revoke$/],
+  ['GET', /^\/api\/v2\/auth\/security-status$/],
+  ['GET', /^\/api\/v2\/auth\/my-permissions$/],
+  ['GET', /^\/api\/v2\/auth\/login-history$/],
+  ['GET', /^\/api\/v2\/settings\/company(\/.*)?$/],
+  ['GET', /^\/api\/v2\/staff-notifications(\/.*)?$/],
 ];
+function allowed(list, method, path) {
+  const m = (method || 'GET').toUpperCase();
+  const effective = m === 'HEAD' ? 'GET' : m;
+  return list.some(([lm, re]) => (lm === ANY || lm === effective) && re.test(path));
+}
 
-// Returns null (allowed) or { status, body } to send.
-function evaluateSecurityGates(ctx, fullPath) {
+// Returns null (allowed) or { status, body } to send. A forced password
+// change takes precedence: while it is pending, ONLY its own allowlist
+// applies (so the password change itself stays reachable even for an
+// account that is also held for 2FA enrolment).
+function evaluateSecurityGates(ctx, fullPath, method) {
   const path = (fullPath || '').split('?')[0].replace(/\/+$/, '');
-  if (ctx.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.some((re) => re.test(path))) {
+  if (ctx.mustChangePassword) {
+    if (allowed(PASSWORD_CHANGE_ALLOWED, method, path)) return null;
     return { status: 403, body: { error: { message: 'You must change your password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' } } };
   }
-  if (!ctx.twoFactorEnabled && roleRequires2fa(ctx.role) && !TWO_FACTOR_ALLOWED.some((re) => re.test(path))) {
+  if (!ctx.twoFactorEnabled && requires2fa(ctx) && !allowed(TWO_FACTOR_ALLOWED, method, path)) {
     return { status: 403, body: { error: { message: 'Two-factor authentication is required for your role. Enable it in Account Security.', code: 'TWO_FACTOR_REQUIRED' } } };
   }
   return null;
 }
 
-function securityFlags({ role, twoFactorEnabled, mustChangePassword }) {
+function securityFlags({ role, authSource, twoFactorEnabled, mustChangePassword }) {
+  const required = requires2fa({ role, authSource });
   return {
     must_change_password: !!mustChangePassword,
-    must_enroll_2fa: !twoFactorEnabled && roleRequires2fa(role),
-    two_factor_required: roleRequires2fa(role),
+    must_enroll_2fa: !twoFactorEnabled && required,
+    two_factor_required: required,
   };
 }
 
@@ -82,8 +109,16 @@ function requestUserAgent(req) {
   return ua ? String(ua).slice(0, 500) : null;
 }
 
-// Short human label for a user agent: "Chrome on Windows".
+// Short, safe human label for a user agent: "Chrome on Windows". Control
+// characters stripped and capped at 40 chars — it is placed in
+// notification titles.
 function describeUserAgent(ua) {
+  return cleanLabel(describeUserAgentRaw(ua));
+}
+function cleanLabel(s) {
+  return String(s || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 40) || 'Unknown device';
+}
+function describeUserAgentRaw(ua) {
   if (!ua) return 'Unknown device';
   let browser = 'Unknown browser';
   if (/Edg\//.test(ua)) browser = 'Edge';
@@ -148,7 +183,7 @@ async function recordSuccessfulLogin(req, user) {
     );
     const { total, same } = prior.rows[0];
     if (total > 0 && same === 0) {
-      await notifySecurityEvent(user.id, 'security.new_login', `New sign-in from ${describeUserAgent(ua)} · ${ip || 'unknown IP'}`, null);
+      await notifySecurityEvent(user.id, 'security.new_login', `New sign-in from ${describeUserAgent(ua)} · ${cleanLabel(ip || 'unknown IP')}`, null);
     }
   } catch (err) {
     logger.error('new_login_check_failed', { message: err.message });
@@ -159,6 +194,24 @@ async function recordSuccessfulLogin(req, user) {
 // ------------------------------------------------------------------
 // Sessions
 // ------------------------------------------------------------------
+// 2FA enrolment: tell the user AND every other active admin, so an
+// attacker enrolling their own authenticator on a stolen session is seen.
+async function notify2faEnabled(req, user) {
+  const where = `${describeUserAgent(requestUserAgent(req))} · ${cleanLabel(requestIp(req) || 'unknown IP')}`;
+  await notifySecurityEvent(user.id, 'security.2fa_enabled', `Two-factor authentication was enabled for your account from ${where}`, null);
+  try {
+    const admins = await pool.query(
+      "SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE AND id <> $1",
+      [user.id]
+    );
+    for (const a of admins.rows) {
+      await notifySecurityEvent(a.id, 'security.2fa_enabled', `${cleanLabel(user.username)} enabled two-factor authentication from ${where}`, null);
+    }
+  } catch (err) {
+    logNotificationFailure('security.2fa_enabled', err);
+  }
+}
+
 async function createSession(req, userId) {
   const id = crypto.randomUUID();
   await pool.query(
@@ -223,7 +276,10 @@ module.exports = {
   MANDATORY_2FA_ROLES,
   parseMandatory2faRoles,
   roleRequires2fa,
+  requires2fa,
   evaluateSecurityGates,
+  notify2faEnabled,
+  cleanLabel,
   securityFlags,
   requestIp,
   describeUserAgent,

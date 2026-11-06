@@ -14,6 +14,7 @@ const { authenticator } = require('otplib');
 const { api, db, insertUser, login, tokenFor, setupWorld, PASSWORD } = require('./helpers');
 const { validatePassword } = require('../lib/passwordPolicy');
 const { parseMandatory2faRoles, describeUserAgent } = require('../lib/accountSecurity');
+const { configureTrustProxy } = require('../lib/trustProxy');
 
 const UA_A = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const UA_B = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
@@ -25,7 +26,18 @@ async function userId(username) {
   return (await db.query('SELECT id FROM v2_users WHERE username = $1', [username])).rows[0].id;
 }
 
-test('trust proxy: req.ip comes from X-Forwarded-For (one trusted hop), recorded per client', async () => {
+test('trust proxy is opt-in: off unless TRUST_PROXY=1, then loopback hops only', () => {
+  const calls = [];
+  const fakeApp = { set: (k, v) => calls.push([k, v]) };
+  assert.equal(configureTrustProxy(fakeApp, {}), false);
+  assert.equal(configureTrustProxy(fakeApp, { TRUST_PROXY: 'true' }), false);
+  assert.deepEqual(calls, [], 'default: trust proxy untouched (req.ip = socket address)');
+  assert.equal(configureTrustProxy(fakeApp, { TRUST_PROXY: '1' }), true);
+  assert.deepEqual(calls, [['trust proxy', 'loopback']]);
+});
+
+// The test server runs with TRUST_PROXY=1 (test/run.js).
+test('trust proxy (enabled): req.ip comes from X-Forwarded-For (one trusted hop), recorded per client', async () => {
   await insertUser('t_sec_ip', 'cashier');
   const a = await loginWith('t_sec_ip', PASSWORD, { 'X-Forwarded-For': '203.0.113.7' });
   assert.equal(a.status, 200);
@@ -47,7 +59,7 @@ test('login history: success, failure, unknown user, 2FA failure, logout, passwo
   const { tokens } = await setupWorld();
   const id = await insertUser('t_sec_hist', 'cashier');
   assert.equal((await login('t_sec_hist', 'wrong-password')).status, 401);
-  assert.equal((await login('t_sec_hist_nobody', 'whatever')).status, 401);
+  assert.equal((await loginWith('t_sec_hist_nobody', 'whatever', { 'X-Forwarded-For': '192.0.2.200' })).status, 401);
   const tok = await tokenFor('t_sec_hist');
   const changed = await api('POST', '/auth/password/change', { token: tok, body: { currentPassword: PASSWORD, newPassword: 'Hist-Secure-2026' } });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
@@ -55,9 +67,11 @@ test('login history: success, failure, unknown user, 2FA failure, logout, passwo
 
   const rows = (await db.query('SELECT event FROM auth_events WHERE user_id = $1 ORDER BY id', [id])).rows.map((r) => r.event);
   for (const e of ['login_failed', 'login_success', 'password_changed', 'logout']) assert.ok(rows.includes(e), `${e} recorded: ${rows}`);
-  const unknown = await db.query("SELECT user_id FROM auth_events WHERE username_attempted = 't_sec_hist_nobody'");
+  const unknown = await db.query("SELECT user_id, username_attempted FROM auth_events WHERE ip = '192.0.2.200'");
   assert.equal(unknown.rows.length, 1);
   assert.equal(unknown.rows[0].user_id, null, 'unknown username has no user_id');
+  assert.equal(unknown.rows[0].username_attempted, null, 'an unmatched username (maybe a mistyped password) is never stored');
+  assert.equal((await db.query("SELECT 1 FROM auth_events WHERE username_attempted = 't_sec_hist_nobody'")).rows.length, 0);
 
   // 2FA failure
   const id2 = await insertUser('t_sec_hist2fa', 'cashier');
@@ -156,6 +170,9 @@ test('new-login alert: notified once for a new IP+device, not for a repeat, not 
   const alert = notes.data.find((n) => n.event_type === 'security.new_login');
   assert.match(alert.title, /Chrome on Android · 192\.0\.2\.11/);
   assert.equal(describeUserAgent(UA_A), 'Chrome on Windows');
+  const evil = describeUserAgent('Evil\u0007\nBot/1.0 ' + 'x'.repeat(200));
+  assert.ok(!/[\u0000-\u001f]/.test(evil), 'control characters stripped');
+  assert.ok(evil.length <= 40, 'label capped at 40 chars');
 });
 
 test('password change and 2FA disable create security notifications', async () => {
@@ -190,6 +207,15 @@ test('mandatory 2FA gate: 403 TWO_FACTOR_REQUIRED until enabled, setup/enable/lo
   const blocked = await api('GET', '/staff-tasks/my', { token: tok });
   assert.equal(blocked.status, 403);
   assert.equal(blocked.body.error.code, 'TWO_FACTOR_REQUIRED');
+  // Narrow allowlist: no password change, no notification writes, no
+  // settings writes while held.
+  const pw = await api('POST', '/auth/password/change', { token: tok, body: { currentPassword: PASSWORD, newPassword: 'Held-Account-2026' } });
+  assert.equal(pw.body.error?.code, 'TWO_FACTOR_REQUIRED');
+  assert.equal((await api('PUT', '/staff-notifications/read-all', { token: tok, body: {} })).body.error?.code, 'TWO_FACTOR_REQUIRED');
+  assert.equal((await api('PUT', '/settings/company', { token: tok, body: {} })).body.error?.code, 'TWO_FACTOR_REQUIRED');
+  assert.equal((await api('GET', '/auth/sessions', { token: tok })).status, 200);
+  assert.equal((await api('GET', '/auth/login-history', { token: tok })).status, 200);
+  assert.equal((await api('GET', '/auth/2fa/status', { token: tok })).status, 200);
   assert.equal((await api('GET', '/auth/my-permissions', { token: tok })).status, 200);
   assert.equal((await api('GET', '/staff-notifications', { token: tok })).status, 200);
   // GET /settings/company is admin-only (FORBIDDEN for this role) — but the 2FA gate itself must not fire there.
@@ -201,6 +227,18 @@ test('mandatory 2FA gate: 403 TWO_FACTOR_REQUIRED until enabled, setup/enable/lo
   assert.equal(setup.status, 200);
   const en = await api('POST', '/auth/2fa/enable', { token: tok, body: { code: authenticator.generate(setup.data.secret) } });
   assert.equal(en.status, 200);
+  const mfaId = await userId('t_sec_mfa');
+  assert.equal((await db.query("SELECT 1 FROM auth_events WHERE user_id = $1 AND event = '2fa_enabled'", [mfaId])).rows.length, 1);
+  assert.equal((await db.query("SELECT 1 FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_enabled'", [mfaId])).rows.length, 1, 'user notified');
+  const adminId = await userId('t_admin');
+  const adminNote = await db.query("SELECT title FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_enabled' AND title LIKE 't_sec_mfa enabled%'", [adminId]);
+  assert.equal(adminNote.rows.length, 1, 'other active admins notified');
+
+  // No re-keying while enabled.
+  const again = await api('POST', '/auth/2fa/setup', { token: tok, body: {} });
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, 'TWO_FACTOR_ALREADY_ENABLED');
+  assert.equal((await api('POST', '/auth/2fa/enable', { token: tok, body: { code: '123456' } })).status, 409);
 
   assert.equal((await api('GET', '/staff-tasks/my', { token: tok })).status, 200, 'unblocked after enabling');
   assert.equal((await api('GET', '/auth/security-status', { token: tok })).data.must_enroll_2fa, false);
@@ -208,6 +246,75 @@ test('mandatory 2FA gate: 403 TWO_FACTOR_REQUIRED until enabled, setup/enable/lo
   assert.equal(dis.status, 403);
   assert.equal(dis.body.error.code, 'TWO_FACTOR_MANDATORY');
   assert.equal((await api('POST', '/auth/logout', { token: tok, body: {} })).status, 200);
+});
+
+test('mandatory 2FA gate skips accounts not on auth_source v2', async () => {
+  await db.query("INSERT INTO roles (key, label, is_system) VALUES ('sec_mfa_test', 'Security MFA test role', FALSE) ON CONFLICT (key) DO NOTHING");
+  const id = await insertUser('t_sec_mfa_legacy', 'sec_mfa_test');
+  await db.query("UPDATE v2_users SET auth_source = 'legacy' WHERE id = $1", [id]);
+  const tv = (await db.query('SELECT token_version FROM v2_users WHERE id = $1', [id])).rows[0].token_version;
+  const tok = jwt.sign({ id, username: 't_sec_mfa_legacy', role: 'sec_mfa_test', zone: null, tokenVersion: tv }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  assert.equal((await api('GET', '/staff-tasks/my', { token: tok })).status, 200);
+  assert.equal((await api('GET', '/auth/security-status', { token: tok })).data.must_enroll_2fa, false);
+});
+
+async function enroll2fa(username) {
+  const t = await tokenFor(username);
+  const setup = await api('POST', '/auth/2fa/setup', { token: t, body: {} });
+  const en = await api('POST', '/auth/2fa/enable', { token: t, body: { code: authenticator.generate(setup.data.secret) } });
+  assert.equal(en.status, 200);
+  return { token: t, secret: setup.data.secret };
+}
+
+test('2FA attempt limit: 5 consecutive wrong codes lock the account; a success resets the count', async () => {
+  const id = await insertUser('t_sec_2falock', 'cashier');
+  const { secret } = await enroll2fa('t_sec_2falock');
+
+  // 4 wrong then right -> counter reset.
+  let p = (await login('t_sec_2falock')).data.pendingToken;
+  for (let i = 0; i < 4; i++) {
+    assert.equal((await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: 'bad-code' } })).body.error.code, 'AUTH_INVALID');
+  }
+  const okLogin = await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: authenticator.generate(secret) } });
+  assert.equal(okLogin.status, 200);
+  assert.equal((await db.query('SELECT two_factor_failed_count FROM v2_users WHERE id = $1', [id])).rows[0].two_factor_failed_count, 0);
+
+  // 5 wrong -> locked.
+  p = (await login('t_sec_2falock')).data.pendingToken;
+  let last;
+  for (let i = 0; i < 5; i++) last = await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: 'bad-code' } });
+  assert.equal(last.status, 401);
+  assert.equal(last.body.error.code, 'AUTH_LOCKED');
+  const lockedRow = (await db.query('SELECT locked_until FROM v2_users WHERE id = $1', [id])).rows[0];
+  assert.ok(lockedRow.locked_until && new Date(lockedRow.locked_until) > new Date(), 'locked_until set');
+  assert.ok((await db.query("SELECT 1 FROM auth_events WHERE user_id = $1 AND event = 'locked'", [id])).rows.length >= 1);
+  // Even the right code is refused while locked, and so is the password step.
+  assert.equal((await api('POST', '/auth/2fa/verify-login', { body: { pendingToken: p, code: authenticator.generate(secret) } })).body.error.code, 'AUTH_LOCKED');
+  assert.equal((await login('t_sec_2falock')).status, 401);
+});
+
+test('admin 2FA reset: clears 2FA, revokes sessions, notifies; admin-only, not on self', async () => {
+  const { tokens } = await setupWorld();
+  const id = await insertUser('t_sec_2fareset', 'cashier');
+  const { token: userTok } = await enroll2fa('t_sec_2fareset');
+  const adminId = await userId('t_admin');
+
+  assert.equal((await api('POST', `/users/${id}/2fa/reset`, { token: tokens.cashier, body: {} })).status, 403, 'non-admin');
+  assert.equal((await api('POST', `/users/${adminId}/2fa/reset`, { token: tokens.admin, body: {} })).status, 400, 'not on self');
+  assert.equal((await api('POST', '/users/999999/2fa/reset', { token: tokens.admin, body: {} })).status, 404);
+  const r = await api('POST', `/users/${id}/2fa/reset`, { token: tokens.admin, body: {} });
+  assert.equal(r.status, 200);
+
+  const row = (await db.query('SELECT two_factor_enabled, two_factor_secret, two_factor_backup_codes FROM v2_users WHERE id = $1', [id])).rows[0];
+  assert.equal(row.two_factor_enabled, false);
+  assert.equal(row.two_factor_secret, null);
+  assert.deepEqual(row.two_factor_backup_codes, []);
+  assert.equal((await api('GET', '/auth/my-permissions', { token: userTok })).status, 401, 'sessions revoked');
+  assert.equal((await db.query('SELECT 1 FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL', [id])).rows.length, 0);
+  assert.equal((await db.query("SELECT 1 FROM v2_staff_notifications WHERE recipient_id = $1 AND event_type = 'security.2fa_reset'", [id])).rows.length, 1);
+  assert.equal((await db.query("SELECT 1 FROM v2_audit_log WHERE action = '2fa_reset_by_admin' AND entity_id::text = $1", [String(id)])).rows.length, 1);
+  const fresh = await login('t_sec_2fareset');
+  assert.ok(fresh.data.token, 'password-only login works again');
 });
 
 test('password policy: unit rules', () => {

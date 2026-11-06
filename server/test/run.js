@@ -45,7 +45,9 @@ async function waitHealthy(base, tries = 60) {
   // t_admin/t_gudoomiye. The suite points it at a dedicated test-only role
   // instead; security.test.js exercises the gate end-to-end with a user of
   // that role and unit-tests the production default separately.
-  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  // TRUST_PROXY=1: the opt-in proxy trust (lib/trustProxy.js) is on for the
+  // suite so the X-Forwarded-For handling is exercised; off by default in prod.
+  const env = { ...process.env, DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });

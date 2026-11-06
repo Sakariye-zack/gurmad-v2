@@ -42,6 +42,12 @@ export const ACCOUNT_SECURITY = {
   'history.event.logout': { en: 'Signed out', so: 'Ka baxay' },
   'history.event.password_changed': { en: 'Password changed', so: 'Password-ka waa la beddelay' },
 
+  'users.reset2fa.action': { en: 'Reset 2FA', so: 'Dib u deji 2FA' },
+  'users.reset2fa.title': { en: 'Reset two-factor authentication?', so: 'Dib ma u dejinaysaa xaqiijinta laba-tallaabo?' },
+  'users.reset2fa.confirm': { en: 'This turns off two-factor authentication for {user} and signs them out of every device. Use it only when they have lost both their authenticator and their backup codes. If their role requires 2FA they will have to set it up again at their next sign-in.', so: 'Tani waxay damisaa xaqiijinta laba-tallaabo ee {user} waxayna ka saaraysaa qalab kasta. Isticmaal oo keliya marka uu lumiyay app-ka iyo koodhadhka gurmadka labadaba. Haddii doorkiisu u baahan yahay 2FA, waa inuu mar kale dejiyaa marka xiga ee uu soo galo.' },
+  'users.reset2fa.done': { en: 'Two-factor authentication reset for {user}.', so: 'Xaqiijinta laba-tallaabo ee {user} dib ayaa loo dejiyay.' },
+  'mfaGate.pwLater': { en: 'You can change your password after two-factor authentication is set up.', so: 'Password-kaaga waad beddeli kartaa marka xaqiijinta laba-tallaabo la dejiyo kadib.' },
+
   'idle.title': { en: 'Are you still there?', so: 'Weli ma joogtaa?' },
   'idle.body': { en: 'You have been inactive. You will be signed out in {n} seconds.', so: 'Waxaad ka bixi doontaa {n} ilbiriqsi gudahood.' },
   'idle.stay': { en: 'Stay signed in', so: 'Sii jooji' },

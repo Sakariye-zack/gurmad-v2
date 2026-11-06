@@ -1965,13 +1965,19 @@ async function runMigrations() {
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES v2_users(id) ON DELETE CASCADE,
       username_attempted VARCHAR(100),
-      event VARCHAR(30) NOT NULL CHECK (event IN ('login_success', 'login_failed', 'locked', '2fa_failed', 'logout', 'password_changed')),
+      event VARCHAR(30) NOT NULL,
       ip VARCHAR(64),
       user_agent TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_events_user_created ON auth_events(user_id, created_at DESC);`);
+  // Allowed events — (re)applied every boot so the list can grow.
+  await pool.query(`ALTER TABLE auth_events DROP CONSTRAINT IF EXISTS auth_events_event_check;`);
+  await pool.query(`ALTER TABLE auth_events ADD CONSTRAINT auth_events_event_check CHECK (event IN ('login_success', 'login_failed', 'locked', '2fa_failed', '2fa_enabled', 'logout', 'password_changed'));`);
+  // Consecutive wrong 2FA codes at verify-login; 5 locks the account
+  // exactly like the password lockout (locked_until, 15 minutes).
+  await pool.query(`ALTER TABLE v2_users ADD COLUMN IF NOT EXISTS two_factor_failed_count INTEGER NOT NULL DEFAULT 0;`);
   // Active sessions. The JWT carries `sid` = user_sessions.id; tokens
   // issued before this table existed carry no sid and stay valid until
   // their own expiry (middleware/auth.js).

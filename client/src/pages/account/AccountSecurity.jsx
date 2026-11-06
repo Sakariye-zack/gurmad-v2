@@ -79,6 +79,11 @@ export default function AccountSecurity() {
 
       <Card style={{ padding: '24px', maxWidth: '480px', marginBottom: '20px' }}>
         <h3 style={{ marginTop: 0 }}>{t('security.changePassword')}</h3>
+        {/* Held for 2FA enrolment: the server refuses password changes
+            until 2FA is on, so don't offer a form that can only fail. */}
+        {user?.must_enroll_2fa ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>{t('mfaGate.pwLater')}</p>
+        ) : (
         <form onSubmit={handleChangePassword}>
           <label style={labelStyle}>{t('security.currentPassword')}</label>
           <input type="password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} />
@@ -87,6 +92,7 @@ export default function AccountSecurity() {
           <PasswordStrength password={newPassword} username={user?.username} />
           <Button type="submit" disabled={saving} style={{ marginTop: '14px' }}>{saving ? t('common.saving') : t('security.changePassword')}</Button>
         </form>
+        )}
       </Card>
 
       <SessionsCard onLogoutAll={() => setLogoutAllConfirmOpen(true)} />

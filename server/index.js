@@ -71,13 +71,9 @@ const searchRouter = require('./routes/search');
 
 const app = express();
 
-// Account security — nginx sits in front as exactly ONE proxy hop, so
-// req.ip is the address nginx appended to X-Forwarded-For (the real
-// client), not nginx's own loopback address. Without this every request
-// shared one IP and express-rate-limit throttled all users together.
-// '1' (not `true`) so a client cannot spoof its IP with its own XFF
-// header — only the right-most, nginx-written entry is trusted.
-app.set('trust proxy', 1);
+// Account security — opt-in proxy trust (TRUST_PROXY=1, loopback hops
+// only). Off by default; see lib/trustProxy.js before enabling.
+require('./lib/trustProxy').configureTrustProxy(app);
 
 // Production Readiness (T) — O-7/Security Hardening, Implementation Spec
 // §5/§9. Standard security-header set (CSP left at helmet's own safe

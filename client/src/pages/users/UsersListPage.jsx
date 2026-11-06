@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { ShieldCheck, Plus } from 'lucide-react';
-import { PageHeader, Button, DataTable, StatusBadge, useToast } from '../../components/ui/index.js';
-import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser } from '../../hooks/useUsers.js';
+import { PageHeader, Button, DataTable, StatusBadge, ConfirmDialog, useToast } from '../../components/ui/index.js';
+import { useUsers, useCreateUser, useDisableUser, useEnableUser, useRevokeUser, useResetUserTwoFactor } from '../../hooks/useUsers.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
 import { useEmployees } from '../../hooks/useEmployees.js';
 import { useRoles } from '../../hooks/useRoles.js';
 import UserEditModal from './UserEditModal.jsx';
@@ -31,6 +32,20 @@ export default function UsersListPage() {
   const disableUser = useDisableUser();
   const enableUser = useEnableUser();
   const revokeUser = useRevokeUser();
+  const resetTwoFactor = useResetUserTwoFactor();
+  const { user: me } = useAuth();
+  const [twoFactorResetUser, setTwoFactorResetUser] = useState(null);
+
+  async function handleResetTwoFactor() {
+    const u = twoFactorResetUser;
+    try {
+      await resetTwoFactor.mutateAsync(u.id);
+      toast.success(t('users.reset2fa.done', undefined, { user: u.username }));
+      setTwoFactorResetUser(null);
+    } catch (err) {
+      toast.error(err.message || t('common.somethingWrong'));
+    }
+  }
   // User-reported gap (Phase 10 Billing audit, continued sweep): this
   // field used to be a raw "type the employee's numeric id" input — same
   // class of bug already fixed (in the reverse direction) on
@@ -155,6 +170,9 @@ export default function UsersListPage() {
                 )}
                 <Button variant="ghost" style={smallBtnStyle} onClick={() => setResettingUser(u)}>Reset Password</Button>
                 <Button variant="ghost" style={smallBtnStyle} onClick={() => handleRevoke(u.id)}>Revoke Sessions</Button>
+                {u.two_factor_enabled && u.id !== me?.id && (
+                  <Button variant="ghost" style={smallBtnStyle} onClick={() => setTwoFactorResetUser(u)}>{t('users.reset2fa.action')}</Button>
+                )}
               </div>
             </td>
           </tr>
@@ -163,6 +181,16 @@ export default function UsersListPage() {
 
       <UserEditModal open={!!editingUser} user={editingUser} onClose={() => setEditingUser(null)} />
       <UserResetPasswordModal open={!!resettingUser} user={resettingUser} onClose={() => setResettingUser(null)} />
+      <ConfirmDialog
+        open={!!twoFactorResetUser}
+        onClose={() => setTwoFactorResetUser(null)}
+        onConfirm={handleResetTwoFactor}
+        title={t('users.reset2fa.title')}
+        message={t('users.reset2fa.confirm', undefined, { user: twoFactorResetUser?.username || '' })}
+        confirmLabel={t('users.reset2fa.action')}
+        danger
+        isLoading={resetTwoFactor.isPending}
+      />
     </div>
   );
 }

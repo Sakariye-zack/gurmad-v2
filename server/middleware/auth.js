@@ -82,7 +82,7 @@ async function authenticateToken(req, res, next) {
         // Forced password change / mandatory 2FA gates — only a small
         // allow-list of routes (auth/*, my-permissions, ...) stays open
         // until the user resolves them (lib/accountSecurity.js).
-        const gate = evaluateSecurityGates(ctx, req.originalUrl);
+        const gate = evaluateSecurityGates(ctx, req.originalUrl, req.method);
         if (gate) return res.status(gate.status).json(gate.body);
         req.user = {
           id: ctx.userId,
@@ -97,6 +97,7 @@ async function authenticateToken(req, res, next) {
           sid: decoded.sid || null,
           twoFactorEnabled: ctx.twoFactorEnabled,
           mustChangePassword: ctx.mustChangePassword,
+          authSource: ctx.authSource,
         };
         return next();
       }
