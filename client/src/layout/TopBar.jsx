@@ -163,8 +163,7 @@ export default function TopBar({ showToggleButton, onToggle, isMobile, sidebarOp
           }}
         >
           <Avatar name={user?.full_name || user?.username} size={28} version={avatarVersion} />
-          {/* Name hidden on phones (avatar only) so the top bar never overflows a 375px screen. */}
-          <style>{'@media (max-width: 480px) { .gv2-topbar-name { display: none; } }'}</style>
+          {/* Hidden on phones via .gv2-topbar-name in tokens.css. */}
           <span className="gv2-topbar-name" style={{ fontSize: '13px', fontWeight: 700, maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {user?.full_name || user?.username}
           </span>
