@@ -22,7 +22,7 @@ async function checkOnce(now = Date.now()) {
       recipientId: a.id,
       eventType: EVENT,
       title: 'Backup-ka habeenkii wuu fashilmay / Nightly backup failed or is overdue',
-      body: status.last_error ? status.last_error.line : 'No successful database backup in the last 26 hours.',
+      body: 'The last nightly backup failed or no successful database backup was found in the last 26 hours. Open Administration > Backups for details.',
     });
   }
   return admins.rows.length > 0;

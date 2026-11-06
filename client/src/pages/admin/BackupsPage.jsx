@@ -29,10 +29,14 @@ export default function BackupsPage() {
   const [target, setTarget] = useState(null); // file name awaiting password
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState('');
   const [pwError, setPwError] = useState('');
 
   const status = useQuery({ queryKey: ['backups', 'status'], queryFn: () => apiClient.get('/v2/backups/status'), refetchInterval: 60000 });
   const list = useQuery({ queryKey: ['backups', 'list'], queryFn: () => apiClient.get('/v2/backups') });
+
+  const twoFa = useQuery({ queryKey: ['2fa-status'], queryFn: () => apiClient.get('/v2/auth/2fa/status') });
+  const needsCode = !!twoFa.data?.data?.enabled;
 
   const run = useMutation({
     mutationFn: () => apiClient.post('/v2/backups/run', {}),
@@ -53,9 +57,10 @@ export default function BackupsPage() {
     setBusy(true);
     setPwError('');
     try {
-      const res = await apiClient.post(`/v2/backups/${encodeURIComponent(target)}/download-token`, { password });
+      const res = await apiClient.post(`/v2/backups/${encodeURIComponent(target)}/download-token`, { password, ...(needsCode ? { code } : {}) });
       setTarget(null);
       setPassword('');
+      setCode('');
       window.location.href = `/api/v2/backups/download/${res.data.token}`;
     } catch (err) {
       setPwError(err.message);
@@ -64,7 +69,7 @@ export default function BackupsPage() {
     }
   }
 
-  function closeModal() { setTarget(null); setPassword(''); setPwError(''); }
+  function closeModal() { setTarget(null); setPassword(''); setCode(''); setPwError(''); }
 
   const lastOk = s?.last?.ok;
   return (
@@ -143,11 +148,11 @@ export default function BackupsPage() {
         footer={(
           <>
             <Button variant="secondary" onClick={closeModal}>{t('common.cancel')}</Button>
-            <Button onClick={confirmDownload} disabled={busy || !password}>{t('backups.download')}</Button>
+            <Button onClick={confirmDownload} disabled={busy || !password || (needsCode && !code)}>{t('backups.download')}</Button>
           </>
         )}
       >
-        <form onSubmit={(e) => { e.preventDefault(); if (password && !busy) confirmDownload(); }}>
+        <form onSubmit={(e) => { e.preventDefault(); if (password && (!needsCode || code) && !busy) confirmDownload(); }}>
           <p style={{ marginTop: 0 }}>{t('backups.confirmBody', undefined, { file: target || '' })}</p>
           <label htmlFor="backup-pw" style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>{t('backups.password')}</label>
           <input
@@ -159,6 +164,20 @@ export default function BackupsPage() {
             onChange={(e) => setPassword(e.target.value)}
             style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', color: 'var(--text)' }}
           />
+          {needsCode && (
+            <>
+              <label htmlFor="backup-code" style={{ display: 'block', fontSize: '12px', fontWeight: 700, margin: '12px 0 6px' }}>{t('backups.code')}</label>
+              <input
+                id="backup-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={12}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', color: 'var(--text)' }}
+              />
+            </>
+          )}
           {pwError && <div role="alert" style={{ color: 'var(--danger)', fontSize: '13px', marginTop: '8px' }}>{pwError}</div>}
         </form>
       </Modal>

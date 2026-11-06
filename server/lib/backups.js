@@ -47,7 +47,7 @@ async function listFiles() {
     for (const name of names) {
       if (!re.test(name)) continue;
       try {
-        const st = await fs.promises.stat(path.join(dir, subdir, name));
+        const st = await fs.promises.lstat(path.join(dir, subdir, name));
         if (!st.isFile()) continue;
         out.push({ name, type, size: st.size, created_at: st.mtime.toISOString() });
       } catch (_) { /* vanished (retention) */ }
@@ -97,7 +97,7 @@ async function getStatus() {
   const failed = tail && !tail.ok;
   return {
     last: newest ? { file: newest.name, at: newest.created_at, ok: !(failed && tail.at >= newest.created_at), size: newest.size } : null,
-    last_error: failed ? { line: tail.line.slice(0, 500), at: tail.at } : null,
+    last_error: failed ? { line: tail.line.slice(0, 200), at: tail.at } : null,
     next_run_at: nextRunAt(),
     count_db: dbFiles.length,
     count_uploads: files.length - dbFiles.length,
@@ -121,20 +121,33 @@ function runBackup() {
   const cmd = isJs ? process.execPath : script;
   const args = isJs ? [script] : [];
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: RUN_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env: process.env }, async (err, stdout, stderr) => {
+    const finish = async (err, stdout, stderr) => {
       try {
         let text = `${stdout || ''}${stderr || ''}`.trim();
         if (err && !text) text = `${new Date().toISOString()} backup FAILED ${err.message}`;
-        else if (err) text += `\n${new Date().toISOString()} backup FAILED exit ${err.code}`;
+        else if (err) text += `
+${new Date().toISOString()} backup FAILED exit ${err.code}`;
         if (text) {
           await fs.promises.mkdir(dir, { recursive: true }).catch(() => {});
-          await fs.promises.appendFile(log, `${text}\n`).catch(() => {});
+          await fs.promises.appendFile(log, `${text}
+`).catch(() => {});
         }
       } finally { running = false; }
       if (err) return reject(err);
       const m = /backup ok (\S+)/.exec(stdout || '');
       resolve({ file: m ? m[1] : null });
-    });
+    };
+    let child;
+    try {
+      // detached (POSIX) puts the script in its own process group so a timeout
+      // can kill pg_dump/tar too. On Windows only the direct child is killed.
+      child = execFile(cmd, args, { timeout: RUN_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env: process.env, detached: process.platform !== 'win32' }, finish);
+    } catch (e) { running = false; return reject(e); }
+    if (process.platform !== 'win32' && child && child.pid) {
+      const killer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch (_) { /* gone */ } }, RUN_TIMEOUT_MS + 2000);
+      if (killer.unref) killer.unref();
+      child.on('exit', () => clearTimeout(killer));
+    }
   });
 }
 

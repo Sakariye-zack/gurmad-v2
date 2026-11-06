@@ -2,7 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { api, db, setupWorld, PASSWORD } = require('./helpers');
+const { authenticator } = require('otplib');
+const { api, db, setupWorld, insertUser, tokenFor, PASSWORD } = require('./helpers');
 
 const DIR = process.env.BACKUP_DIR;
 const BASE = process.env.TEST_BASE;
@@ -115,8 +116,10 @@ test('download-token: bad names rejected, wrong password 401, right password giv
   assert.ok([404, 410].includes(again.status));
   const junk = await fetch(`${BASE}/api/v2/backups/download/not-a-token`);
   assert.ok([404, 410].includes(junk.status));
-  const aud = await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'backup.download'`);
-  assert.ok(aud.rows.length >= 1);
+  const aud = await db.query(`SELECT after_data FROM v2_audit_log WHERE action = 'backup.download'`);
+  assert.ok(aud.rows.length >= 1, 'actual download audited');
+  assert.equal(aud.rows[0].after_data.file, name);
+  assert.ok((await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'backup.download_token'`)).rows.length >= 1);
 });
 
 test('monitor alerts active admins once per 24h when the newest backup is overdue', async () => {
@@ -132,4 +135,31 @@ test('monitor alerts active admins once per 24h when the newest backup is overdu
   const n = await db.query(`SELECT * FROM v2_staff_notifications WHERE event_type = 'backup.alert' AND recipient_id = $1`, [adminId]);
   assert.equal(n.rows.length, 1);
   assert.match(n.rows[0].title, /Nightly backup failed or is overdue/);
+});
+
+test('download-token step-up: admin with 2FA needs a valid TOTP code besides the password', async () => {
+  await setupWorld();
+  await insertUser('t_bak_2fa', 'admin');
+  const tok = await tokenFor('t_bak_2fa');
+  const setup = await api('POST', '/auth/2fa/setup', { token: tok });
+  assert.equal((await api('POST', '/auth/2fa/enable', { token: tok, body: { code: authenticator.generate(setup.data.secret) } })).status, 200);
+  const name = 'gurmad_v2_20260102_020000.dump';
+  const url = `/backups/${name}/download-token`;
+  assert.equal((await api('POST', url, { token: tok, body: { password: PASSWORD } })).status, 401);
+  assert.equal((await api('POST', url, { token: tok, body: { password: PASSWORD, code: '000000' } })).status, 401);
+  const ok = await api('POST', url, { token: tok, body: { password: PASSWORD, code: authenticator.generate(setup.data.secret) } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.ok(ok.data.token);
+});
+
+test('symlinked backup files are not listed or downloadable', async () => {
+  const w = await setupWorld();
+  const target = path.join(DIR, 'secret.dump');
+  const link = path.join(DIR, 'db', 'gurmad_v2_20250101_020000.dump');
+  try { fs.symlinkSync(target, link); } catch (_) { return; } // symlinks need privileges on Windows
+  const list = await api('GET', '/backups', { token: w.tokens.admin });
+  assert.ok(!list.data.some((f) => f.name === 'gurmad_v2_20250101_020000.dump'));
+  const r = await api('POST', '/backups/gurmad_v2_20250101_020000.dump/download-token', { token: w.tokens.admin, body: { password: PASSWORD } });
+  assert.equal(r.status, 404);
+  fs.unlinkSync(link);
 });

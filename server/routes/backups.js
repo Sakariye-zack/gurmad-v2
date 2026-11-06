@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
+const { authenticator } = require('otplib');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const backups = require('../lib/backups');
@@ -36,8 +37,12 @@ router.get('/download/:token', async (req, res) => {
   const f = backups.resolveFile(entry.name);
   if (!f) return gone(res);
   try {
-    const st = await fs.promises.stat(f.full);
+    const st = await fs.promises.lstat(f.full);
     if (!st.isFile()) return res.status(404).json({ error: { message: 'Backup file not found.', code: 'NOT_FOUND' } });
+    try {
+      const u = await pool.query('SELECT username FROM v2_users WHERE id = $1', [entry.userId]);
+      await logAudit({ actorId: entry.userId, actorUsername: u.rows[0]?.username || null, action: 'backup.download', entityType: 'backup', entityId: null, after: { file: entry.name, ip: req.ip } });
+    } catch (e) { logger.error('backup_download_audit_failed', { message: e.message }); }
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', st.size);
     res.setHeader('Content-Disposition', `attachment; filename="${entry.name}"`);
@@ -97,22 +102,37 @@ router.post('/:name/download-token', async (req, res) => {
     return res.status(429).json({ error: { message: 'Too many wrong passwords. Try again in a few minutes.', code: 'RATE_LIMITED' } });
   }
   try {
-    const u = await pool.query('SELECT password_hash FROM v2_users WHERE id = $1 AND is_active = TRUE', [req.user.id]);
-    const ok = u.rows[0] && u.rows[0].password_hash && (await bcrypt.compare(password, u.rows[0].password_hash));
+    const u = await pool.query('SELECT password_hash, two_factor_enabled, two_factor_secret, two_factor_backup_codes FROM v2_users WHERE id = $1 AND is_active = TRUE', [req.user.id]);
+    const row = u.rows[0];
+    let ok = !!(row && row.password_hash && (await bcrypt.compare(password, row.password_hash)));
+    let usedBackup = null;
+    // Step-up: an admin with 2FA must also present a live TOTP code or an unused backup code.
+    if (ok && row.two_factor_enabled) {
+      const code = req.body && typeof req.body.code === 'string' ? req.body.code.trim() : '';
+      ok = !!code && authenticator.check(code, row.two_factor_secret);
+      if (!ok && code) {
+        for (const hashed of row.two_factor_backup_codes || []) {
+          if (await bcrypt.compare(code, hashed)) { ok = true; usedBackup = hashed; break; }
+        }
+      }
+    }
     if (!ok) {
       const cur = fails && fails.resetAt > now ? fails : { count: 0, resetAt: now + FAIL_WINDOW_MS };
       cur.count += 1;
       failedAttempts.set(req.user.id, cur);
-      return res.status(401).json({ error: { message: 'Incorrect password.', code: 'BAD_PASSWORD' } });
+      return res.status(401).json({ error: { message: 'Incorrect password or code.', code: 'BAD_PASSWORD' } });
     }
     failedAttempts.delete(req.user.id);
-    try { await fs.promises.access(f.full); } catch (_) {
+    if (usedBackup) {
+      await pool.query('UPDATE v2_users SET two_factor_backup_codes = array_remove(two_factor_backup_codes, $1) WHERE id = $2', [usedBackup, req.user.id]);
+    }
+    try { if (!(await fs.promises.lstat(f.full)).isFile()) throw new Error('not a regular file'); } catch (_) {
       return res.status(404).json({ error: { message: 'Backup file not found.', code: 'NOT_FOUND' } });
     }
     sweepTokens();
     const token = crypto.randomBytes(32).toString('hex');
     downloadTokens.set(token, { name, exp: now + TOKEN_TTL_MS, userId: req.user.id });
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'backup.download', entityType: 'backup', entityId: null, after: { file: name } });
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'backup.download_token', entityType: 'backup', entityId: null, after: { file: name } });
     res.json({ data: { token, expires_in: TOKEN_TTL_MS / 1000, url: `/api/v2/backups/download/${token}` } });
   } catch (err) {
     logger.error('backup_download_token_failed', { message: err.message });

@@ -242,6 +242,7 @@ export const SECURITY_EXTRA = {
   "backups.confirmTitle": { en: "Confirm download", so: "Xaqiiji soo dejinta" },
   "backups.confirmBody": { en: "Enter your password to download {file}", so: "Geli password-kaaga si aad u soo dejiso {file}" },
   "backups.password": { en: "Password", so: "Password" },
+  "backups.code": { en: "6-digit code (or backup code)", so: "Koodhka 6-lambar ah (ama koodhka backup)" },
   "backups.restoreTitle": { en: "Restoring a backup", so: "Soo celinta backup" },
   "backups.restoreBody": { en: "Restore is done on the server by support. Download the file you need and contact support; do not restore it yourself.", so: "Soo celinta waxaa ka sameeya server-ka kooxda taageerada. Soo deji faylka aad u baahan tahay oo la xiriir taageerada." },
 };
