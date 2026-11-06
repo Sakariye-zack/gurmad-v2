@@ -68,6 +68,7 @@ const documentsRouter = require('./routes/documents');
 // Master Functional Completion Program — Phase 6: Import/Export + Master Data Governance.
 const masterDataImportExportRouter = require('./routes/masterDataImportExport');
 const searchRouter = require('./routes/search');
+const backupsRouter = require('./routes/backups');
 
 const app = express();
 
@@ -178,6 +179,7 @@ app.use('/api/v2/inventory', inventoryRouter);
 app.use('/api/v2/documents', documentsRouter);
 app.use('/api/v2/master-data', masterDataImportExportRouter);
 app.use('/api/v2/search', searchRouter);
+app.use('/api/v2/backups', backupsRouter);
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
@@ -230,6 +232,7 @@ runMigrations()
     app.listen(PORT, () => {
       console.log(`gurmad-v2-server listening on :${PORT}`);
       require('./lib/autoBilling').startScheduler();
+      require('./lib/backupMonitor').startMonitor();
     });
   })
   .catch((err) => {
