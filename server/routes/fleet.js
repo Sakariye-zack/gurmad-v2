@@ -701,6 +701,29 @@ router.get('/fuel/:id', authenticateToken, requireRole(...VIEW_ROLES), async (re
   }
 });
 
+// PUT /fleet/fuel/:id/currency — admin only, one-time confirmation of the
+// currency of a legacy row (logged before currency existed). 409 once confirmed.
+router.put('/fuel/:id/currency', authenticateToken, requireRole('admin'), async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return bad(res, 'Invalid fuel record id.');
+  const currency = req.body?.currency;
+  if (!CURRENCIES.includes(currency)) return bad(res, 'currency must be USD or SLSH.');
+  try {
+    const cur = await pool.query('SELECT id, currency, currency_confirmed FROM truck_fuel_records WHERE id = $1', [id]);
+    if (!cur.rows[0]) return bad(res, 'Fuel record not found.', 404, 'NOT_FOUND');
+    const upd = await pool.query(
+      `UPDATE truck_fuel_records SET currency = $1, currency_confirmed = TRUE WHERE id = $2 AND currency_confirmed = FALSE RETURNING *`,
+      [currency, id]);
+    if (!upd.rows[0]) return bad(res, 'This record\'s currency is already confirmed.', 409, 'CURRENCY_CONFIRMED');
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'truck_fuel_record.currency_confirm', entityType: 'truck_fuel_record', entityId: id,
+      before: { currency: cur.rows[0].currency, currency_confirmed: false }, after: { currency, currency_confirmed: true } });
+    const [annotated] = await annotateFuelRows([upd.rows[0]]);
+    res.json({ data: annotated });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to confirm currency.', code: 'INTERNAL' } });
+  }
+});
+
 receiptRoutes('fuel', 'truck_fuel_records', loadFuelForUser);
 receiptRoutes('maintenance', 'truck_maintenance_records', loadMaintenanceForUser);
 

@@ -2032,6 +2032,27 @@ async function runFleetUpgradeMigrations() {
   await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS receipt_original_filename VARCHAR(255);`);
   await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS receipt_mime_type VARCHAR(100);`);
   await addCheckIfMissing('truck_fuel_records', 'truck_fuel_records_currency_check', `currency IN ('USD', 'SLSH')`);
+  // Rows logged before currency existed defaulted to 'USD', but nobody knows
+  // whether those amounts were USD or SLSH: mark exactly those rows
+  // unconfirmed, once, when the flag column is first created. New rows are
+  // always confirmed.
+  const hasConfirmed = await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'truck_fuel_records' AND column_name = 'currency_confirmed'`);
+  if (!hasConfirmed.rows.length) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE truck_fuel_records IN SHARE ROW EXCLUSIVE MODE');
+      await c.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS currency_confirmed BOOLEAN NOT NULL DEFAULT TRUE`);
+      await c.query(`UPDATE truck_fuel_records SET currency_confirmed = FALSE`);
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
 
   // Maintenance: status workflow. Existing rows default to 'completed'
   // (they were all finished jobs); completed_at is backfilled from created_at.

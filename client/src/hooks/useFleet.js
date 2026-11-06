@@ -44,6 +44,12 @@ export function useCreateFuelRecord() {
   return useMutation({ mutationFn: (data) => apiClient.post('/v2/fleet/fuel', data), onSuccess: () => invalidateFleet(qc) });
 }
 
+// Admin-only, one-time: confirm the currency of a legacy fuel row.
+export function useConfirmFuelCurrency() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, currency }) => apiClient.put(`/v2/fleet/fuel/${id}/currency`, { currency }), onSuccess: () => invalidateFleet(qc) });
+}
+
 // kind: 'fuel' | 'maintenance'
 export function useUploadReceipt() {
   const qc = useQueryClient();

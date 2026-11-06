@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Fuel, Plus, Download } from 'lucide-react';
 import { PageHeader, Button, DataTable, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useFuelRecords, useCreateFuelRecord, useUploadReceipt, fuelQueryString } from '../../hooks/useFleet.js';
+import { useFuelRecords, useCreateFuelRecord, useUploadReceipt, useConfirmFuelCurrency, fuelQueryString } from '../../hooks/useFleet.js';
 import { useTrucks } from '../../hooks/useTrucks.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { fmtMoney, fmtByCurrency } from '../../lib/money.js';
@@ -85,7 +85,11 @@ export default function FleetFuelListPage() {
             <td style={cellStyle}>{r.station || '—'}</td>
             <td style={num}>{fmtNum(r.liters, 2)}</td>
             <td style={num}>{r.price_per_liter !== null ? fmtMoney(r.price_per_liter, r.currency) : '—'}</td>
-            <td style={num}>{fmtMoney(r.cost, r.currency)}{r.currency === 'SLSH' && r.cost_usd !== null && <div style={sub}>≈ {usd(r.cost_usd)}</div>}</td>
+            <td style={num}>
+              {fmtMoney(r.cost, r.currency)}{r.currency === 'SLSH' && r.cost_usd !== null && <div style={sub}>≈ {usd(r.cost_usd)}</div>}
+              {r.currency_confirmed === false && <div style={sub}>{t('fleet.fuel.currencyUnconfirmed')}</div>}
+              {r.currency_confirmed === false && <RoleGate roles={['admin']}><ConfirmCurrencyChip id={r.id} /></RoleGate>}
+            </td>
             <td style={num}>{r.odometer_reading ?? '—'}</td>
             <td style={num}>{fmtNum(r.km_since_last, 0)}</td>
             <td style={num}>{fmtNum(r.km_per_liter)}</td>
@@ -98,6 +102,23 @@ export default function FleetFuelListPage() {
 
       <FuelFormModal open={formOpen} onClose={() => setFormOpen(false)} trucks={trucks} />
     </div>
+  );
+}
+
+function ConfirmCurrencyChip({ id }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const confirm = useConfirmFuelCurrency();
+  const pick = async (currency) => {
+    try { await confirm.mutateAsync({ id, currency }); toast.success(t('fleet.fuel.currencyConfirmed')); } catch (err) { toast.error(err.message); }
+  };
+  const btn = { border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', borderRadius: '999px', padding: '1px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' };
+  return (
+    <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', marginTop: '4px', padding: '2px 6px', borderRadius: '999px', background: 'var(--warning-bg)', whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>{t('fleet.fuel.confirmCurrency')}</span>
+      <button type="button" style={btn} disabled={confirm.isPending} onClick={() => pick('USD')}>USD</button>
+      <button type="button" style={btn} disabled={confirm.isPending} onClick={() => pick('SLSH')}>SLSH</button>
+    </span>
   );
 }
 

@@ -149,6 +149,27 @@ test('fleet: fuel currency, price/L, efficiency, low-efficiency + odometer flags
   assert.ok(text.includes('Hargeisa Total'));
 });
 
+test('fleet: legacy fuel currency can be confirmed once, by admin only', async () => {
+  const w = await setupWorld();
+  const t = await mkTruck(w.zoneA.id);
+  const fresh = await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 10, cost: 30000 } });
+  assert.equal(fresh.data.currency_confirmed, true, 'new records are confirmed');
+  assert.equal((await api('PUT', `/fleet/fuel/${fresh.data.id}/currency`, { token: w.tokens.admin, body: { currency: 'SLSH' } })).status, 409);
+  await db.query('UPDATE truck_fuel_records SET currency_confirmed = FALSE WHERE id = $1', [fresh.data.id]); // simulate a legacy row
+  const id = fresh.data.id;
+  assert.equal((await api('PUT', `/fleet/fuel/${id}/currency`, { token: w.tokens.gudoomiye, body: { currency: 'SLSH' } })).status, 403);
+  assert.equal((await api('PUT', `/fleet/fuel/${id}/currency`, { token: w.tokens.admin, body: { currency: 'EUR' } })).status, 400);
+  const ok = await api('PUT', `/fleet/fuel/${id}/currency`, { token: w.tokens.admin, body: { currency: 'SLSH' } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.data.currency, 'SLSH');
+  assert.equal(ok.data.currency_confirmed, true);
+  const again = await api('PUT', `/fleet/fuel/${id}/currency`, { token: w.tokens.admin, body: { currency: 'USD' } });
+  assert.equal(again.status, 409);
+  assert.equal((await db.query('SELECT currency FROM truck_fuel_records WHERE id = $1', [id])).rows[0].currency, 'SLSH');
+  const a = await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'truck_fuel_record.currency_confirm' AND entity_id = $1`, [id]);
+  assert.equal(a.rows.length, 1);
+});
+
 test('fleet: fuel receipt upload accepts image/pdf, rejects other types; download is scoped', async () => {
   const w = await setupWorld();
   const t = await mkTruck(w.zoneA.id);
