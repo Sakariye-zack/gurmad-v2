@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtMoney } from '../../lib/money.js';
+import { PAYMENT_COLORS, TODAY_COLORS, customerPath } from './mapStatus.js';
 
 // Route & GIS / Map — Implementation Spec §16/§26. Owns the Mapbox GL JS
 // instance lifecycle in isolation from the rest of the page. Mapbox GL
@@ -21,12 +24,17 @@ const TOGDHEER_DEFAULT_ZOOM = 8;
 // works because this is injected as real DOM (Marker({element}) attaches
 // it directly, not a rasterized image), so it inherits the app's theme
 // tokens like any other element and needs no light/dark branching here.
-const HOUSE_ICON_SVG = `
+function houseIconSvg(color) {
+  return `
 <svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">
-  <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 23 15 23s15-12.5 15-23C30 6.716 23.284 0 15 0z" fill="var(--brand)"/>
-  <circle cx="15" cy="15" r="10.5" fill="var(--brand-dark)"/>
+  <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 23 15 23s15-12.5 15-23C30 6.716 23.284 0 15 0z" fill="${color}"/>
+  <circle cx="15" cy="15" r="10.5" fill="rgba(0,0,0,0.22)"/>
   <path d="M15 8.5l7 6.2v8.3h-4.6v-5.2h-4.8v5.2H8V14.7z" fill="#fff"/>
 </svg>`;
+}
+
+// Small round badge on a pin in "Today" mode (check / clock / x / dash).
+const BADGE_GLYPH = { serviced: '✓', pending: '⏱', missed: '✕', skipped: '–' };
 
 // Truck marker — user-reported, second pass ('sidaaso kale gaadhigu
 // wadada ha u maro... oo gaadhi khashiish ha noqdo waliba': it should sit
@@ -69,7 +77,12 @@ const TRUCK_ICON_SVG = `
   <circle cx="30.5" cy="21.3" r="1.25" fill="#9aa0a0"/>
 </svg>`;
 
-export default function MapCanvas({ points, trucks }) {
+export default function MapCanvas({ points, trucks, showToday, focus, onOpenCustomer }) {
+  const { t } = useI18n();
+  const customerMarkers = useRef(new Map()); // customer id -> marker
+  const fitKeyRef = useRef({});
+  const onOpenRef = useRef(onOpenCustomer);
+  useEffect(() => { onOpenRef.current = onOpenCustomer; }, [onOpenCustomer]);
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -140,43 +153,40 @@ export default function MapCanvas({ points, trucks }) {
     const bounds = new mapboxgl.LngLatBounds();
     let plotted = 0;
 
+    customerMarkers.current = new Map();
     (points || []).forEach((p) => {
       const lat = Number(p.lat);
       const lng = Number(p.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return; // defensive only — API already excludes these
 
-      // Explicit dark text color, not inherited — Mapbox's own popup CSS
-      // (mapbox-gl.css) always renders a WHITE popup background regardless
-      // of the app's own light/dark theme, so inheriting this app's
-      // dark-mode --text token (a near-white color, correct against a dark
-      // surface) produced white-on-white, illegible text (user-reported).
-      // A fixed dark color is correct here specifically because the
-      // background this sits on is itself fixed white, not theme-aware.
-      const popupHtml = `
-        <div style="font-size:13px;line-height:1.6;color:#1c231d;">
-          <strong>${escapeHtml(p.name)}</strong><br/>
-          ${escapeHtml(p.customer_number)}<br/>
-          Zone: ${escapeHtml(p.zone_name || '—')}<br/>
-          Group: ${escapeHtml(p.group_name || '—')}<br/>
-          Route: ${escapeHtml(p.route_name || '—')}<br/>
-          Type: ${escapeHtml(p.customer_type || '—')}
-        </div>
-      `;
-      const popup = new mapboxgl.Popup({ offset: 18 }).setHTML(popupHtml);
-      // House icon, not Mapbox's default teardrop pin — a plain DOM element
-      // marker (Mapbox GL JS's own documented way to use a custom marker),
-      // styled from the app's own --brand token so it stays theme-
-      // consistent rather than a hardcoded color living only here.
+      const popup = new mapboxgl.Popup({ offset: 18, maxWidth: '300px' }).setDOMContent(buildPopup(p, t, onOpenRef, showToday));
+      // House pin coloured by payment status; in Today mode a badge shows the
+      // visit result and customers with nothing scheduled are dimmed.
       const el = document.createElement('div');
-      el.innerHTML = HOUSE_ICON_SVG;
       el.style.cursor = 'pointer';
+      el.style.position = 'relative';
       el.style.filter = 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))';
+      el.innerHTML = houseIconSvg(PAYMENT_COLORS[p.payment_status] || PAYMENT_COLORS.none);
+      if (showToday) {
+        const ts = p.today_status || 'not_scheduled';
+        if (ts === 'not_scheduled') {
+          el.style.opacity = '0.45';
+        } else {
+          const badge = document.createElement('span');
+          badge.textContent = BADGE_GLYPH[ts] || '';
+          badge.style.cssText = 'position:absolute;top:-6px;right:-8px;width:17px;height:17px;border-radius:50%;'
+            + 'color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;border:2px solid #fff;box-sizing:content-box;'
+            + 'background:' + (TODAY_COLORS[ts] || TODAY_COLORS.not_scheduled);
+          el.appendChild(badge);
+        }
+      }
       const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([lng, lat])
         .setPopup(popup)
         .addTo(map);
 
       markersRef.current.push(marker);
+      customerMarkers.current.set(p.id, marker);
       bounds.extend([lng, lat]);
       plotted += 1;
     });
@@ -185,17 +195,17 @@ export default function MapCanvas({ points, trucks }) {
     // Rendered in the same effect/marker lifecycle as customer pins
     // (cleared and re-added together each time either list changes), so
     // there is only ever one place that owns markersRef's contents.
-    (trucks || []).forEach((t) => {
-      const lat = Number(t.lat);
-      const lng = Number(t.lng);
+    (trucks || []).forEach((tr) => {
+      const lat = Number(tr.lat);
+      const lng = Number(tr.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
       const popupHtml = `
         <div style="font-size:13px;line-height:1.6;color:#1c231d;">
-          <strong>${escapeHtml(t.plate_number || 'Truck')}</strong><br/>
-          Collector: ${escapeHtml(t.collector_name || '—')}<br/>
-          Zone: ${escapeHtml(t.zone_name || '—')}<br/>
-          Updated: ${new Date(t.recorded_at).toLocaleTimeString()}
+          <strong>${escapeHtml(tr.plate_number || 'Truck')}</strong><br/>
+          Collector: ${escapeHtml(tr.collector_name || '—')}<br/>
+          Zone: ${escapeHtml(tr.zone_name || '—')}<br/>
+          Updated: ${new Date(tr.recorded_at).toLocaleTimeString()}
         </div>
       `;
       const popup = new mapboxgl.Popup({ offset: 18 }).setHTML(popupHtml);
@@ -213,10 +223,22 @@ export default function MapCanvas({ points, trucks }) {
       plotted += 1;
     });
 
-    if (plotted > 0) {
+    const dataChanged = fitKeyRef.current.points !== points || fitKeyRef.current.trucks !== trucks;
+    fitKeyRef.current = { points, trucks };
+    if (plotted > 0 && dataChanged) {
       map.fitBounds(bounds, { padding: 48, maxZoom: 14, duration: 0 });
     }
-  }, [points, trucks, status]);
+  }, [points, trucks, status, showToday, t]);
+
+  // Search result: fly to the house and open its popup.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || status !== 'ready' || !focus) return;
+    const marker = customerMarkers.current.get(focus.id);
+    if (!marker) return;
+    map.flyTo({ center: marker.getLngLat(), zoom: Math.max(map.getZoom(), 17), duration: 800 });
+    if (!marker.getPopup().isOpen()) marker.togglePopup();
+  }, [focus, status]);
 
   if (status === 'unsupported') {
     return <ConfigNotice text="Your browser does not support this map." />;
@@ -228,7 +250,46 @@ export default function MapCanvas({ points, trucks }) {
     return <ConfigNotice text="The map could not be loaded right now." />;
   }
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 'var(--radius-md)', overflow: 'hidden' }} />;
+  return <div ref={containerRef} style={{ width: '100%', maxWidth: '100%', height: '100%', minWidth: 0, borderRadius: 'var(--radius-md)', overflow: 'hidden' }} />;
+}
+
+// Popup content. Fixed dark text on purpose: Mapbox popups are always white,
+// regardless of the app's light/dark theme. Every value is HTML-escaped.
+function buildPopup(p, t, onOpenRef, showToday) {
+  const row = (label, value) => `<div><span style="color:#5b665e;">${escapeHtml(label)}:</span> ${value}</div>`;
+  const pay = p.payment_status || 'none';
+  const today = p.today_status || 'not_scheduled';
+  const dot = (c) => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c};margin-right:5px;"></span>`;
+  const fee = p.fee === null || p.fee === undefined || p.fee === '' ? '—' : fmtMoney(p.fee, p.fee_currency === 'SLSH' ? 'SLSH' : 'USD');
+  const billing = p.billing_type
+    ? `${t(p.billing_type === 'daily' ? 'map.billing_daily' : 'map.billing_monthly')} · ${fee}`
+    : '—';
+  const owed = [];
+  if (Number(p.outstanding_slsh) > 0) owed.push(fmtMoney(p.outstanding_slsh, 'SLSH'));
+  if (Number(p.outstanding_usd) > 0) owed.push(fmtMoney(p.outstanding_usd, 'USD'));
+  const html = `
+    <div style="font-size:13px;line-height:1.55;color:#1c231d;">
+      <div style="font-weight:700;font-size:14px;">${escapeHtml(p.name)}</div>
+      <div style="color:#5b665e;">${escapeHtml(p.customer_number || '—')}</div>
+      ${row(t('map.door'), escapeHtml(p.door_number || '—'))}
+      ${row(t('map.path'), escapeHtml(customerPath(p) || '—'))}
+      ${row(t('map.collector'), escapeHtml(p.collector_name || '—'))}
+      ${row(t('map.billing'), escapeHtml(billing))}
+      ${row(t('map.payment'), dot(PAYMENT_COLORS[pay] || PAYMENT_COLORS.none) + escapeHtml(t('map.pay.' + pay)) + (owed.length ? ' (' + escapeHtml(owed.join(' + ')) + ')' : ''))}
+      ${showToday ? row(t('map.today_status'), dot(TODAY_COLORS[today] || TODAY_COLORS.not_scheduled) + escapeHtml(t('map.today.' + today))) : ''}
+      <a href="/customers/${encodeURIComponent(p.id)}" data-open="1" style="display:inline-block;margin-top:6px;color:#0b6b3a;font-weight:700;text-decoration:underline;">${escapeHtml(t('map.open_customer'))}</a>
+    </div>`;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  const link = wrap.querySelector('[data-open]');
+  if (link) {
+    link.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || !onOpenRef.current) return; // let the browser open a new tab
+      e.preventDefault();
+      onOpenRef.current(p.id);
+    });
+  }
+  return wrap;
 }
 
 function ConfigNotice({ text }) {

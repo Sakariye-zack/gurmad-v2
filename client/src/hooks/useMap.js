@@ -4,16 +4,31 @@ import { apiClient } from '../lib/apiClient.js';
 // Route & GIS / Map — Implementation Spec §16. One query hook, one
 // endpoint (GET /v2/map/customers), server-side filtered (zone/group/
 // route) — no client-side re-filtering or pagination layered on top.
-export function useMapCustomers({ zoneId, groupId, routeId }) {
+function filterQs({ zoneId, groupId, groupZoneId, routeId, today }) {
   const params = new URLSearchParams();
   if (zoneId) params.set('zone_id', String(zoneId));
   if (groupId) params.set('group_id', String(groupId));
+  if (groupZoneId) params.set('group_zone_id', String(groupZoneId));
   if (routeId) params.set('route_id', String(routeId));
+  if (today) params.set('today', '1');
   const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
 
+export function useMapCustomers(filters) {
+  const qs = filterQs(filters);
   return useQuery({
-    queryKey: ['v2', 'map', 'customers', { zoneId, groupId, routeId }],
-    queryFn: () => apiClient.get(`/v2/map/customers${qs ? `?${qs}` : ''}`),
+    queryKey: ['v2', 'map', 'customers', filters],
+    queryFn: () => apiClient.get(`/v2/map/customers${qs}`),
+  });
+}
+
+// Active in-scope customers that cannot be plotted (no location yet).
+export function useMapMissingLocation(filters) {
+  const qs = filterQs(filters);
+  return useQuery({
+    queryKey: ['v2', 'map', 'missing-location', filters],
+    queryFn: () => apiClient.get(`/v2/map/customers/missing-location${qs}`),
   });
 }
 
