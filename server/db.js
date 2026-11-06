@@ -2061,6 +2061,22 @@ async function runFleetUpgradeMigrations() {
     }
   }
 
+  // Fuel edit accountability: who/when last edited + one revision row per edit.
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE truck_fuel_records ADD COLUMN IF NOT EXISTS edited_by INTEGER;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS truck_fuel_record_revisions (
+      id SERIAL PRIMARY KEY,
+      fuel_record_id INTEGER NOT NULL REFERENCES truck_fuel_records(id) ON DELETE CASCADE,
+      changed_by INTEGER NOT NULL,
+      changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reason TEXT NOT NULL,
+      before JSONB NOT NULL DEFAULT '{}'::jsonb,
+      after JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fuel_revisions_record ON truck_fuel_record_revisions(fuel_record_id, changed_at DESC);`);
+
   // Maintenance: status workflow. Existing rows default to 'completed'
   // (they were all finished jobs); completed_at is backfilled from created_at.
   await pool.query(`ALTER TABLE truck_maintenance_records ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'completed';`);

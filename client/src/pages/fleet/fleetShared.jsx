@@ -44,7 +44,7 @@ export function FlagChips({ flags }) {
 }
 
 // Opens an authenticated file (receipt / photo) in a new tab.
-export function ReceiptLink({ path }) {
+export function ReceiptLink({ path, icon: Icon }) {
   const { t } = useI18n();
   const toast = useToast();
   async function open() {
@@ -59,6 +59,7 @@ export function ReceiptLink({ path }) {
       toast.error(err.message);
     }
   }
+  if (Icon) return <button type="button" onClick={open} title={t('fleet.fuel.receipt')} aria-label={t('fleet.fuel.receipt')} style={iconBtn}><Icon size={15} /></button>;
   return <button type="button" onClick={open} style={linkBtn}>{t('fleet.common.view')}</button>;
 }
 
@@ -233,4 +234,5 @@ export const inputStyle = {
   background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit', boxSizing: 'border-box', minWidth: 0,
 };
 export const selectStyle = { ...inputStyle, width: 'auto', fontSize: '13px' };
+export const iconBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 };
 export const linkBtn = { background: 'none', border: 'none', padding: 0, color: 'var(--brand)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' };

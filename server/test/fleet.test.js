@@ -458,3 +458,100 @@ test('fleet: non-write roles get 403 on fleet writes', async () => {
   const get = await fetch(`${BASE}/api/v2/trucks/${t.id}/photo`, { headers: { Authorization: 'Bearer ' + w.tokens.collector } });
   assert.equal(get.status, 200);
 });
+
+test('fleet: fuel records are editable with a required reason and a revision history', async () => {
+  const w = await setupWorld();
+  const t = await mkTruck(w.zoneA.id);
+  const tb = await mkTruck(w.zoneB.id);
+  const { day } = await today();
+  const rec = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 20, cost: 40, odometer_reading: 1000, record_date: day, station: 'Total' } })).data;
+  assert.equal(rec.revision_count ?? 0, 0);
+  assert.equal(rec.edited_at ?? null, null);
+
+  // reason is required (3-300 chars)
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { liters: 25 } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { liters: 25, reason: 'ab' } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { liters: 25, reason: 'x'.repeat(301) } })).status, 400);
+  // validation mirrors create
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { liters: -1, reason: 'typo fix' } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { currency: 'EUR', reason: 'typo fix' } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { record_date: '2026-02-30', reason: 'typo fix' } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { reason: 'nothing changed' } })).status, 400);
+  assert.equal((await api('PUT', `/fleet/fuel/999999999`, { token: w.tokens.admin, body: { liters: 5, reason: 'typo fix' } })).status, 404);
+  // role gates
+  for (const role of ['cashier', 'collector', 'accountant']) {
+    assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens[role], body: { liters: 25, reason: 'typo fix' } })).status, 403, role);
+  }
+
+  const ok = await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.gudoomiye, body: { liters: 25, cost: 50, station: 'Total', reason: 'Fixed typo from receipt' } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(Number(ok.data.liters), 25);
+  assert.equal(Number(ok.data.cost), 50);
+  assert.equal(Number(ok.data.price_per_liter), 2);
+  assert.equal(ok.data.revision_count, 1);
+  assert.ok(ok.data.edited_at);
+  assert.ok(ok.data.edited_by_name);
+
+  const revs = await api('GET', `/fleet/fuel/${rec.id}/revisions`, { token: w.tokens.cashier });
+  assert.equal(revs.status, 200, JSON.stringify(revs.body));
+  assert.equal(revs.data.length, 1);
+  const rv = revs.data[0];
+  assert.equal(rv.reason, 'Fixed typo from receipt');
+  assert.ok(rv.changed_by_name);
+  assert.deepEqual(Object.keys(rv.after).sort(), ['cost', 'liters']);
+  assert.equal(Number(rv.before.liters), 20);
+  assert.equal(Number(rv.after.liters), 25);
+  assert.ok(!('station' in rv.after), 'unchanged fields are not recorded');
+
+  // second edit: newest first; list/detail carry edit metadata; audit row written
+  const second = await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { odometer_reading: 1100, notes: 'odo fix', reason: 'Odometer misread' } });
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  const revs2 = await api('GET', `/fleet/fuel/${rec.id}/revisions`, { token: w.tokens.admin });
+  assert.equal(revs2.data.length, 2);
+  assert.equal(revs2.data[0].reason, 'Odometer misread');
+  const list = await api('GET', `/fleet/fuel?truck_id=${t.id}`, { token: w.tokens.admin });
+  const listed = list.data.find((x) => x.id === rec.id);
+  assert.equal(listed.revision_count, 2);
+  assert.ok(listed.edited_by_name);
+  const detail = await api('GET', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin });
+  assert.equal(detail.data.revision_count, 2);
+  const audit = await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'fleet.fuel.update' AND entity_id = $1`, [rec.id]);
+  assert.equal(audit.rows.length, 2);
+
+  // zone scoping: a zone-A gudoomiye cannot touch or read a zone-B record, nor move one onto a zone-B truck
+  const recB = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: tb.id, liters: 10, cost: 20 } })).data;
+  assert.equal((await api('PUT', `/fleet/fuel/${recB.id}`, { token: w.tokens.gudoomiye, body: { liters: 11, reason: 'cross zone' } })).status, 403);
+  assert.equal((await api('GET', `/fleet/fuel/${recB.id}/revisions`, { token: w.tokens.gudoomiye })).status, 403);
+  assert.equal((await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.gudoomiye, body: { truck_id: tb.id, reason: 'cross zone' } })).status, 403);
+  assert.equal(Number((await db.query('SELECT liters FROM truck_fuel_records WHERE id = $1', [recB.id])).rows[0].liters), 10);
+  // admin may move it
+  const moved = await api('PUT', `/fleet/fuel/${rec.id}`, { token: w.tokens.admin, body: { truck_id: tb.id, reason: 'Wrong truck selected' } });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(moved.data.truck_id, tb.id);
+});
+
+test('fleet: editing a legacy fuel row confirms its currency; efficiency recomputes', async () => {
+  const w = await setupWorld();
+  const t = await mkTruck(w.zoneA.id);
+  const { day } = await today();
+  const a = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 10, cost: 10, odometer_reading: 1000, record_date: addDays(day, -5) } })).data;
+  const b = (await api('POST', '/fleet/fuel', { token: w.tokens.admin, body: { truck_id: t.id, liters: 10, cost: 10, odometer_reading: 1100, record_date: addDays(day, -2) } })).data;
+  await db.query('UPDATE truck_fuel_records SET currency_confirmed = FALSE WHERE id = $1', [b.id]);
+  const before = (await api('GET', `/fleet/fuel/${b.id}`, { token: w.tokens.admin })).data;
+  assert.equal(before.currency_confirmed, false);
+  assert.equal(before.km_since_last, 100);
+  const ed = await api('PUT', `/fleet/fuel/${b.id}`, { token: w.tokens.admin, body: { currency: 'SLSH', cost: 85000, odometer_reading: 1200, reason: 'Paid in shillings' } });
+  assert.equal(ed.status, 200, JSON.stringify(ed.body));
+  assert.equal(ed.data.currency, 'SLSH');
+  assert.equal(ed.data.currency_confirmed, true);
+  assert.equal(ed.data.km_since_last, 200, 'efficiency recomputed on read');
+  const rv = (await api('GET', `/fleet/fuel/${b.id}/revisions`, { token: w.tokens.admin })).data[0];
+  assert.equal(rv.after.currency, 'SLSH');
+  assert.equal(rv.after.currency_confirmed, true);
+  assert.equal(rv.before.currency_confirmed, false);
+  // an unconfirmed row edited with the same currency still gets confirmed
+  await db.query('UPDATE truck_fuel_records SET currency_confirmed = FALSE WHERE id = $1', [a.id]);
+  const same = await api('PUT', `/fleet/fuel/${a.id}`, { token: w.tokens.admin, body: { currency: 'USD', reason: 'Confirmed USD' } });
+  assert.equal(same.status, 200, JSON.stringify(same.body));
+  assert.equal(same.data.currency_confirmed, true);
+});

@@ -44,6 +44,15 @@ export function useCreateFuelRecord() {
   return useMutation({ mutationFn: (data) => apiClient.post('/v2/fleet/fuel', data), onSuccess: () => invalidateFleet(qc) });
 }
 
+// Admin/gudoomiye: edit a fuel record (reason required); history is kept server-side.
+export function useUpdateFuelRecord() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, ...body }) => apiClient.put(`/v2/fleet/fuel/${id}`, body), onSuccess: () => invalidateFleet(qc) });
+}
+export function useFuelRevisions(id, enabled = true) {
+  return useQuery({ queryKey: ['v2', 'fleet', 'fuel-revisions', id], enabled: !!id && enabled, queryFn: () => apiClient.get(`/v2/fleet/fuel/${id}/revisions`) });
+}
+
 // Admin-only, one-time: confirm the currency of a legacy fuel row.
 export function useConfirmFuelCurrency() {
   const qc = useQueryClient();
