@@ -10,7 +10,7 @@ router.use(authenticateToken);
 
 const MANAGE_ROLES = ['admin', 'gudoomiye'];
 // Read-only banner figures on the customer detail page.
-const OUTSTANDING_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'cashier', 'head_of_cashiers'];
+const OUTSTANDING_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'cashier'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'cashier'];
 const MAX_BULK = 500;
 const err = (res, status, code, message) => res.status(status).json({ error: { message, code } });

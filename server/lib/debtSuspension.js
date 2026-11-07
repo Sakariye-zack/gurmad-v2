@@ -12,8 +12,10 @@
 //    currency) is <= EPSILON goes back to 'active'. Customers suspended for
 //    any other reason are never touched here.
 //
-// Outstanding is computed exactly like financialCalculations.getInvoiceBalance
-// (paidInInvoiceCurrency in the invoice's own currency), set-based in SQL.
+// Outstanding is the TRUE amount still owed, computed like
+// paidInInvoiceCurrency(..., { excludeDebt: true }) in the invoice's own
+// currency, set-based in SQL: a method='debt' payment moves money into a
+// receivable, it is not money received, so it never counts as paid here.
 const { pool, logAudit } = require('../db');
 const { EPSILON } = require('./financialCalculations');
 const { getTimezone, localParts } = require('./autoBilling');
@@ -35,7 +37,7 @@ const INVOICE_OUTSTANDING_SQL = `
                                     CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $1::numeric) END)
                       ELSE p.amount_usd END)
       FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
-      WHERE p.invoice_id = i.id AND p.status = 'recorded'), 0) AS outstanding
+      WHERE p.invoice_id = i.id AND p.status = 'recorded' AND p.method <> 'debt'), 0) AS outstanding
   FROM invoices i
   WHERE i.status <> 'voided'`;
 
@@ -70,10 +72,11 @@ async function listCandidates({ zoneId = null, customerIds = null, client = pool
   const rate = await currentRate(client);
   const params = [rate, tz, today, days, EPSILON];
   const where = [`c.status = 'active'`];
+  let invFilter = '';
   if (zoneId !== null) { params.push(zoneId); where.push(`c.zone_id = $${params.length}`); }
-  if (customerIds) { params.push(customerIds); where.push(`c.id = ANY($${params.length}::int[])`); }
+  if (customerIds) { params.push(customerIds); invFilter = ` AND i.customer_id = ANY($${params.length}::int[])`; }
   const r = await client.query(`
-    WITH inv AS (${INVOICE_OUTSTANDING_SQL}),
+    WITH inv AS (${INVOICE_OUTSTANDING_SQL}${invFilter}),
     open_inv AS (
       SELECT inv.*, (inv.created_at AT TIME ZONE 'UTC' AT TIME ZONE $2)::date AS issue_date
       FROM inv WHERE inv.outstanding > $5
@@ -141,15 +144,18 @@ async function customerOutstanding(customerId, client = pool) {
   return { USD: num(r.rows[0].usd), SLSH: num(r.rows[0].slsh) };
 }
 
-// Takes the customer off every PENDING row of today's and future auto daily
-// lists (non-cancelled), keeping batches.total_customers in step, and ends
-// any open carry-over from earlier auto-list misses. Returns removed rows.
-async function removeFromPendingAutoLists(client, customerId, today) {
+// Takes the customer off every PENDING row of the auto daily lists
+// (non-cancelled): today's and future ones, and also past lists the morning
+// run has not closed yet, so no stale row is later closed as 'missed' and
+// carried over. batches.total_customers is kept in step, and any open
+// carry-over from earlier auto-list misses is ended. Returns removed rows.
+// A reactivated customer rejoins lists from the next daily generation.
+async function removeFromPendingAutoLists(client, customerId) {
   const del = await client.query(
     `DELETE FROM batch_customers bc USING batches b
      WHERE bc.batch_id = b.id AND bc.customer_id = $1 AND bc.status = 'pending'
-       AND b.auto_generated AND b.status <> 'cancelled' AND b.start_date >= $2::date
-     RETURNING bc.id, bc.batch_id`, [customerId, today]);
+       AND b.auto_generated AND b.status <> 'cancelled'
+     RETURNING bc.id, bc.batch_id`, [customerId]);
   for (const row of del.rows) {
     await client.query('UPDATE batches SET total_customers = GREATEST(total_customers - 1, 0), updated_at = NOW() WHERE id = $1', [row.batch_id]);
   }
@@ -167,8 +173,6 @@ async function approve(customerIds, user, { zoneId = null } = {}) {
   const ids = [...new Set(customerIds)];
   const approved = [];
   const skipped = [];
-  const tz = await getTimezone();
-  const today = localParts(new Date(), tz).date;
   for (const id of ids) {
     const client = await pool.connect();
     try {
@@ -179,9 +183,9 @@ async function approve(customerIds, user, { zoneId = null } = {}) {
       const cand = (await listCandidates({ customerIds: [id], client })).rows[0];
       if (!cand) { await client.query('ROLLBACK'); skipped.push({ customer_id: id, reason: 'not_a_candidate' }); continue; }
       const upd = await client.query(
-        `UPDATE customers SET status = 'suspended', suspended_reason = 'debt', suspended_at = NOW(), suspended_by = $2, updated_at = NOW()
+        `UPDATE customers SET status = 'suspended', suspended_reason = 'debt', suspended_at = (NOW() AT TIME ZONE 'UTC'), suspended_by = $2, updated_at = NOW()
          WHERE id = $1 RETURNING *`, [id, user.id]);
-      const removed = await removeFromPendingAutoLists(client, id, today);
+      const removed = await removeFromPendingAutoLists(client, id);
       await client.query('DELETE FROM debt_suspension_dismissals WHERE customer_id = $1', [id]);
       await client.query('COMMIT');
       await logAudit({
@@ -192,8 +196,11 @@ async function approve(customerIds, user, { zoneId = null } = {}) {
       });
       approved.push({ ...upd.rows[0], removed_list_rows: removed.length });
     } catch (e) {
+      // One customer's failure never blocks the rest of a bulk approval:
+      // each id runs in its own transaction, rolled back on error.
       await client.query('ROLLBACK').catch(() => {});
-      throw e;
+      console.error('debt suspension approve failed for customer', id, e && e.message);
+      skipped.push({ customer_id: id, reason: 'error' });
     } finally {
       client.release();
     }

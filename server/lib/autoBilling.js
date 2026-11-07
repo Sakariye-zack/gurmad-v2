@@ -168,10 +168,10 @@ async function runDaily({ date, triggeredBy = null } = {}) {
        JOIN customers c ON c.id = bc.customer_id
        LEFT JOIN zones z ON z.id = c.zone_id
        WHERE bc.status = 'serviced' AND (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $2)::date = $1::date AND c.billing_type = 'daily'
-         -- Suspended customers (e.g. for debt) are never auto-billed. A visit
-         -- serviced before the suspension is billed by the 7-day catch-up
-         -- once the customer is active again.
-         AND c.status <> 'suspended'
+         -- A customer suspended for debt is not billed for visits marked on or
+         -- after the suspension; visits serviced before it are still billed.
+         -- Manually suspended customers keep the original behaviour.
+         AND NOT (c.status = 'suspended' AND c.suspended_reason = 'debt' AND bc.status_at >= c.suspended_at)
          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.batch_customer_id = bc.id)
        ORDER BY bc.id`, [date, tz]);
     let created = 0;

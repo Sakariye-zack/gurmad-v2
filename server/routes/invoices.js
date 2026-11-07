@@ -5,6 +5,7 @@ const { getInvoiceBalance } = require('../lib/financialCalculations');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
 const { generateInvoiceNumber, insertInvoice } = require('../lib/invoiceInsert');
 const autoBilling = require('../lib/autoBilling');
+const debtSuspension = require('../lib/debtSuspension');
 const { getWorkedDays } = require('../lib/workedDays');
 
 const router = express.Router();
@@ -295,6 +296,8 @@ router.put('/:id/void', authenticateToken, requireRole('admin'), async (req, res
     );
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.void', entityType: 'invoice', entityId: id, before: inv, after: updated.rows[0] });
+    // F3: voiding may clear a debt-suspended customer's balance (best-effort, never fails the void).
+    await debtSuspension.afterPayment(inv.customer_id);
     res.json({ data: updated.rows[0] });
   } catch (err) {
     await client.query('ROLLBACK');

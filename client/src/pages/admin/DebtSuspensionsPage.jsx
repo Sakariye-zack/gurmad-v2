@@ -18,6 +18,19 @@ function fmtDay(iso) {
 }
 const outstanding = (r) => fmtByCurrency({ USD: r.outstanding_usd, SLSH: r.outstanding_slsh });
 
+// The server accepts at most 500 ids per request: send larger selections in
+// chunks and merge the { approved|dismissed, skipped } results.
+const CHUNK = 500;
+async function postChunked(url, ids, listKey) {
+  const merged = { [listKey]: [], skipped: [] };
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const res = await apiClient.post(url, { customer_ids: ids.slice(i, i + CHUNK) });
+    merged[listKey].push(...(res?.data?.[listKey] || []));
+    merged.skipped.push(...(res?.data?.skipped || []));
+  }
+  return { data: merged };
+}
+
 export default function DebtSuspensionsPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -34,7 +47,7 @@ export default function DebtSuspensionsPage() {
 
   const done = () => { setSelected(new Set()); qc.invalidateQueries({ queryKey: ['debt-suspensions'] }); };
   const approve = useMutation({
-    mutationFn: (ids) => apiClient.post('/v2/debt-suspensions/approve', { customer_ids: ids }),
+    mutationFn: (ids) => postChunked('/v2/debt-suspensions/approve', ids, 'approved'),
     onSuccess: (res) => {
       const d = res?.data || {};
       toast.success(t('debtSusp.approved', undefined, { n: d.approved?.length || 0 }));
@@ -45,7 +58,7 @@ export default function DebtSuspensionsPage() {
     onError: (err) => toast.error(err.message),
   });
   const dismiss = useMutation({
-    mutationFn: (ids) => apiClient.post('/v2/debt-suspensions/dismiss', { customer_ids: ids }),
+    mutationFn: (ids) => postChunked('/v2/debt-suspensions/dismiss', ids, 'dismissed'),
     onSuccess: (res) => { toast.success(t('debtSusp.dismissed', undefined, { n: res?.data?.dismissed?.length || 0 })); done(); },
     onError: (err) => toast.error(err.message),
   });
@@ -68,6 +81,8 @@ export default function DebtSuspensionsPage() {
   return (
     <div>
       <PageHeader icon={ShieldAlert} title={t('debtSusp.title')} subtitle={days ? t('debtSusp.subtitle', undefined, { days }) : undefined} />
+
+      <Card style={{ padding: '12px 16px', marginBottom: '16px', fontSize: '13px', color: 'var(--text-muted)' }}>{t('debtSusp.help')}</Card>
 
       <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border)', marginBottom: '16px' }}>
         {tabBtn('candidates', `${t('debtSusp.tabCandidates')}${rows.length ? ` (${rows.length})` : ''}`)}

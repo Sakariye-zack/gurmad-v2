@@ -106,19 +106,33 @@ test('approve: only admin and gudoomiye; sets status and removes pending auto-li
   }
   assert.equal((await api('POST', '/debt-suspensions/approve', { token: w.tokens.admin, body: { customer_ids: [] } })).status, 400);
 
-  // Today's auto list (pending), yesterday's auto list (pending must stay as history), a manual batch (untouched).
+  // Future auto list (pending -> removed), a past unclosed auto list (pending -> removed),
+  // a past auto list with a 'missed' row (history, kept), a manual batch (untouched).
   const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom',CURRENT_DATE - 5,CURRENT_DATE + 5) RETURNING id`, [w.zoneA.id])).rows[0].id;
   const mkBatch = async (offset, auto) => (await db.query(
     `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, status, auto_generated, total_customers)
      VALUES ($1,$2,$3,$4,CURRENT_DATE + $5::int,'assigned',$6,1) RETURNING id`, ['DS' + uniq(), w.zoneA.id, cyc, 700 + seq, offset, auto])).rows[0].id;
   const todayB = await mkBatch(1, true); // future (avoids timezone edge at midnight)
   const pastB = await mkBatch(-3, true);
+  const pastOpenB = await mkBatch(-2, true);
+  const manualB = await mkBatch(2, false);
   await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1,$2,'pending')`, [todayB, c.id]);
   await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'missed', NOW())`, [pastB, c.id]);
+  // Only one pending row per customer is allowed at a time: park the future one as 'skipped' while adding the others.
+  await db.query(`UPDATE batch_customers SET status = 'skipped' WHERE batch_id = $1 AND customer_id = $2`, [todayB, c.id]);
+  await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1,$2,'pending')`, [pastOpenB, c.id]);
 
-  const r = await api('POST', '/debt-suspensions/approve', { token: w.tokens.gudoomiye, body: { customer_ids: [c.id] } });
+  let r = await api('POST', '/debt-suspensions/approve', { token: w.tokens.gudoomiye, body: { customer_ids: [c.id] } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.data.approved.length, 1);
+  assert.equal((await db.query('SELECT 1 FROM batch_customers WHERE batch_id = $1', [pastOpenB])).rows.length, 0, 'past unclosed pending row removed');
+  // Same again for a future pending row (reset the customer and re-approve).
+  await db.query(`UPDATE customers SET status = 'active', suspended_reason = NULL WHERE id = $1`, [c.id]);
+  await db.query(`UPDATE batch_customers SET status = 'pending' WHERE batch_id = $1 AND customer_id = $2`, [todayB, c.id]);
+  await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1,$2,'serviced')`, [manualB, c.id]);
+  r = await api('POST', '/debt-suspensions/approve', { token: w.tokens.gudoomiye, body: { customer_ids: [c.id] } });
+  assert.equal(r.data.approved.length, 1, JSON.stringify(r.body));
+  assert.equal((await db.query('SELECT 1 FROM batch_customers WHERE batch_id = $1', [manualB])).rows.length, 1, 'manual batch untouched');
   const after = await customer(c.id);
   assert.equal(after.status, 'suspended');
   assert.equal(after.suspended_reason, 'debt');
@@ -127,7 +141,7 @@ test('approve: only admin and gudoomiye; sets status and removes pending auto-li
   assert.equal((await db.query('SELECT total_customers FROM batches WHERE id = $1', [todayB])).rows[0].total_customers, 0);
   assert.equal((await db.query('SELECT 1 FROM batch_customers WHERE batch_id = $1', [pastB])).rows.length, 1);
   const audit = await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'customer.debt_suspend' AND entity_id = $1`, [c.id]);
-  assert.equal(audit.rows.length, 1);
+  assert.equal(audit.rows.length, 2);
   // Shown on the suspended tab, gone from candidates; second approve is skipped.
   const sus = await api('GET', '/debt-suspensions/suspended', { token: w.tokens.admin });
   assert.ok(sus.data.find((x) => x.id === c.id && x.outstanding_usd === 15));
@@ -150,21 +164,54 @@ test('gudoomiye cannot approve a customer outside their district', async () => {
   assert.equal((await customer(b.id)).status, 'active');
 });
 
-test('auto-billing skips suspended customers (monthly and daily)', async () => {
+test('auto-billing: monthly skips suspended; daily bills visits before a debt suspension, not after; manual suspension billed as before', async () => {
   const w = await setupWorld();
   const c = await mkCustomer(w);
   await db.query(`UPDATE customers SET status = 'suspended', suspended_reason = 'debt' WHERE id = $1`, [c.id]);
   await runMonthly({ manual: true, period: '2032-01' });
   assert.equal((await db.query(`SELECT 1 FROM invoices WHERE customer_id = $1 AND billing_period = '2032-01'`, [c.id])).rows.length, 0);
 
-  const d = await mkCustomer(w);
-  await db.query(`UPDATE customers SET billing_type = 'daily', fee = 2, status = 'suspended', suspended_reason = 'debt' WHERE id = $1`, [d.id]);
   const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom','2032-02-01','2032-02-28') RETURNING id`, [w.zoneA.id])).rows[0].id;
-  const b = (await db.query(`INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, status) VALUES ($1,$2,$3,1,'2032-02-10','in_progress') RETURNING id`, ['DSB' + uniq(), w.zoneA.id, cyc])).rows[0].id;
-  await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced','2032-02-10 09:00')`, [b, d.id]);
   await db.query(`INSERT INTO billing_settings (id, daily_start_date) VALUES (1, '2000-01-01') ON CONFLICT (id) DO NOTHING`);
+  const visit = async (cust, day, at) => {
+    const b = (await db.query(`INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, status) VALUES ($1,$2,$3,1,$4::date,'in_progress') RETURNING id`, ['DSB' + uniq(), w.zoneA.id, cyc, day])).rows[0].id;
+    await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced',$3::timestamp)`, [b, cust.id, at]);
+  };
+  const billed = async (cust) => (await db.query(`SELECT 1 FROM invoices WHERE customer_id = $1 AND status <> 'voided'`, [cust.id])).rows.length;
+  // Debt-suspended at 2032-02-10 12:00 UTC: the 09:00 visit is billed, a later one is not.
+  const before = await mkCustomer(w);
+  const after = await mkCustomer(w);
+  const manual = await mkCustomer(w);
+  for (const x of [before, after]) {
+    await db.query(`UPDATE customers SET billing_type = 'daily', fee = 2, status = 'suspended', suspended_reason = 'debt', suspended_at = '2032-02-10 12:00' WHERE id = $1`, [x.id]);
+  }
+  await db.query(`UPDATE customers SET billing_type = 'daily', fee = 2, status = 'suspended', suspended_reason = 'manual', suspended_at = '2032-02-10 12:00' WHERE id = $1`, [manual.id]);
+  await visit(before, '2032-02-10', '2032-02-10 09:00');
+  await visit(after, '2032-02-10', '2032-02-10 13:00');
+  await visit(manual, '2032-02-10', '2032-02-10 13:00');
   await runDaily({ date: '2032-02-10' });
-  assert.equal((await db.query('SELECT 1 FROM invoices WHERE customer_id = $1', [d.id])).rows.length, 0);
+  assert.equal(await billed(before), 1, 'visit before the suspension is billed');
+  assert.equal(await billed(after), 0, 'visit after the debt suspension is not billed');
+  assert.equal(await billed(manual), 1, 'manual suspension keeps the original behaviour');
+});
+
+test('debt-method payments are not money received: still a candidate, no reactivation', async () => {
+  const w = await setupWorld();
+  const c = await mkCustomer(w);
+  const i = await invoice(w, c, 10, { daysAgo: 100 });
+  const p = await api('POST', '/payments', { token: w.tokens.admin, body: { invoice_id: i.id, amount: 10, currency: 'USD', method: 'debt' } });
+  assert.equal(p.status, 201, JSON.stringify(p.body));
+  assert.equal(p.data.invoice_status, 'paid');
+  const cand = findC(await candidates(w.tokens.admin), c);
+  assert.ok(cand && cand.outstanding_usd === 10, 'invoice closed via debt method is still owed');
+
+  const s = await mkCustomer(w);
+  const i1 = await invoice(w, s, 8, { daysAgo: 100 });
+  assert.equal((await api('POST', '/debt-suspensions/approve', { token: w.tokens.admin, body: { customer_ids: [s.id] } })).status, 200);
+  assert.equal((await api('POST', '/payments', { token: w.tokens.admin, body: { invoice_id: i1.id, amount: 8, currency: 'USD', method: 'debt' } })).status, 201);
+  assert.equal((await customer(s.id)).status, 'suspended');
+  await ds.nightlyCheck();
+  assert.equal((await customer(s.id)).status, 'suspended');
 });
 
 test('payment that clears the balance reactivates; a partial payment does not; manual suspensions never auto-reactivate', async () => {
@@ -206,9 +253,18 @@ test('nightly check reactivates a debt-suspended customer whose invoice was void
   const c = await mkCustomer(w);
   const i = await invoice(w, c, 12, { daysAgo: 100 });
   assert.equal((await api('POST', '/debt-suspensions/approve', { token: w.tokens.admin, body: { customer_ids: [c.id] } })).status, 200);
-  await db.query(`UPDATE invoices SET status = 'voided', voided_at = NOW(), voided_reason = 'test' WHERE id = $1`, [i.id]);
+  // Void through the API: the void route runs the reactivation check itself.
+  const v = await api('PUT', `/invoices/${i.id}/void`, { token: w.tokens.admin, body: { reason: 'billed in error' } });
+  assert.equal(v.status, 200, JSON.stringify(v.body));
+  assert.equal((await customer(c.id)).status, 'active');
+
+  // Voided straight in the DB (no hook): the nightly sweep catches it.
+  const d = await mkCustomer(w);
+  const j = await invoice(w, d, 12, { daysAgo: 100 });
+  assert.equal((await api('POST', '/debt-suspensions/approve', { token: w.tokens.admin, body: { customer_ids: [d.id] } })).status, 200);
+  await db.query(`UPDATE invoices SET status = 'voided', voided_at = NOW(), voided_reason = 'test' WHERE id = $1`, [j.id]);
   const r = await api('POST', '/debt-suspensions/check', { token: w.tokens.admin });
   assert.equal(r.status, 200);
-  assert.ok(r.data.reactivated.includes(c.id));
-  assert.equal((await customer(c.id)).status, 'active');
+  assert.ok(r.data.reactivated.includes(d.id));
+  assert.equal((await customer(d.id)).status, 'active');
 });

@@ -106,7 +106,10 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   const invoice = invRes.rows[0];
   if (invoice.status === 'voided') throw new PaymentError(409, 'CONFLICT', 'Cannot record a payment against a voided invoice.');
 
-  const custRes = await client.query('SELECT zone_id FROM customers WHERE id = $1', [invoice.customer_id]);
+  // FOR SHARE (lock order invoice -> customer): serialises with a debt
+  // suspension approval (lib/debtSuspension.js locks the customer FOR UPDATE),
+  // so an approval never misses a payment committing at the same moment.
+  const custRes = await client.query('SELECT zone_id FROM customers WHERE id = $1 FOR SHARE', [invoice.customer_id]);
   const myZoneId = await resolveUserZoneId(user);
   if (myZoneId !== null && custRes.rows[0]?.zone_id !== myZoneId) {
     throw new PaymentError(403, 'FORBIDDEN', 'You do not have access to this invoice.');

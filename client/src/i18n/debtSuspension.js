@@ -3,6 +3,7 @@ export const DEBT_SUSPENSION = {
   'nav.debtSuspensions': { en: 'Debt suspensions', so: 'Joojinta deynta' },
   'debtSusp.title': { en: 'Debt suspensions', so: 'Joojinta deynta' },
   'debtSusp.subtitle': { en: 'Customers with an unpaid invoice older than {days} days. Nothing is suspended until you approve.', so: 'Macaamiisha leh biil aan la bixin oo ka weyn {days} maalmood. Waxba lama joojinayo ilaa aad ansixiso.' },
+  'debtSusp.help': { en: 'Approving suspends the customer and removes them from pending rows of the daily lists. Once the customer has paid everything they owe, they return to active automatically and rejoin the lists from the next daily generation.', so: 'Ansixintu waxay joojinaysaa macmiilka waxayna ka saaraysaa safafka sugaya ee liisaska maalinlaha ah. Marka macmiilku bixiyo dhammaan deyntiisa, si toos ah ayuu u firfircoonaanayaa wuxuuna dib ugu soo laabanayaa liisaska marka liiska maalinlaha ah ee xiga la sameeyo.' },
   'debtSusp.off': { en: 'Debt suspension is turned off (0 days in Settings).', so: 'Joojinta deynta waa la damiyay (0 maalmood Settings-ka).' },
   'debtSusp.tabCandidates': { en: 'Candidates', so: 'Musharixiinta' },
   'debtSusp.tabSuspended': { en: 'Suspended for debt', so: 'Loo joojiyay deyn' },

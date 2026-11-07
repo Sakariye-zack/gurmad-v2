@@ -302,7 +302,7 @@ const backLinkStyle = {
 
 // F3: red banner for a customer suspended for debt. Outstanding comes from the
 // debt-suspensions endpoint (finance roles); others see the date only.
-const DEBT_OUTSTANDING_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'cashier', 'head_of_cashiers'];
+const DEBT_OUTSTANDING_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'cashier'];
 function DebtSuspendedBanner({ customer }) {
   const { t } = useI18n();
   const since = customer.suspended_at ? new Date(customer.suspended_at).toLocaleDateString(appLocale(), { dateStyle: 'medium' }) : '';
