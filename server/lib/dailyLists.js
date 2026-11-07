@@ -58,7 +58,7 @@ async function closePrevious(client, date, tz) {
        WHERE batch_id = $1 AND status = 'pending'`, [b.id, b.end_date, b.start_date, tz]);
     const upd = await client.query(
       `UPDATE batches SET status = $1::varchar, completed_at = CASE WHEN $1::varchar = 'completed' THEN NOW() ELSE completed_at END,
-         updated_at = NOW() WHERE id = $2 RETURNING *`, [newStatus, b.id]);
+         updated_at = NOW(), auto_closed_at = COALESCE(auto_closed_at, NOW()) WHERE id = $2 RETURNING *`, [newStatus, b.id]);
     await client.query(`UPDATE tasks SET status = 'completed', completed_at = COALESCE(completed_at, NOW()) WHERE batch_id = $1 AND status <> 'completed'`, [b.id]);
     const { pending, ...before } = b;
     closed.push({ before, after: upd.rows[0], not_visited: pending });

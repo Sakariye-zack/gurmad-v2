@@ -759,9 +759,12 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
       const tid = parseStrictId(String(task_id ?? ''));
       if (tid === null) return res.status(400).json({ error: { message: 'task_id is required.', code: 'VALIDATION' } });
       const myEmpId = await resolveEmployeeIdForUser(req.user);
+      // The task must belong to THIS batch and be assigned to the caller —
+      // otherwise one's own task_id would unlock any batch.
       const owns = myEmpId !== null && (await pool.query(
-        `SELECT 1 FROM task_resources WHERE task_id = $1 AND resource_type = 'collector' AND resource_id = $2 LIMIT 1`,
-        [tid, myEmpId]
+        `SELECT 1 FROM task_resources tr JOIN tasks t ON t.id = tr.task_id
+         WHERE tr.task_id = $1 AND t.batch_id = $3 AND tr.resource_type = 'collector' AND tr.resource_id = $2 LIMIT 1`,
+        [tid, myEmpId, id]
       )).rows.length > 0;
       if (!owns) return res.status(403).json({ error: { message: 'This task is not assigned to you.', code: 'FORBIDDEN' } });
     }

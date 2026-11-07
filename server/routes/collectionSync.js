@@ -41,10 +41,12 @@ async function resolveEmployeeIdForUser(user) {
   return r.rows[0]?.id ?? null;
 }
 
-async function collectorOwnsTask(taskId, employeeId) {
+// The task must belong to the action's batch and be assigned to the caller.
+async function collectorOwnsTask(taskId, employeeId, batchId) {
   const r = await pool.query(
-    `SELECT 1 FROM task_resources WHERE task_id = $1 AND resource_type = 'collector' AND resource_id = $2 LIMIT 1`,
-    [taskId, employeeId]
+    `SELECT 1 FROM task_resources tr JOIN tasks t ON t.id = tr.task_id
+     WHERE tr.task_id = $1 AND t.batch_id = $3 AND tr.resource_type = 'collector' AND tr.resource_id = $2 LIMIT 1`,
+    [taskId, employeeId, batchId]
   );
   return r.rows.length > 0;
 }
@@ -264,7 +266,7 @@ async function processOneAction(action, user, employeeId) {
     if (taskId === null) {
       return { action_uuid, outcome: 'rejected_invalid_state', retryable: false, message: 'task_id is required.' };
     }
-    const owns = employeeId !== null && (await collectorOwnsTask(taskId, employeeId));
+    const owns = employeeId !== null && (await collectorOwnsTask(taskId, employeeId, batchId));
     if (!owns) {
       await logAudit({
         actorId: user.id, actorUsername: user.username, action: 'collection_sync.rejected_invalid_state',

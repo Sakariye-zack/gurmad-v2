@@ -372,46 +372,128 @@ test('options: collectors and trucks scoped to the district', async () => {
   assert.ok(adm.data.collectors.some((c) => c.user_id === b.uid));
 });
 
-test('late offline mark: 04:30 capture synced after the 05:00 close is accepted and billed; carried copy removed', async () => {
-  const w = await setupWorld();
+async function companyTz() {
+  return (await db.query(`SELECT COALESCE((SELECT timezone FROM company_settings WHERE timezone IS NOT NULL AND timezone <> '' ORDER BY id LIMIT 1), 'Africa/Mogadishu') AS tz`)).rows[0].tz;
+}
+async function localAt(date, time, tz) {
+  return new Date((await db.query(`SELECT (($1::date + $2::time) AT TIME ZONE $3) AS at`, [date, time, tz])).rows[0].at);
+}
+// Yesterday's list closed by today's run, with one never-visited customer.
+async function closedYesterday(w, extra = {}) {
   const t = await today(w);
   const y = shift(t, -1);
   const sz = await mkSubZone(w, { days: [wd(y)] });
-  const c = await mkCust(w, sz, { billing: 'daily' });
-  await db.query(`UPDATE customers SET billing_type = 'daily', fee = 4 WHERE id = $1`, [c.id]);
+  const c = await mkCust(w, sz);
+  if (extra.daily) await db.query(`UPDATE customers SET billing_type = 'daily', fee = 4 WHERE id = $1`, [c.id]);
   await run(w, y);
   const [by] = await autoBatches(sz.route.id, y);
   const token = await tokenFor(sz.col.username);
+  const taskId = (await db.query('SELECT id FROM tasks WHERE batch_id = $1', [by.id])).rows[0].id;
+  return { t, y, sz, c, by, token, taskId };
+}
+const replay = (token, a) => api('POST', '/collection-sync/replay', { token, body: { actions: [{ action_uuid: require('crypto').randomUUID(), action_type: 'batch_customer.status_change', ...a }] } });
+
+test('late offline mark: captured before the 05:00 close, synced after it -> accepted, dated, billed once; carried copy removed', async () => {
+  const w = await setupWorld();
+  const { t, y, sz, c, by, token, taskId } = await closedYesterday(w, { daily: true });
   // Before today's run, yesterday's list is still open but no longer shown in the app.
   const myBefore = await api('GET', '/collection-sync/my-assignments', { token });
   assert.ok(!myBefore.data.batches.some((x) => x.id === by.id));
-  const taskId = (await db.query('SELECT id FROM tasks WHERE batch_id = $1', [by.id])).rows[0].id;
 
-  await run(w, t); // the 05:00 close: never visited -> missed 'not visited', carried to today
+  await run(w, t); // the morning close: never visited -> missed 'not visited', carried to today
   const [bt] = await autoBatches(sz.route.id, t);
   assert.deepEqual((await rows(bt.id)).map((x) => x.customer_id), [c.id]);
   const total0 = (await db.query('SELECT total_customers FROM batches WHERE id = $1', [bt.id])).rows[0].total_customers;
+  const tz = await companyTz();
+  const capturedAt = (await localAt(y, '18:30', tz)).toISOString();
 
-  const tz = (await db.query(`SELECT COALESCE((SELECT timezone FROM company_settings WHERE timezone IS NOT NULL AND timezone <> '' ORDER BY id LIMIT 1), 'Africa/Mogadishu') AS tz`)).rows[0].tz;
-  const cap = (await db.query(`SELECT (($1::date + TIME '04:30') AT TIME ZONE $2) AS at`, [t, tz])).rows[0].at;
-  const capturedAt = new Date(Math.min(new Date(cap).getTime(), Date.now() - 60000)).toISOString();
-  const uuid = require('crypto').randomUUID();
-  const rep = await api('POST', '/collection-sync/replay', { token, body: { actions: [{ action_uuid: uuid, action_type: 'batch_customer.status_change', batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: capturedAt }] } });
-  assert.equal(rep.status, 200, JSON.stringify(rep.body));
-  assert.equal(rep.body.results[0].outcome, 'accepted', JSON.stringify(rep.body));
+  assert.equal((await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'skipped', captured_at: capturedAt })).body.results[0].outcome, 'rejected_stale');
+  assert.equal((await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced' })).body.results[0].outcome, 'rejected_invalid_state');
+  const early = (await localAt(shift(y, -1), '23:00', tz)).toISOString();
+  assert.equal((await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: early })).body.results[0].outcome, 'rejected_invalid_state');
+  const putNoCap = await api('PUT', `/batches/${by.id}/customers/${c.id}/status`, { token: w.tokens.admin, body: { status: 'serviced' } });
+  assert.equal(putNoCap.status, 400, JSON.stringify(putNoCap.body));
+
+  const ok = await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: capturedAt });
+  assert.equal(ok.body.results[0].outcome, 'accepted', JSON.stringify(ok.body));
   const row = (await db.query(`SELECT id, status, to_char(status_at, 'YYYY-MM-DD"T"HH24:MI') AS at FROM batch_customers WHERE batch_id = $1 AND customer_id = $2`, [by.id, c.id])).rows[0];
   assert.equal(row.status, 'serviced');
-  assert.equal(row.at, new Date(capturedAt).toISOString().slice(0, 16));
+  assert.equal(row.at, capturedAt.slice(0, 16));
   assert.equal((await rows(bt.id)).length, 0);
   assert.equal((await db.query('SELECT total_customers FROM batches WHERE id = $1', [bt.id])).rows[0].total_customers, total0 - 1);
-  // A second late mark on the same row is a conflict now.
-  const again = await api('PUT', `/batches/${by.id}/customers/${c.id}/status`, { token: w.tokens.admin, body: { status: 'skipped' } });
+  assert.equal((await db.query('SELECT status FROM batches WHERE id = $1', [by.id])).rows[0].status, 'completed');
+  const again = await api('PUT', `/batches/${by.id}/customers/${c.id}/status`, { token: w.tokens.admin, body: { status: 'missed', reason: 'x', captured_at: capturedAt } });
   assert.equal(again.status, 409);
-  // Daily billing picks the visit up on its own (local) day.
-  const localDay = (await db.query(`SELECT to_char(($1::timestamptz AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS d`, [capturedAt, tz])).rows[0].d;
-  await runDaily({ date: localDay });
-  const inv = await db.query('SELECT 1 FROM invoices WHERE batch_customer_id = $1', [row.id]);
-  assert.equal(inv.rows.length, 1);
+  await db.query(`INSERT INTO billing_settings (id, daily_start_date) VALUES (1, $1::date) ON CONFLICT (id) DO UPDATE SET daily_start_date = LEAST(COALESCE(billing_settings.daily_start_date, $1::date), $1::date)`, [y]);
+  await runDaily({ date: y });
+  await runDaily({ date: y });
+  assert.equal((await db.query('SELECT COUNT(*)::int AS n FROM invoices WHERE customer_id = $1', [c.id])).rows[0].n, 1);
+});
+
+test('late mark bounds: older list, after noon, and someone else\'s batch with own task', async () => {
+  const w = await setupWorld();
+  const { t, c, by, taskId } = await closedYesterday(w);
+  const tz = await companyTz();
+  // An older list (two days ago) is history: refused.
+  const old = await closedYesterday(w); // fresh sub zone, list for yesterday
+  await run(w, t);
+  await db.query(`UPDATE batches SET start_date = start_date - 1, end_date = end_date - 1 WHERE id = $1`, [old.by.id]);
+  const capOld = (await localAt(shift(t, -2), '10:00', tz)).toISOString();
+  const r1 = await api('PUT', `/batches/${old.by.id}/customers/${old.c.id}/status`, { token: w.tokens.admin, body: { status: 'serviced', captured_at: capOld } });
+  assert.equal(r1.status, 409, JSON.stringify(r1.body));
+
+  // After 12:00 local today: refused (the suite raises the cut-off, so call the rule directly).
+  const { pool } = require('../db');
+  const { applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const res = await applyBatchCustomerStatusChange(client, { batchId: by.id, customerId: c.id, status: 'serviced',
+      capturedAt: (await localAt(shift(t, -1), '18:00', tz)).toISOString(), now: await localAt(t, '12:30', tz), lateUntilHour: 12 });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'CONFLICT');
+    const before = await applyBatchCustomerStatusChange(client, { batchId: by.id, customerId: c.id, status: 'serviced',
+      capturedAt: (await localAt(shift(t, -1), '18:00', tz)).toISOString(), now: await localAt(t, '11:30', tz), lateUntilHour: 12 });
+    assert.equal(before.ok, true, JSON.stringify(before));
+  } finally {
+    await client.query('ROLLBACK');
+    client.release();
+  }
+
+  // Another collector's batch with my own task id: 403 online, rejected in sync.
+  const other = await mkSubZone(w);
+  const oc = await mkCust(w, other);
+  await run(w, t);
+  const [ob] = await autoBatches(other.route.id, t);
+  const mine = await mkSubZone(w);
+  await mkCust(w, mine);
+  await run(w, t);
+  const [mb] = await autoBatches(mine.route.id, t);
+  const myTask = (await db.query('SELECT id FROM tasks WHERE batch_id = $1', [mb.id])).rows[0].id;
+  const myToken = await tokenFor(mine.col.username);
+  const put = await api('PUT', `/batches/${ob.id}/customers/${oc.id}/status`, { token: myToken, body: { status: 'serviced', task_id: myTask } });
+  assert.equal(put.status, 403, JSON.stringify(put.body));
+  const sync = await replay(myToken, { batch_id: ob.id, customer_id: oc.id, task_id: myTask, status: 'serviced' });
+  assert.equal(sync.body.results[0].outcome, 'rejected_invalid_state');
+  void taskId;
+});
+
+test('daily billing: one invoice per customer per local service day', async () => {
+  const w = await setupWorld();
+  const t = await today(w);
+  const c = await mkCust(w, null);
+  await db.query(`UPDATE customers SET billing_type = 'daily', fee = 3 WHERE id = $1`, [c.id]);
+  const cyc = (await db.query(`INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date) VALUES ($1,'custom',CURRENT_DATE - 1,CURRENT_DATE + 1) RETURNING id`, [w.zoneA.id])).rows[0].id;
+  for (let k = 0; k < 2; k++) {
+    const b = (await db.query(`INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, start_date, status) VALUES ($1,$2,$3,$4,$5::date,'in_progress') RETURNING id`,
+      ['DLBILL' + uniq(), w.zoneA.id, cyc, 900 + k, t])).rows[0].id;
+    await db.query(`INSERT INTO batch_customers (batch_id, customer_id, status, status_at) VALUES ($1,$2,'serviced', NOW() AT TIME ZONE 'UTC')`, [b, c.id]);
+  }
+  const tz = await companyTz();
+  const day = (await db.query(`SELECT to_char((NOW() AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS d`, [tz])).rows[0].d;
+  await runDaily({ date: day });
+  await runDaily({ date: day });
+  assert.equal((await db.query('SELECT COUNT(*)::int AS n FROM invoices WHERE customer_id = $1', [c.id])).rows[0].n, 1);
 });
 
 // Runs a future day (it closes today's lists), so it is the last test in this file.

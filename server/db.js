@@ -2176,6 +2176,8 @@ async function runFleetUpgradeMigrations() {
   await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS work_days JSONB;`);
   await pool.query(`ALTER TABLE collection_cycles ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // When the morning run closed this auto list (upper bound for late offline marks).
+  await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS auto_closed_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS carried_over_from DATE;`);
   // Set on an auto-list 'missed' row whose carry-over was ended by hand
   // (customer removed from a later list, or resolved by a late offline mark).

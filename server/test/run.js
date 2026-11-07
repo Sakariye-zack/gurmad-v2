@@ -71,7 +71,7 @@ const finish = () => {
 };
 if (fs.existsSync(path.join(dir, 'slow.flag'))) setTimeout(finish, 1500); else finish();
 `);
-  const env = { ...process.env, BACKUP_DIR, BACKUP_SCRIPT, BACKUP_LOG: path.join(BACKUP_DIR, 'backup.log'), BACKUP_MONITOR: 'off', FLEET_MONITOR: 'off', DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', DAILY_LISTS: 'off', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
+  const env = { ...process.env, BACKUP_DIR, BACKUP_SCRIPT, BACKUP_LOG: path.join(BACKUP_DIR, 'backup.log'), BACKUP_MONITOR: 'off', FLEET_MONITOR: 'off', DB_NAME: TEST_DB, PORT, AUTO_BILLING: 'off', DAILY_LISTS: 'off', DAILY_LATE_MARK_UNTIL_HOUR: '24', MANDATORY_2FA_ROLES: 'sec_mfa_test', TRUST_PROXY: '1', CLAMAV_ENABLED: 'true', CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: CLAM_PORT, CLAMAV_FAIL_MODE: 'closed', NODE_OPTIONS: `--require ${path.join(__dirname, 'nolimit.js')}` };
   const server = spawn(process.execPath, ['index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });
