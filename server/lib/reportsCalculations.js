@@ -1,5 +1,6 @@
 const { pool } = require('../db');
 const { getCurrentExchangeRate } = require('./financialCalculations');
+const { haversineMeters } = require('./geo');
 
 // Module 8 — Reports. The ONE shared aggregation/calculation module for
 // every reporting figure in V2 — Reports today, a future Dashboard later
@@ -144,34 +145,165 @@ async function getExecutiveSummary({ zoneId = null, periodStart, periodEnd, incl
 
 // ---------- B. Collector Performance (operational only, no financial) ----------
 
-async function getCollectorPerformance({ zoneId = null, employeeId = null, periodStart, periodEnd }, client = pool) {
+// Collector report (F5) extras: proof-of-service counts (F1 columns on
+// batch_customers), average proof distance, first/last visit (company
+// timezone; status_at is a naive TIMESTAMP stored in UTC, hence
+// AT TIME ZONE 'UTC' AT TIME ZONE tz) and km driven from the phone's ping
+// history (collector_location_history, kept 3 days only — older periods
+// report what is still there, usually 0).
+const KM_JUMP_M = 2000;
+const KM_JUMP_WINDOW_S = 60;
+const KM_MAX_SEGMENT_M = 5000;
+
+// Sum of haversine distances between consecutive pings {lat, lng, t (epoch
+// seconds)}, already ordered by time. A segment is GPS noise and ignored
+// when it is > 2 km within 60 s, or > 5 km whatever the time gap.
+function collectorDistanceKm(points) {
+  let meters = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const d = haversineMeters(a, b);
+    if (!Number.isFinite(d)) continue;
+    const dt = Number(b.t) - Number(a.t);
+    if (d > KM_MAX_SEGMENT_M) continue;
+    if (d > KM_JUMP_M && dt <= KM_JUMP_WINDOW_S) continue;
+    meters += d;
+  }
+  return meters / 1000;
+}
+
+const round2 = (x) => Math.round(x * 100) / 100;
+
+async function companyTimezone() {
+  // Lazy: autoBilling pulls in the invoice writer; keep this module's load light.
+  return require('./autoBilling').getTimezone();
+}
+
+// employee id -> Map(local day 'YYYY-MM-DD' -> km), per company-local day.
+async function getCollectorKmByDay({ employeeIds, periodStart, periodEnd, tz }, client = pool) {
+  const out = new Map();
+  if (!employeeIds || employeeIds.length === 0) return out;
+  const r = await client.query(
+    `SELECT employee_id, lat::float AS lat, lng::float AS lng, EXTRACT(EPOCH FROM recorded_at)::float AS t,
+            to_char(recorded_at AT TIME ZONE $4::text, 'YYYY-MM-DD') AS day
+     FROM collector_location_history
+     WHERE employee_id = ANY($1::int[]) AND recorded_at >= $2 AND recorded_at < $3
+     ORDER BY employee_id, recorded_at, id`,
+    [employeeIds, periodStart, periodEnd, tz]
+  );
+  const tracks = new Map();
+  for (const p of r.rows) {
+    const key = `${p.employee_id}|${p.day}`;
+    if (!tracks.has(key)) tracks.set(key, { employeeId: p.employee_id, day: p.day, points: [] });
+    tracks.get(key).points.push(p);
+  }
+  for (const { employeeId, day, points } of tracks.values()) {
+    if (!out.has(employeeId)) out.set(employeeId, new Map());
+    out.get(employeeId).set(day, collectorDistanceKm(points));
+  }
+  return out;
+}
+
+// Collector attribution (operational only, no financial): a batch's
+// customers count for every collector on one of its tasks; the period
+// filters on the batch's creation time. DISTINCT in the CTE keeps a
+// customer counted once even when a collector sits on several tasks of
+// the same batch.
+function collectorScope({ zoneId, employeeId, periodStart, periodEnd }) {
   const clauses = [`b.created_at >= $1`, `b.created_at < $2`, `tr.resource_type = 'collector'`];
   const params = [periodStart, periodEnd];
   if (zoneId) { params.push(zoneId); clauses.push(`b.zone_id = $${params.length}`); }
   if (employeeId) { params.push(employeeId); clauses.push(`tr.resource_id = $${params.length}`); }
+  return { clauses, params };
+}
+
+const VISIT_AGGREGATES = (tzIdx, fmt) => `
+       COUNT(cb.bc_id)::int AS assigned,
+       COUNT(cb.bc_id) FILTER (WHERE cb.status = 'serviced')::int AS serviced,
+       COUNT(cb.bc_id) FILTER (WHERE cb.status = 'missed')::int AS missed,
+       COUNT(cb.bc_id) FILTER (WHERE cb.status = 'skipped')::int AS skipped,
+       COUNT(cb.bc_id) FILTER (WHERE cb.status = 'rescheduled')::int AS rescheduled,
+       COUNT(cb.bc_id) FILTER (WHERE cb.proof_flag = 'override')::int AS overrides,
+       COUNT(cb.bc_id) FILTER (WHERE cb.proof_flag = 'no_customer_location')::int AS no_location,
+       ROUND(AVG(cb.proof_distance_m) FILTER (WHERE cb.status = 'serviced' AND cb.proof_distance_m IS NOT NULL))::int AS avg_proof_distance_m,
+       to_char((MIN(cb.status_at) FILTER (WHERE cb.status <> 'pending')) AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text, '${fmt}') AS first_visit_at,
+       to_char((MAX(cb.status_at) FILTER (WHERE cb.status <> 'pending')) AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text, '${fmt}') AS last_visit_at`;
+
+const completion = (r) => (r.assigned > 0 ? Math.round((r.serviced / r.assigned) * 1000) / 10 : null);
+
+async function getCollectorPerformance({ zoneId = null, employeeId = null, periodStart, periodEnd }, client = pool) {
+  const tz = await companyTimezone();
+  const { clauses, params } = collectorScope({ zoneId, employeeId, periodStart, periodEnd });
+  params.push(tz);
+  const tzIdx = params.length;
 
   const res = await client.query(
-    `SELECT tr.resource_id AS employee_id, e.name AS collector_name, z.name AS zone_name,
-       COUNT(DISTINCT bc.id)::int AS assigned,
-       COUNT(DISTINCT bc.id) FILTER (WHERE bc.status = 'serviced')::int AS serviced,
-       COUNT(DISTINCT bc.id) FILTER (WHERE bc.status = 'missed')::int AS missed,
-       COUNT(DISTINCT bc.id) FILTER (WHERE bc.status = 'skipped')::int AS skipped,
-       COUNT(DISTINCT bc.id) FILTER (WHERE bc.status = 'rescheduled')::int AS rescheduled
-     FROM task_resources tr
-     JOIN tasks t ON tr.task_id = t.id
-     JOIN batches b ON t.batch_id = b.id
-     LEFT JOIN batch_customers bc ON bc.batch_id = b.id
-     LEFT JOIN employees e ON e.id = tr.resource_id
-     LEFT JOIN zones z ON z.id = b.zone_id
-     WHERE ${clauses.join(' AND ')}
-     GROUP BY tr.resource_id, e.name, z.name
-     ORDER BY serviced DESC`,
+    `WITH cb AS (
+       SELECT DISTINCT tr.resource_id AS employee_id, b.zone_id, bc.id AS bc_id, bc.status, bc.status_at,
+              bc.proof_flag, bc.proof_distance_m
+       FROM task_resources tr
+       JOIN tasks t ON tr.task_id = t.id
+       JOIN batches b ON t.batch_id = b.id
+       LEFT JOIN batch_customers bc ON bc.batch_id = b.id
+       WHERE ${clauses.join(' AND ')}
+     )
+     SELECT cb.employee_id, e.name AS collector_name, z.name AS zone_name,${VISIT_AGGREGATES(tzIdx, 'YYYY-MM-DD HH24:MI')}
+     FROM cb
+     LEFT JOIN employees e ON e.id = cb.employee_id
+     LEFT JOIN zones z ON z.id = cb.zone_id
+     GROUP BY cb.employee_id, e.name, z.name
+     ORDER BY serviced DESC, cb.employee_id ASC`,
     params
   );
-  return res.rows.map((r) => ({
-    ...r,
-    completionRate: r.assigned > 0 ? Math.round((r.serviced / r.assigned) * 1000) / 10 : null,
-  }));
+  // km is per collector for the whole period (not split by zone): a
+  // collector who worked two districts shows the same km on both rows.
+  const ids = [...new Set(res.rows.map((r) => r.employee_id))];
+  const km = await getCollectorKmByDay({ employeeIds: ids, periodStart, periodEnd, tz }, client);
+  return res.rows.map((r) => {
+    const days = km.get(r.employee_id);
+    const total = days ? [...days.values()].reduce((s, x) => s + x, 0) : 0;
+    return { ...r, km_driven: round2(total), completionRate: completion(r) };
+  });
+}
+
+// Per-day drill-down for one collector. A marked visit counts on the
+// company-local day it was marked; an unmarked one on its list's start day.
+// Days with pings but no visits still appear (km only).
+async function getCollectorDaily({ zoneId = null, employeeId, periodStart, periodEnd }, client = pool) {
+  const tz = await companyTimezone();
+  const { clauses, params } = collectorScope({ zoneId, employeeId, periodStart, periodEnd });
+  params.push(tz);
+  const tzIdx = params.length;
+
+  const res = await client.query(
+    `WITH cb AS (
+       SELECT DISTINCT bc.id AS bc_id, bc.status, bc.status_at, bc.proof_flag, bc.proof_distance_m,
+              to_char(CASE WHEN bc.status <> 'pending' AND bc.status_at IS NOT NULL
+                             THEN (bc.status_at AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text)::date
+                           ELSE COALESCE(b.start_date, (b.created_at AT TIME ZONE 'UTC' AT TIME ZONE $${tzIdx}::text)::date) END,
+                      'YYYY-MM-DD') AS day
+       FROM task_resources tr
+       JOIN tasks t ON tr.task_id = t.id
+       JOIN batches b ON t.batch_id = b.id
+       JOIN batch_customers bc ON bc.batch_id = b.id
+       WHERE ${clauses.join(' AND ')}
+     )
+     SELECT cb.day,${VISIT_AGGREGATES(tzIdx, 'HH24:MI')}
+     FROM cb GROUP BY cb.day ORDER BY cb.day`,
+    params
+  );
+  const km = (await getCollectorKmByDay({ employeeIds: [employeeId], periodStart, periodEnd, tz }, client)).get(employeeId) || new Map();
+  const byDay = new Map(res.rows.map((r) => [r.day, r]));
+  for (const day of km.keys()) {
+    if (!byDay.has(day)) {
+      byDay.set(day, { day, assigned: 0, serviced: 0, missed: 0, skipped: 0, rescheduled: 0, overrides: 0, no_location: 0,
+        avg_proof_distance_m: null, first_visit_at: null, last_visit_at: null });
+    }
+  }
+  return [...byDay.values()]
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+    .map((r) => ({ ...r, km_driven: round2(km.get(r.day) || 0), completionRate: completion(r) }));
 }
 
 // ---------- C. Zone Performance ----------
@@ -379,6 +511,7 @@ function toCsv(rows, columns) {
 
 module.exports = {
   PERIOD_PRESETS, resolvePeriod, getRevenueForPeriod, getExecutiveSummary, getCollectorPerformance,
+  getCollectorDaily, getCollectorKmByDay, collectorDistanceKm,
   getZonePerformance, getTruckPerformance, getCollectionHistory, getCollectionDetail, getInvoicesSummary, getPaymentsSummary,
   getDebtsSummary, getCashoutSummary, getFinancialSummary, toCsv,
 };

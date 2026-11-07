@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
+const { applyBatchCustomerStatusChange, getProofSettings } = require('../lib/collectionValidation');
 const { sniffFileType } = require('../lib/fileSniff');
 const { putFile, getFileStream, fileExists } = require('../lib/documentStorage');
 const logger = require('../lib/logger');
@@ -64,7 +64,8 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
   try {
     const employeeId = await resolveEmployeeIdForUser(req.user);
     if (employeeId === null) {
-      return res.json({ data: { batches: [] } }); // not a collector-linked account — an empty, valid result, not an error
+      const { radius_m, require_photo } = await getProofSettings();
+      return res.json({ data: { batches: [], proof: { radius_m, require_photo } } }); // not a collector-linked account — an empty, valid result, not an error
     }
     const result = await pool.query(
       `SELECT
@@ -73,7 +74,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
          c.id AS customer_id, c.customer_number, c.name, c.business_name, c.phone, c.address_line, c.customer_type,
          c.lat, c.lng,
          z.name AS zone_name, COALESCE(g.name, g.code) AS group_name, COALESCE(r.name, r.code) AS route_name,
-         bc.status AS customer_status
+         bc.status AS customer_status, bc.visit_order
        FROM task_resources tr
        JOIN tasks t ON t.id = tr.task_id
        JOIN batches b ON b.id = t.batch_id
@@ -85,7 +86,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
        WHERE tr.resource_type = 'collector' AND tr.resource_id = $1
          AND b.status IN ('assigned', 'in_progress')
          AND NOT (b.auto_generated AND COALESCE(b.end_date, b.start_date) < $2::date)
-       ORDER BY b.id, c.name`,
+       ORDER BY b.id, bc.visit_order NULLS LAST, bc.id`,
       [employeeId, localParts(new Date(), await getTimezone()).date]
     );
 
@@ -116,9 +117,13 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
         lat: row.lat, lng: row.lng,
         zone_name: row.zone_name, group_name: row.group_name, route_name: row.route_name,
         status: row.customer_status, task_id: row.task_id, task_status: row.task_status,
+        visit_order: row.visit_order,
       });
     }
-    res.json({ data: { batches: Array.from(batches.values()) } });
+    // proof: the company geofence settings the collector app enforces
+    // client-side (Serviced disabled outside the radius, photo requirement).
+    const { radius_m, require_photo } = await getProofSettings();
+    res.json({ data: { batches: Array.from(batches.values()), proof: { radius_m, require_photo } } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load assignments.', code: 'INTERNAL' } });
   }
@@ -287,7 +292,7 @@ async function processOneAction(action, user, employeeId) {
     const result = await applyBatchCustomerStatusChange(client, {
       batchId, customerId,
       status: action.status, reason: action.reason, note: action.note,
-      lat: action.lat, lng: action.lng, capturedAt: action.captured_at,
+      lat: action.lat, lng: action.lng, accuracy: action.accuracy, capturedAt: action.captured_at,
     });
 
     if (!result.ok) {

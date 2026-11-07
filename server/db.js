@@ -2010,6 +2010,30 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id) WHERE revoked_at IS NULL;`);
   await runFleetUpgradeMigrations();
+
+  // ============================================================
+  // F3 — Debt suspension (90 days). Spec 2026-11-07-proof-route-debt-reports.
+  // Additive / idempotent. customers.suspended_reason is 'debt' only for a
+  // suspension approved from the Debt suspensions page (lib/debtSuspension.js);
+  // 'manual' for one set by hand; NULL for legacy rows. Only 'debt' rows are
+  // ever auto-reactivated. debt_suspend_days = 0 turns candidates off.
+  // ============================================================
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_reason VARCHAR(20);`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_by INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_suspended_reason ON customers(suspended_reason) WHERE suspended_reason IS NOT NULL;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS debt_suspend_days INTEGER NOT NULL DEFAULT 90;`);
+  await addCheckIfMissing('company_settings', 'company_settings_debt_suspend_days_check', 'debt_suspend_days >= 0 AND debt_suspend_days <= 3650');
+  // "Dismiss" on a candidate snoozes it for 30 days (one row per customer).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debt_suspension_dismissals (
+      customer_id INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+      dismissed_until TIMESTAMP NOT NULL,
+      dismissed_by INTEGER,
+      dismissed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // ============================================================ end F3
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance
@@ -2216,6 +2240,33 @@ async function runFleetUpgradeMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_daily_list_runs_date ON daily_list_runs(run_date, id DESC);`);
+
+  // Proof of service (geofence on Serviced marks) + route order ("next house").
+  // All additive / nullable / defaulted — existing rows are untouched.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_radius_m INTEGER NOT NULL DEFAULT 50;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_require_photo BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // Distance (m) between the phone and the customer at a Serviced mark.
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_distance_m INTEGER;`);
+  // 'no_customer_location' | 'override' | NULL (geofence passed).
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_flag VARCHAR(30);`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_override_reason TEXT;`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_override_by INTEGER;`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS visit_order INTEGER;`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lat NUMERIC(10,6);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lng NUMERIC(10,6);`);
+  // Geofence rollout time: the existing settings row gets the moment this
+  // column is first added (later boots leave it alone); Serviced marks with
+  // no phone GPS captured before it are accepted as 'legacy_no_gps'.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_enforced_from TIMESTAMPTZ DEFAULT NOW();`);
+  // GPS accuracy (m) the phone reported with a Serviced mark.
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_accuracy_m INTEGER;`);
+  // Open auto lists for today or later generated before visit_order existed
+  // get a visit order now (lazy require: lib/dailyLists requires this module).
+  try {
+    await require('./lib/dailyLists').backfillVisitOrder();
+  } catch (e) {
+    console.warn('WARNING: visit order backfill failed:', e.message);
+  }
 }
 
 // Allowed auth_events.event values. Adding one here is picked up on the

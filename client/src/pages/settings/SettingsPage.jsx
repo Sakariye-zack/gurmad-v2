@@ -3,6 +3,8 @@ import { Settings as SettingsIcon } from 'lucide-react';
 import { PageHeader, Button, Card, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { useCompanySettings, useUpdateCompanySettings, useUpdateCompanyLogo } from '../../hooks/useSettings.js';
 import { apiClient } from '../../lib/apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
+import DebtSuspensionSettingsCard from './DebtSuspensionSettingsCard.jsx';
 
 // System Settings — Phase 1 (Company Settings). Admin-only (Sidebar/router
 // gate this page; the backend independently re-enforces it — frontend
@@ -149,7 +151,59 @@ export default function SettingsPage() {
           </div>
         </form>
       </Card>
+
+      <OperationsCard settings={settings} />
+      <DebtSuspensionSettingsCard />
     </div>
+  );
+}
+
+// Settings → Operations: proof of service (geofence on Serviced marks).
+function OperationsCard({ settings }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const update = useUpdateCompanySettings();
+  const [radius, setRadius] = useState('50');
+  const [requirePhoto, setRequirePhoto] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setRadius(String(settings?.proof_radius_m ?? 50));
+    setRequirePhoto(!!settings?.proof_require_photo);
+  }, [settings?.proof_radius_m, settings?.proof_require_photo]);
+
+  async function save(e) {
+    e.preventDefault();
+    const n = Number(radius);
+    if (!Number.isInteger(n) || n < 10 || n > 1000) { setError(t('settings.ops.radiusInvalid')); return; }
+    setError('');
+    try {
+      await update.mutateAsync({ proof_radius_m: n, proof_require_photo: requirePhoto });
+      toast.success(t('settings.ops.saved'));
+    } catch (err) {
+      toast.error(err.message || t('common.somethingWrong'));
+    }
+  }
+
+  return (
+    <Card style={{ padding: '20px', marginTop: '16px' }}>
+      <span style={sectionLabelStyle}>{t('settings.ops.title')}</span>
+      <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+        <Field label={t('settings.ops.radius')} error={error}>
+          <input type="number" min={10} max={1000} step={1} value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...inputStyle, maxWidth: '160px' }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('settings.ops.radiusHint')}</span>
+        </Field>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13px' }}>
+          <input type="checkbox" checked={requirePhoto} onChange={(e) => setRequirePhoto(e.target.checked)} style={{ marginTop: '3px' }} />
+          <span>
+            <strong>{t('settings.ops.requirePhoto')}</strong>
+            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>{t('settings.ops.requirePhotoHint')}</span>
+          </span>
+        </label>
+        <div>
+          <Button type="submit" disabled={update.isPending}>{update.isPending ? t('common.saving') : t('settings.ops.save')}</Button>
+        </div>
+      </form>
+    </Card>
   );
 }
 

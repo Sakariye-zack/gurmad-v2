@@ -1,11 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2, RefreshCw, Clock, Receipt } from 'lucide-react';
+import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2, RefreshCw, Clock, Receipt, ListChecks, MapPin, Truck, HardDrive, AlertTriangle } from 'lucide-react';
 import { PageHeader, StatCard, Button, DataTable, LoadingState, ErrorState } from '../components/ui/index.js';
 import RoleGate from '../components/RoleGate.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useCurrentZone } from '../hooks/useCurrentZone.js';
-import { useDashboardSummary } from '../hooks/useDashboard.js';
+import { useDashboardSummary, useOperationsToday } from '../hooks/useDashboard.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
 // Module 9 — Dashboard. Composition + presentation ONLY: every figure
@@ -33,9 +33,59 @@ export default function Dashboard() {
         }
       />
 
+      {(role === 'admin' || role === 'gudoomiye') && <OperationsToday navigate={navigate} />}
+
       {isLoading && <LoadingState label={t('dash.loading_dashboard')} />}
       {error && <ErrorState message={error.message} onRetry={refetch} />}
       {data?.data && <DashboardContent summary={data.data} role={role} navigate={navigate} />}
+    </div>
+  );
+}
+
+// F7 — "Today" operations panel (admin company-wide, gudoomiye own
+// district). Every figure comes from GET /v2/dashboard/operations-today;
+// each card links to the page that owns it. The debt-suspension card only
+// shows when the server reports a number (null = feature not installed),
+// and the backup card only for admin (server sends null otherwise).
+function OperationsToday({ navigate }) {
+  const { t } = useI18n();
+  const { data, error } = useOperationsToday();
+  if (error) {
+    return <div style={{ marginBottom: '20px', fontSize: '13px', color: 'var(--text-muted)' }}>{t('ops.loadFailed')}</div>;
+  }
+  const d = data?.data;
+  if (!d) return null;
+  const l = d.lists || {};
+  const fa = d.fleet_alerts || {};
+  const backupSub = d.backup && !d.backup.ok ? (d.backup.failed ? t('ops.backupFailed') : t('ops.backupOverdue')) : undefined;
+  return (
+    <div style={{ marginBottom: '24px' }}>
+      <span style={sectionLabelStyle}>{t('ops.today')} · {d.date}</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px' }}>
+        <StatCard label={t('ops.lists')} value={l.lists ?? 0} icon={ListChecks} onClick={() => navigate('/operations/today')} />
+        <StatCard
+          label={t('ops.progress')} value={`${l.serviced ?? 0} / ${l.total ?? 0}`}
+          sub={t('ops.progressSub', undefined, { pending: l.pending ?? 0 })} accent="var(--success)"
+          onClick={() => navigate('/operations/today')}
+        />
+        <StatCard label={t('ops.missed')} value={l.missed ?? 0} accent="var(--danger)" onClick={() => navigate('/operations/today')} />
+        <StatCard label={t('ops.collectorsActive')} value={d.collectors_active ?? 0} sub={t('ops.collectorsActiveSub')} icon={MapPin} accent="var(--info)" onClick={() => navigate('/map')} />
+        <StatCard label={t('ops.trucksLive')} value={d.trucks_live ?? 0} icon={Truck} accent="var(--info)" onClick={() => navigate('/map')} />
+        {d.debt_candidates !== null && d.debt_candidates !== undefined && (
+          <StatCard label={t('ops.debtCandidates')} value={d.debt_candidates} accent="var(--warning)" onClick={() => navigate('/admin/debt-suspensions')} />
+        )}
+        {d.backup && (
+          <StatCard
+            label={t('ops.backup')} value={d.backup.ok ? t('ops.backupOk') : t('ops.backupProblem')} sub={backupSub}
+            icon={HardDrive} accent={d.backup.ok ? 'var(--success)' : 'var(--danger)'} onClick={() => navigate('/backups')}
+          />
+        )}
+        <StatCard
+          label={t('ops.fleetAlerts')} value={fa.total ?? 0}
+          sub={t('ops.fleetAlertsSub', undefined, { docs: fa.documents ?? 0, due: fa.maintenance_due ?? 0 })}
+          icon={AlertTriangle} accent={(fa.total ?? 0) > 0 ? 'var(--warning)' : 'var(--success)'} onClick={() => navigate('/fleet')}
+        />
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { toPoint, haversineMeters } = require('./geo');
 
 // Shared by assignment-time AND task-start-time validation (OD-4, approved:
 // enforce DR-7 at both points) — one implementation, not two copies that
@@ -230,7 +231,80 @@ function lateMarkUntilHour() {
   return Number.isFinite(h) && h > 0 && h <= 24 ? h : 12;
 }
 
-async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, capturedAt: capturedAtRaw, now = new Date(), lateUntilHour }) {
+// ---------- Proof of service (geofence) ----------
+// Company setting (company_settings row 1), defaults when no row exists.
+// enforced_from: when the geofence was rolled out (set by the migration that
+// added the column). Serviced marks captured before it without phone GPS are
+// accepted as 'legacy_no_gps' (offline queues filled by the old app). With no
+// settings row there is no known rollout time and the strict rule applies.
+const PROOF_DEFAULT_RADIUS_M = 50;
+async function getProofSettings(client = pool) {
+  const r = await client.query('SELECT proof_radius_m, proof_require_photo, proof_enforced_from FROM company_settings ORDER BY id LIMIT 1');
+  const row = r.rows[0];
+  return {
+    radius_m: row && Number.isInteger(row.proof_radius_m) ? row.proof_radius_m : PROOF_DEFAULT_RADIUS_M,
+    require_photo: !!(row && row.proof_require_photo),
+    enforced_from: row && row.proof_enforced_from ? new Date(row.proof_enforced_from) : null,
+  };
+}
+
+function toAccuracy(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n < 1e6 ? Math.round(n) : null;
+}
+
+// A mark with no phone GPS captured before the rollout, on a list whose day
+// had already started by then (so a forged old captured_at cannot unlock a
+// later list).
+async function isLegacyNoGps(client, batchId, capturedAtRaw, settings) {
+  if (!settings.enforced_from || typeof capturedAtRaw !== 'string') return false;
+  const cap = Date.parse(capturedAtRaw);
+  if (!Number.isFinite(cap) || cap >= settings.enforced_from.getTime()) return false;
+  const tz = await require('./autoBilling').getTimezone();
+  const r = (await client.query(
+    `SELECT (start_date::timestamp AT TIME ZONE $2) AS lo FROM batches WHERE id = $1`, [batchId, tz])).rows[0];
+  if (!r) return false;
+  const lo = new Date(r.lo).getTime();
+  return lo < settings.enforced_from.getTime() && cap >= lo;
+}
+
+// Decides the proof columns for a Serviced mark, or rejects it.
+//  - customer has a location: the phone's GPS is required and must be within
+//    the radius (rejections carry geofence:true);
+//  - customer has no location: accepted, flagged 'no_customer_location';
+//  - supervisor override: accepted, flagged 'override' (distance kept when known);
+//  - phone point identical to the house point with no accuracy reported:
+//    accepted but flagged 'suspect_exact' (looks copied, not measured).
+async function computeServicedProof(client, { batchId, customerId, lat, lng, accuracy, capturedAt, override }) {
+  const c = (await client.query('SELECT lat, lng FROM customers WHERE id = $1', [customerId])).rows[0];
+  const house = c ? toPoint(c.lat, c.lng) : null;
+  const phone = toPoint(lat, lng);
+  const acc = toAccuracy(accuracy);
+  const distance = house && phone ? Math.round(haversineMeters(house, phone)) : null;
+  const ok = (flag) => ({ ok: true, proof_distance_m: distance, proof_flag: flag, proof_accuracy_m: acc });
+  if (override) return ok('override');
+  if (!house) return ok('no_customer_location');
+  const settings = await getProofSettings(client);
+  if (!phone) {
+    if (await isLegacyNoGps(client, batchId, capturedAt, settings)) return ok('legacy_no_gps');
+    return { ok: false, code: 'VALIDATION', geofence: true, error: 'Turn on GPS to mark Serviced.' };
+  }
+  const radius = settings.radius_m;
+  if (distance > radius) {
+    // Old-app offline queue: a visit captured before the rollout is kept
+    // (flagged) rather than lost, even when its GPS was outside the radius.
+    if (await isLegacyNoGps(client, batchId, capturedAt, settings)) return ok('legacy_far');
+    return { ok: false, code: 'VALIDATION', geofence: true, error: `You are ${distance} m from this house (limit ${radius} m).`, distance_m: distance, radius_m: radius };
+  }
+  if (haversineMeters(house, phone) < 1 && acc === null) return ok('suspect_exact');
+  return ok(null);
+}
+
+// override: supervisor "mark serviced" from the web Today's list (routes/
+// dailyLists.js) — never reachable from the collector routes, which do not
+// pass it.
+async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, accuracy, capturedAt: capturedAtRaw, now = new Date(), lateUntilHour, override = null }) {
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return { ok: false, code: 'VALIDATION', error: 'status must be one of: serviced, missed, skipped.' };
   }
@@ -244,10 +318,14 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
   }
   const bc = bcRes.rows[0];
   if (bc.status === 'pending') {
+    const proof = await proofFor(client, status, { batchId, customerId, lat, lng, accuracy, capturedAt: capturedAtRaw, override });
+    if (!proof.ok) return proof;
     const updated = await client.query(
-      `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+      `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW(),
+         proof_distance_m = $8, proof_flag = $9, proof_override_reason = $10, proof_override_by = $11, proof_accuracy_m = $12
        WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-      [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+      [status, reason || null, note || null, lat || null, lng || null, batchId, customerId,
+        proof.proof_distance_m, proof.proof_flag, proof.override_reason, proof.override_by, proof.proof_accuracy_m]
     );
     return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
   }
@@ -287,11 +365,16 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
     return { ok: false, code: 'CONFLICT', error: 'This customer was already serviced on a later list.', currentStatus: bc.status };
   }
 
+  // Late marks pass the same geofence as live ones.
+  const proof = await proofFor(client, status, { batchId, customerId, lat, lng, accuracy, capturedAt: capturedAtRaw, override });
+  if (!proof.ok) return proof;
   const updated = await client.query(
     `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5,
-       status_at = ($8::timestamptz AT TIME ZONE 'UTC')
+       status_at = ($8::timestamptz AT TIME ZONE 'UTC'),
+       proof_distance_m = $9, proof_flag = $10, proof_override_reason = $11, proof_override_by = $12, proof_accuracy_m = $13
      WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId, capturedAt]
+    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId, capturedAt,
+      proof.proof_distance_m, proof.proof_flag, proof.override_reason, proof.override_by, proof.proof_accuracy_m]
   );
   if (status === 'serviced') {
     // Resolved: drop the still-pending carried copies on later auto lists
@@ -319,6 +402,14 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
   return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0], late: true };
 }
 
+// Missed/skipped never need the geofence (proof columns stay NULL).
+async function proofFor(client, status, { batchId, customerId, lat, lng, accuracy, capturedAt, override }) {
+  if (status !== 'serviced') return { ok: true, proof_distance_m: null, proof_flag: null, proof_accuracy_m: null, override_reason: null, override_by: null };
+  const p = await computeServicedProof(client, { batchId, customerId, lat, lng, accuracy, capturedAt, override: !!override });
+  if (!p.ok) return p;
+  return { ...p, override_reason: override ? override.reason : null, override_by: override ? override.by : null };
+}
+
 // Next batch number/code within (zone, cycle). Shared by manual batch
 // creation/reschedule (routes/batches.js) and the daily-list generator.
 async function generateBatchCode(client, zoneId, cycleId) {
@@ -331,5 +422,5 @@ module.exports = {
   generateBatchCode,
   validateResourceAssignment, validateDr7ForCollector, validateResourceEligibility,
   computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment,
-  applyBatchCustomerStatusChange,
+  applyBatchCustomerStatusChange, getProofSettings,
 };

@@ -1,8 +1,8 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { runForDate, todayLocal } = require('../lib/dailyLists');
-const { validateDr7ForCollector, validateResourceEligibility } = require('../lib/collectionValidation');
+const { runForDate, todayLocal, computeVisitOrder, ensureVisitOrder } = require('../lib/dailyLists');
+const { validateDr7ForCollector, validateResourceEligibility, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
 const { resolveRecipientForEmployee, createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
 
 // Daily lists ("Today's list") — read + supervisor edits of the auto batches
@@ -223,7 +223,11 @@ router.post('/:batchId/customers', requireRole(...WRITE_ROLES), async (req, res)
            AND (bc.status = 'pending' OR (b.start_date <= $2::date AND COALESCE(b.end_date, b.start_date) >= $2::date)) LIMIT 1`,
         [customerId, b.start_date]);
       if (dup.rows[0]) { await client.query('ROLLBACK'); return err(res, 409, 'CONFLICT', 'This customer is already on a list for that day (or pending in another batch).'); }
-      const ins = await client.query(`INSERT INTO batch_customers (batch_id, customer_id, status) VALUES ($1, $2, 'pending') RETURNING *`, [b.id, customerId]);
+      await ensureVisitOrder(client, b.id);
+      // Added by hand: goes to the end of the visit order.
+      const ins = await client.query(
+        `INSERT INTO batch_customers (batch_id, customer_id, status, visit_order)
+         VALUES ($1, $2, 'pending', (SELECT COALESCE(MAX(visit_order), 0) + 1 FROM batch_customers WHERE batch_id = $1)) RETURNING *`, [b.id, customerId]);
       await client.query('UPDATE batches SET total_customers = total_customers + 1, updated_at = NOW() WHERE id = $1', [b.id]);
       await client.query('COMMIT');
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'daily_list.add_customer', entityType: 'batch_customer', entityId: ins.rows[0].id, before: null, after: ins.rows[0] });
@@ -357,6 +361,125 @@ router.put('/:batchId/assignment', requireRole(...WRITE_ROLES), async (req, res)
     res.json({ data: after });
   } catch (e) {
     err(res, 500, 'INTERNAL', 'Failed to reassign the list.');
+  }
+});
+
+// POST /api/v2/daily-lists/:batchId/reorder — finished rows stay first in their
+// order; pending rows are re-ordered nearest-neighbour from the collector's
+// fresh location, else the last finished house, else the Sub Zone start.
+router.post('/:batchId/reorder', requireRole(...WRITE_ROLES), async (req, res) => {
+  try {
+    const b = await loadEditableBatch(req, res);
+    if (!b) return;
+    const client = await pool.connect();
+    let before;
+    let after;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [b.id]);
+      before = (await client.query('SELECT customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order NULLS LAST, id', [b.id])).rows;
+      await computeVisitOrder(client, b.id, { mode: 'reorder' });
+      after = (await client.query('SELECT customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order, id', [b.id])).rows;
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'daily_list.reorder', entityType: 'batch', entityId: b.id, before: { order: before }, after: { order: after } });
+    res.json({ data: after });
+  } catch (e) {
+    err(res, 500, 'INTERNAL', 'Failed to re-order the list.');
+  }
+});
+
+// PUT /api/v2/daily-lists/:batchId/customers/:customerId/order {direction: 'up'|'down'}
+// Moves one row a place up or down in the visit order (swaps with its neighbour).
+router.put('/:batchId/customers/:customerId/order', requireRole(...WRITE_ROLES), async (req, res) => {
+  try {
+    const b = await loadEditableBatch(req, res);
+    if (!b) return;
+    const customerId = parseStrictId(req.params.customerId);
+    if (customerId === null) return err(res, 400, 'VALIDATION', 'Invalid customer id.');
+    const direction = req.body?.direction;
+    if (!['up', 'down'].includes(direction)) return err(res, 400, 'VALIDATION', 'direction must be "up" or "down".');
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [b.id]);
+      await ensureVisitOrder(client, b.id);
+      const list = (await client.query(
+        'SELECT id, customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order NULLS LAST, id FOR UPDATE', [b.id])).rows;
+      const idx = list.findIndex((r) => r.customer_id === customerId);
+      if (idx === -1) { await client.query('ROLLBACK'); return err(res, 404, 'NOT_FOUND', 'This customer is not on this list.'); }
+      const before = list.map((r) => ({ customer_id: r.customer_id, visit_order: r.visit_order }));
+      const target = direction === 'up' ? idx - 1 : idx + 1;
+      const moved = target >= 0 && target < list.length;
+      if (moved) [list[idx], list[target]] = [list[target], list[idx]];
+      // Renumber 1..n (also normalises rows that had no order yet).
+      await client.query(
+        `UPDATE batch_customers bc SET visit_order = o.ord FROM unnest($1::int[]) WITH ORDINALITY AS o(id, ord) WHERE bc.id = o.id`,
+        [list.map((r) => r.id)]);
+      await client.query('COMMIT');
+      result = { moved, before, after: list.map((r, i) => ({ customer_id: r.customer_id, visit_order: i + 1 })) };
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    if (result.moved) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'daily_list.move_customer', entityType: 'batch', entityId: b.id,
+        before: { customer_id: customerId, order: result.before }, after: { customer_id: customerId, direction, order: result.after } });
+    }
+    res.json({ data: result.after });
+  } catch (e) {
+    err(res, 500, 'INTERNAL', 'Failed to move the customer.');
+  }
+});
+
+// POST /api/v2/daily-lists/:batchId/customers/:customerId/override {reason}
+// Supervisor "mark serviced" without the geofence (proof_flag = 'override'),
+// e.g. the collector's phone GPS failed. Admin/gudoomiye only, reason
+// required, audited. Collectors can never reach this (role gate).
+router.post('/:batchId/customers/:customerId/override', requireRole(...WRITE_ROLES), async (req, res) => {
+  try {
+    const b = await loadEditableBatch(req, res);
+    if (!b) return;
+    const customerId = parseStrictId(req.params.customerId);
+    if (customerId === null) return err(res, 400, 'VALIDATION', 'Invalid customer id.');
+    // Only on the list of the current company-local day (not a future list).
+    const local = await todayLocal();
+    if (b.start_date !== local.date) return err(res, 409, 'CONFLICT', 'Override is only allowed on today\'s list.');
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+    if (!reason) return err(res, 400, 'VALIDATION', 'A reason is required to mark Serviced without proof.');
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query('BEGIN');
+      result = await applyBatchCustomerStatusChange(client, {
+        batchId: b.id, customerId, status: 'serviced', lat: null, lng: null,
+        override: { reason, by: req.user.id },
+      });
+      if (!result.ok) {
+        await client.query('ROLLBACK');
+        if (result.code === 'NOT_FOUND') return err(res, 404, 'NOT_FOUND', result.error);
+        if (result.code === 'CONFLICT') return err(res, 409, 'CONFLICT', result.error);
+        return err(res, 400, result.code, result.error);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'daily_list.override_serviced', entityType: 'batch_customer', entityId: result.before.id, before: result.before, after: result.after });
+    res.json({ data: result.after });
+  } catch (e) {
+    err(res, 500, 'INTERNAL', 'Failed to mark the customer serviced.');
   }
 });
 

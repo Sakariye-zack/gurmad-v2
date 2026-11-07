@@ -2,7 +2,7 @@ const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const {
-  resolvePeriod, getExecutiveSummary, getCollectorPerformance, getZonePerformance, getTruckPerformance,
+  resolvePeriod, getExecutiveSummary, getCollectorPerformance, getCollectorDaily, getZonePerformance, getTruckPerformance,
   getCollectionHistory, getRevenueForPeriod, getInvoicesSummary, getPaymentsSummary, getDebtsSummary,
   getCashoutSummary, getFinancialSummary, toCsv,
 } = require('../lib/reportsCalculations');
@@ -79,6 +79,50 @@ router.get('/collector-performance', authenticateToken, requireRole(...OPERATION
     res.json({ data });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load collector performance.', code: 'INTERNAL' } });
+  }
+});
+
+// ---------- B2. Collector daily drill-down (F5) ----------
+// Same roles and zone scoping as /collector-performance. A Collector may
+// only ever read their own days (another id -> 403). A zone-scoped role may
+// only read a collector of its own district (home zone, or a batch of that
+// district in the period); anyone else is 404 — no existence/movement leak.
+// Returns { employeeId } or { error: {status, body} }.
+async function resolveDrillEmployee(req, rawId, p, myZoneId) {
+  const role = (req.user.role || '').toLowerCase();
+  let employeeId = parseStrictId(rawId);
+  if (employeeId === null) return { error: { status: 400, body: { error: { message: 'A valid employee id is required.', code: 'VALIDATION' } } } };
+  if (role === 'collector') {
+    const own = await resolveOwnEmployeeId(req.user);
+    if (own === null || own !== employeeId) return { error: { status: 403, body: { error: { message: 'You can only view your own report.', code: 'FORBIDDEN' } } } };
+  }
+  const notFound = { error: { status: 404, body: { error: { message: 'Collector not found.', code: 'NOT_FOUND' } } } };
+  if (myZoneId !== null) {
+    const r = await pool.query(
+      `SELECT 1 FROM employees e WHERE e.id = $1 AND (e.zone_id = $2 OR EXISTS (
+         SELECT 1 FROM task_resources tr JOIN tasks t ON t.id = tr.task_id JOIN batches b ON b.id = t.batch_id
+         WHERE tr.resource_type = 'collector' AND tr.resource_id = e.id AND b.zone_id = $2
+           AND b.created_at >= $3 AND b.created_at < $4))`,
+      [employeeId, myZoneId, p.start, p.end]);
+    if (!r.rows[0]) return notFound;
+  } else {
+    const r = await pool.query('SELECT 1 FROM employees WHERE id = $1', [employeeId]);
+    if (!r.rows[0]) return notFound;
+  }
+  return { employeeId };
+}
+
+router.get('/collector-performance/:employeeId/daily', authenticateToken, requireRole(...OPERATIONAL_ROLES, ...COLLECTOR_ROLES), async (req, res) => {
+  const p = parsePeriodFromQuery(req);
+  if (!p) return res.status(400).json({ error: { message: 'A valid period is required.', code: 'VALIDATION' } });
+  try {
+    const myZoneId = await resolveUserZoneId(req.user);
+    const who = await resolveDrillEmployee(req, req.params.employeeId, p, myZoneId);
+    if (who.error) return res.status(who.error.status).json(who.error.body);
+    const data = await getCollectorDaily({ zoneId: myZoneId, employeeId: who.employeeId, periodStart: p.start, periodEnd: p.end });
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load collector days.', code: 'INTERNAL' } });
   }
 });
 
@@ -227,6 +271,20 @@ const EXPORTABLE = {
     { key: 'serviced', label: 'Serviced' }, { key: 'missed', label: 'Missed' }, { key: 'skipped', label: 'Skipped' },
     { key: 'rescheduled', label: 'Rescheduled' }, { key: 'completionRate', label: 'Completion %' },
   ] },
+  // F5 Collectors tab: the extended collector report and its daily drill-down.
+  'collectors': { roles: [...OPERATIONAL_ROLES, ...COLLECTOR_ROLES], fn: 'collector', columns: [
+    { key: 'collector_name', label: 'Collector' }, { key: 'zone_name', label: 'Zone' }, { key: 'assigned', label: 'Assigned' },
+    { key: 'serviced', label: 'Serviced' }, { key: 'missed', label: 'Missed' }, { key: 'completionRate', label: 'Completion %' },
+    { key: 'overrides', label: 'Overrides' }, { key: 'no_location', label: 'No location' },
+    { key: 'avg_proof_distance_m', label: 'Avg distance (m)' }, { key: 'km_driven', label: 'Km driven' },
+    { key: 'first_visit_at', label: 'First visit' }, { key: 'last_visit_at', label: 'Last visit' },
+  ] },
+  'collector-daily': { roles: [...OPERATIONAL_ROLES, ...COLLECTOR_ROLES], fn: 'collectorDaily', columns: [
+    { key: 'day', label: 'Date' }, { key: 'assigned', label: 'Assigned' }, { key: 'serviced', label: 'Serviced' },
+    { key: 'missed', label: 'Missed' }, { key: 'completionRate', label: 'Completion %' }, { key: 'overrides', label: 'Overrides' },
+    { key: 'no_location', label: 'No location' }, { key: 'avg_proof_distance_m', label: 'Avg distance (m)' },
+    { key: 'km_driven', label: 'Km driven' }, { key: 'first_visit_at', label: 'First visit' }, { key: 'last_visit_at', label: 'Last visit' },
+  ] },
   'zone-performance': { roles: OPERATIONAL_ROLES, fn: 'zone', columns: [
     { key: 'zone_name', label: 'Zone' }, { key: 'batches', label: 'Batches' }, { key: 'assigned_customers', label: 'Assigned' },
     { key: 'serviced', label: 'Serviced' }, { key: 'missed', label: 'Missed' }, { key: 'skipped', label: 'Skipped' },
@@ -276,7 +334,13 @@ router.get('/:category/export.csv', authenticateToken, async (req, res) => {
     if (def.fn === 'collector') {
       let employeeId = parseStrictId(req.query.employee_id);
       if (role === 'collector') employeeId = await resolveOwnEmployeeId(req.user);
-      rows = await getCollectorPerformance({ zoneId: myZoneId, employeeId, periodStart: p.start, periodEnd: p.end });
+      // A Collector with no linked employee gets nothing — never everyone's rows.
+      rows = role === 'collector' && employeeId === null ? []
+        : await getCollectorPerformance({ zoneId: myZoneId, employeeId, periodStart: p.start, periodEnd: p.end });
+    } else if (def.fn === 'collectorDaily') {
+      const who = await resolveDrillEmployee(req, req.query.employee_id, p, myZoneId);
+      if (who.error) return res.status(who.error.status).json(who.error.body);
+      rows = await getCollectorDaily({ zoneId: myZoneId, employeeId: who.employeeId, periodStart: p.start, periodEnd: p.end });
     } else if (def.fn === 'zone') {
       rows = await getZonePerformance({ periodStart: p.start, periodEnd: p.end, includeFinancial: false });
       if (myZoneId !== null) rows = rows.filter((r) => r.zone_id === myZoneId);

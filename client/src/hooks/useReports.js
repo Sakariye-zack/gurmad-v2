@@ -38,3 +38,13 @@ export async function downloadReportCsv(category, period, customStart, customEnd
   const qs = buildQuery(period, customStart, customEnd, extra);
   await apiClient.downloadAuthorizedFile(`/v2/reports/${category}/export.csv?${qs}`, `${category}-${new Date().toISOString().slice(0, 10)}.csv`);
 }
+
+// F5 Collectors tab — one collector's daily breakdown for the period.
+export function useCollectorDaily(employeeId, period, customStart, customEnd) {
+  const qs = buildQuery(period, customStart, customEnd);
+  return useQuery({
+    queryKey: ['v2', 'reports', 'collector-daily', employeeId, period, customStart, customEnd],
+    queryFn: () => apiClient.get(`/v2/reports/collector-performance/${employeeId}/daily?${qs}`),
+    enabled: !!employeeId && (period !== 'custom' || (!!customStart && !!customEnd)),
+  });
+}

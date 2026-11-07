@@ -5,7 +5,7 @@ import { useSyncQueueContext } from '../SyncQueueContext.jsx';
 import { outcomeMessage } from '../lib/outcomeMessages.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
-const TERMINAL_OUTCOMES = new Set(['accepted', 'already_applied', 'rejected_stale', 'rejected_invalid_state']);
+const TERMINAL_OUTCOMES = new Set(['accepted', 'already_applied', 'rejected_stale', 'rejected_invalid_state', 'rejected_geofence', 'rejected_no_gps']);
 
 // Screen 6.5 (Decisions §17). Folds "Conflict/rejected action" as per-item
 // state, not a separate screen. Never renders a raw outcome string,

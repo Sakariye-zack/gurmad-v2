@@ -6,6 +6,7 @@ import { useAuth } from '../../auth/AuthContext.jsx';
 import { useAssignments } from '../hooks/useAssignments.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import NextHouseCard from './NextHouseCard.jsx';
 
 // Screen — user-requested ("Home screen kana iigu soo dar", Phase 10 Gap
 // Audit follow-up). The collector previously landed straight on the
@@ -95,6 +96,8 @@ export default function HomeScreen() {
           <MiniStat icon={SkipForward} label={t('status.skipped')} value={skipped} color="var(--info)" />
         </div>
       </div>
+
+      <NextHouseCard batches={batches} />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <Button

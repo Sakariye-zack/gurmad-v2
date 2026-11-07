@@ -325,12 +325,17 @@ router.get('/:id/customers', authenticateToken, requireRole(...VIEW_ROLES), asyn
       if (!owns) return res.status(403).json({ error: { message: 'You are not assigned to this batch.', code: 'FORBIDDEN' } });
     }
     const result = await pool.query(
-      `SELECT batch_customers.*, customers.customer_number, customers.name, customers.business_name, customers.phone, customers.address_line
+      `SELECT batch_customers.*, customers.customer_number, customers.name, customers.business_name, customers.phone, customers.address_line,
+              (customers.lat IS NOT NULL AND customers.lng IS NOT NULL) AS has_location
        FROM batch_customers JOIN customers ON customers.id = batch_customers.customer_id
-       WHERE batch_customers.batch_id = $1 ORDER BY customers.name`,
+       WHERE batch_customers.batch_id = $1 ORDER BY batch_customers.visit_order NULLS LAST, batch_customers.id`,
       [id]
     );
-    res.json({ data: result.rows });
+    // Who overrode a proof and why is supervisor information, not the collector's.
+    const rows = (req.user.role || '').toLowerCase() === 'collector'
+      ? result.rows.map(({ proof_override_reason, proof_override_by, ...r }) => r)
+      : result.rows;
+    res.json({ data: rows });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load batch customers.', code: 'INTERNAL' } });
   }
@@ -749,7 +754,7 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
   const id = parseStrictId(req.params.id);
   const customerId = parseStrictId(req.params.customerId);
   if (id === null || customerId === null) return res.status(400).json({ error: { message: 'Invalid id.', code: 'VALIDATION' } });
-  const { status, task_id, reason, note, lat, lng, captured_at } = req.body;
+  const { status, task_id, reason, note, lat, lng, accuracy, captured_at, override_reason } = req.body;
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return res.status(400).json({ error: { message: `status must be one of: serviced, missed, skipped.`, code: 'VALIDATION' } });
   }
@@ -777,7 +782,20 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
       // route without a second copy of this business rule. This route
       // retains transaction ownership (BEGIN/COMMIT/ROLLBACK/release) and
       // calls logAudit() itself, after COMMIT, exactly as before extraction.
-      const result = await applyBatchCustomerStatusChange(client, { batchId: id, customerId, status, reason, note, lat, lng, capturedAt: captured_at });
+      const params = { batchId: id, customerId, status, reason, note, lat, lng, accuracy, capturedAt: captured_at };
+      let result = await applyBatchCustomerStatusChange(client, params);
+      // Office (non-collector) Serviced on a located customer without phone
+      // proof is an override: a reason is required, flagged and audited.
+      let overridden = false;
+      if (!result.ok && result.geofence && status === 'serviced' && (req.user.role || '').toLowerCase() !== 'collector') {
+        const why = typeof override_reason === 'string' ? override_reason.trim().slice(0, 500) : '';
+        if (!why) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: { message: 'This customer has a location. Give a reason to mark Serviced from the office (override).', code: 'OVERRIDE_REASON_REQUIRED' } });
+        }
+        result = await applyBatchCustomerStatusChange(client, { ...params, override: { reason: why, by: req.user.id } });
+        overridden = result.ok;
+      }
       if (!result.ok) {
         await client.query('ROLLBACK');
         if (result.code === 'NOT_FOUND') return res.status(404).json({ error: { message: result.error, code: 'NOT_FOUND' } });
@@ -785,7 +803,7 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
         return res.status(400).json({ error: { message: result.error, code: result.code } });
       }
       await client.query('COMMIT');
-      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'batch_customer.status_change', entityType: 'batch_customer', entityId: result.before.id, before: result.before, after: result.after });
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: overridden ? 'batch_customer.override_serviced' : 'batch_customer.status_change', entityType: 'batch_customer', entityId: result.before.id, before: result.before, after: result.after });
       res.json({ data: result.after });
     } catch (err) {
       await client.query('ROLLBACK');

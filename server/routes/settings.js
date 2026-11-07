@@ -227,7 +227,8 @@ function isValidTimezone(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
-// Server-side field whitelist — only these 5 business fields are ever
+// Server-side field whitelist — only these business fields (5 company +
+// 2 operations) are ever
 // read from the PUT body. id/created_by/updated_by/logo_* internals/any
 // unexpected field (role, zone_id, secret, password, jwt_secret,
 // database_url, ...) are never read from req.body at all, so there is
@@ -272,6 +273,26 @@ function validateSettingsInput(body) {
       out.timezone = body.timezone;
     }
   }
+  // Operations — proof of service (geofence on Serviced marks).
+  if (body.proof_radius_m !== undefined) {
+    const n = body.proof_radius_m;
+    if (!Number.isInteger(n) || n < 10 || n > 1000) errors.push('proof_radius_m must be a whole number between 10 and 1000.');
+    else out.proof_radius_m = n;
+  }
+  if (body.proof_require_photo !== undefined) {
+    if (typeof body.proof_require_photo !== 'boolean') errors.push('proof_require_photo must be true or false.');
+    else out.proof_require_photo = body.proof_require_photo;
+  }
+  // F3 debt suspension: days of unpaid debt before a customer becomes a
+  // suspension candidate. 0 turns candidates off.
+  if (body.debt_suspend_days !== undefined) {
+    const d = body.debt_suspend_days;
+    if (!Number.isInteger(d) || d < 0 || d > 3650) {
+      errors.push('debt_suspend_days must be a whole number from 0 to 3650.');
+    } else {
+      out.debt_suspend_days = d;
+    }
+  }
   return { errors, data: out };
 }
 
@@ -291,6 +312,9 @@ function shapeRow(row) {
     phone: row.phone,
     email: row.email,
     timezone: row.timezone,
+    proof_radius_m: row.proof_radius_m,
+    proof_require_photo: row.proof_require_photo,
+    debt_suspend_days: row.debt_suspend_days ?? 90,
     updated_at: row.updated_at,
   };
 }

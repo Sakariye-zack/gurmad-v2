@@ -10,7 +10,18 @@ import {
 } from '../lib/collectorStore.js';
 
 // Locked outcome vocabulary (§9 of Decisions) — never renamed/expanded here.
-const TERMINAL_OUTCOMES = new Set(['accepted', 'already_applied', 'rejected_stale', 'rejected_invalid_state']);
+const TERMINAL_OUTCOMES = new Set(['accepted', 'already_applied', 'rejected_stale', 'rejected_invalid_state', 'rejected_geofence', 'rejected_no_gps']);
+
+// Proof of service: a geofence rejection is still 'rejected_invalid_state'
+// on the wire; map it to its own client outcome so the Sync Center can say
+// why (never showing the raw server text, per outcomeMessages.js).
+function localOutcome(result) {
+  if (result.outcome !== 'rejected_invalid_state') return result.outcome;
+  const m = String(result.message || '');
+  if (/from this house/.test(m)) return 'rejected_geofence';
+  if (/Turn on GPS/.test(m)) return 'rejected_no_gps';
+  return result.outcome;
+}
 
 function makeUuid() {
   // Native, no new dependency — every evergreen browser Decision 1's PWA
@@ -46,7 +57,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
   // when a photo is present, null when it isn't — trySync() below uploads
   // it only once the matching status-change action has itself been
   // accepted server-side (POST /collection-sync/photo requires that).
-  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng, photoBase64, photoMime }) => {
+  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng, accuracy, photoBase64, photoMime }) => {
     const action_uuid = makeUuid();
     const entry = {
       action_uuid,
@@ -60,6 +71,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
       note: note || null,
       lat: lat ?? null,
       lng: lng ?? null,
+      accuracy: accuracy ?? null,
       sync_state: 'captured',
       last_outcome: null,
       photo_base64: photoBase64 || null,
@@ -129,12 +141,13 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
         note: e.note,
         lat: e.lat,
         lng: e.lng,
+        accuracy: e.accuracy ?? null,
         captured_at: e.captured_at,
       }));
       const res = await apiClient.post('/v2/collection-sync/replay', { actions });
       for (const result of res.results) {
         if (TERMINAL_OUTCOMES.has(result.outcome)) {
-          await updateQueueEntryOutcome(result.action_uuid, 'synced_terminal', result.outcome);
+          await updateQueueEntryOutcome(result.action_uuid, 'synced_terminal', localOutcome(result));
           if (result.outcome === 'rejected_stale' || result.outcome === 'rejected_invalid_state') {
             onStaleOrInvalid && onStaleOrInvalid();
           }

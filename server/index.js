@@ -181,6 +181,7 @@ app.use('/api/v2/documents', documentsRouter);
 app.use('/api/v2/master-data', masterDataImportExportRouter);
 app.use('/api/v2/search', searchRouter);
 app.use('/api/v2/backups', backupsRouter);
+app.use('/api/v2/debt-suspensions', require('./routes/debtSuspensions'));
 
 // Consistent error fallback for anything that slips past a route's own handling.
 app.use((err, req, res, next) => {
@@ -236,6 +237,7 @@ runMigrations()
       require('./lib/dailyLists').startScheduler();
       require('./lib/backupMonitor').startMonitor();
       require('./lib/fleetMonitor').startMonitor();
+      require('./lib/debtSuspension').startMonitor();
     });
   })
   .catch((err) => {

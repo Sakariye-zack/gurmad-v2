@@ -150,6 +150,20 @@ function validateRouteInput(body, { partial = false } = {}) {
       else out.truck_id = tid;
     }
   }
+  // Route order start point (nearest-neighbour "next house"): both or neither.
+  if (body.start_lat !== undefined || body.start_lng !== undefined) {
+    const la = body.start_lat;
+    const ln = body.start_lng;
+    if ((la === null || la === undefined || la === '') && (ln === null || ln === undefined || ln === '')) {
+      out.start_lat = null;
+      out.start_lng = null;
+    } else if (typeof la !== 'number' || typeof ln !== 'number' || !Number.isFinite(la) || !Number.isFinite(ln) || la < -90 || la > 90 || ln < -180 || ln > 180) {
+      errors.push('start_lat and start_lng must both be valid coordinates (or both null).');
+    } else {
+      out.start_lat = la;
+      out.start_lng = ln;
+    }
+  }
   if (body.group_zone_id !== undefined) {
     if (body.group_zone_id === null) out.group_zone_id = null;
     else {
@@ -228,8 +242,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
 
     const result = await pool.query(
-      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null]
+      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id, start_lat, start_lng) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null, data.start_lat ?? null, data.start_lng ?? null]
     );
     const route = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'route.create', entityType: 'route', entityId: route.id, before: null, after: route });
