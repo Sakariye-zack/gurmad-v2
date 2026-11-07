@@ -369,7 +369,7 @@ function CustomerFormModalContent({ onClose, customer }) {
             </select>
           </Field>
           <Field label={t('cust.fee_fixed')} hint={t('cust.fee_fixed_hint')}>
-            <input type="number" min="0" value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} placeholder={form.fee_currency === 'SLSH' ? '30000' : '5'} />
+            <input type="number" min="0" step={form.fee_currency === 'SLSH' ? '1' : '0.01'} value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} placeholder={form.fee_currency === 'SLSH' ? '30000' : '5'} />
           </Field>
         </div>
 
