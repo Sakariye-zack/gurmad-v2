@@ -187,7 +187,11 @@ test('proof: late mark on a closed list passes the geofence too', async () => {
   await run(w, t); // closes yesterday's list: c -> missed 'not visited'
   const tz = (await db.query(`SELECT COALESCE((SELECT timezone FROM company_settings WHERE timezone IS NOT NULL AND timezone <> '' ORDER BY id LIMIT 1), 'Africa/Mogadishu') AS tz`)).rows[0].tz;
   const capturedAt = new Date((await db.query(`SELECT (($1::date + TIME '18:30') AT TIME ZONE $2) AS at`, [y, tz])).rows[0].at).toISOString();
+  // Rollout long before this list: no legacy grace applies.
+  const prevEnforced = (await db.query(`SELECT proof_enforced_from FROM company_settings ORDER BY id LIMIT 1`)).rows[0]?.proof_enforced_from ?? null;
+  await db.query(`UPDATE company_settings SET proof_enforced_from = NOW() - INTERVAL '30 days'`);
   const far = await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: capturedAt, ...near(HOUSE, 0.003) });
+  await db.query(`UPDATE company_settings SET proof_enforced_from = $1`, [prevEnforced]);
   assert.equal(far.body.results[0].outcome, 'rejected_invalid_state', JSON.stringify(far.body));
   assert.match(far.body.results[0].message, /m from this house/);
   const ok = await replay(token, { batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: capturedAt, ...near(HOUSE, 0.0001) });
