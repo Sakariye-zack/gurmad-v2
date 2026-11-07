@@ -15,6 +15,8 @@ const WRITE_ROLES = ['admin', 'gudoomiye'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
 const VALID_STATUSES = ['active', 'inactive'];
 const CODE_RE = /^.{1,30}$/;
+// Sub Zone work days (same vocabulary/order as customers.work_days).
+const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
 
 function parseStrictId(raw) {
   if (!/^\d+$/.test(raw)) return null;
@@ -68,11 +70,12 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT r.*, g.code AS group_code, g.zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
-        u.full_name AS collector_name, u.is_active AS collector_active,
+        u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate,
         (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count
        FROM routes r JOIN groups g ON r.group_id = g.id
        LEFT JOIN v2_users u ON u.id = r.collector_user_id
        LEFT JOIN group_zones gz ON gz.id = r.group_zone_id
+       LEFT JOIN trucks tk ON tk.id = r.truck_id
        ${whereSql} ORDER BY g.code, r.code`,
       params
     );
@@ -88,8 +91,9 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   if (id === null) return res.status(400).json({ error: { message: 'Invalid route id.', code: 'VALIDATION' } });
   try {
     const result = await pool.query(
-      `SELECT r.*, g.code AS group_code, g.zone_id, u.full_name AS collector_name, u.is_active AS collector_active
-       FROM routes r JOIN groups g ON r.group_id = g.id LEFT JOIN v2_users u ON u.id = r.collector_user_id WHERE r.id = $1`,
+      `SELECT r.*, g.code AS group_code, g.zone_id, u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate
+       FROM routes r JOIN groups g ON r.group_id = g.id LEFT JOIN v2_users u ON u.id = r.collector_user_id
+       LEFT JOIN trucks tk ON tk.id = r.truck_id WHERE r.id = $1`,
       [id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: { message: 'Route not found.', code: 'NOT_FOUND' } });
@@ -130,6 +134,22 @@ function validateRouteInput(body, { partial = false } = {}) {
       else out.collector_user_id = cid;
     }
   }
+  if (body.work_days !== undefined) {
+    if (body.work_days === null) out.work_days = null;
+    else if (!Array.isArray(body.work_days) || body.work_days.some((d) => !WEEK_DAYS.includes(d))) errors.push(`work_days must be a list of: ${WEEK_DAYS.join(', ')}.`);
+    else {
+      const days = WEEK_DAYS.filter((d) => body.work_days.includes(d));
+      out.work_days = days.length ? JSON.stringify(days) : null;
+    }
+  }
+  if (body.truck_id !== undefined) {
+    if (body.truck_id === null) out.truck_id = null;
+    else {
+      const tid = parseStrictId(String(body.truck_id));
+      if (tid === null) errors.push('truck_id must be a valid truck id or null.');
+      else out.truck_id = tid;
+    }
+  }
   if (body.group_zone_id !== undefined) {
     if (body.group_zone_id === null) out.group_zone_id = null;
     else {
@@ -148,6 +168,17 @@ async function groupZoneError(groupZoneId, groupId) {
   if (r.rows.length === 0) return 'group_zone_id does not reference an existing zone.';
   if (Number(r.rows[0].group_id) !== Number(groupId)) return 'The selected zone does not belong to this group.';
   if (r.rows[0].status !== 'active') return 'The selected zone is inactive.';
+  return null;
+}
+
+// Default truck: must exist, not retired, and be in the Sub Zone's district
+// (or a company-wide truck with no district).
+async function truckError(truckId, zoneId) {
+  if (truckId === undefined || truckId === null) return null;
+  const r = await pool.query('SELECT zone_id, status FROM trucks WHERE id = $1', [truckId]);
+  if (r.rows.length === 0) return 'truck_id does not reference an existing truck.';
+  if (r.rows[0].status === 'retired') return 'That truck is retired.';
+  if (r.rows[0].zone_id !== null && Number(r.rows[0].zone_id) !== Number(zoneId)) return 'That truck does not belong to this district.';
   return null;
 }
 
@@ -186,14 +217,19 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
     const capErr = await collectorCapError(data.collector_user_id, null);
     if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
+    if (data.collector_user_id && !data.work_days) {
+      return res.status(400).json({ error: { message: 'Work days are required for a Sub Zone with a collector.', code: 'VALIDATION' } });
+    }
+    const tErr = await truckError(data.truck_id, groupRes.rows[0].zone_id);
+    if (tErr) return res.status(400).json({ error: { message: tErr, code: 'VALIDATION' } });
     const gzErr = await groupZoneError(data.group_zone_id, data.group_id);
     if (gzErr) return res.status(400).json({ error: { message: gzErr, code: 'VALIDATION' } });
     const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2', [data.group_id, data.code]);
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
 
     const result = await pool.query(
-      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null]
+      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null]
     );
     const route = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'route.create', entityType: 'route', entityId: route.id, before: null, after: route });
@@ -227,6 +263,15 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
     const gzErr = data.group_zone_id !== undefined && data.group_zone_id === current.group_zone_id ? null : await groupZoneError(data.group_zone_id, current.group_id);
     if (gzErr) return res.status(400).json({ error: { message: gzErr, code: 'VALIDATION' } });
+    const tErr = data.truck_id !== undefined && data.truck_id === current.truck_id ? null : await truckError(data.truck_id, current.zone_id);
+    if (tErr) return res.status(400).json({ error: { message: tErr, code: 'VALIDATION' } });
+    // A Sub Zone that has a collector after this update must have work days
+    // after it too (merged current + request state).
+    const nextCollector = data.collector_user_id !== undefined ? data.collector_user_id : current.collector_user_id;
+    const nextDays = data.work_days !== undefined ? data.work_days : (Array.isArray(current.work_days) && current.work_days.length ? current.work_days : null);
+    if (nextCollector && !nextDays) {
+      return res.status(400).json({ error: { message: 'Work days are required for a Sub Zone with a collector.', code: 'VALIDATION' } });
+    }
     if (data.code) {
       const dup = await pool.query('SELECT id FROM routes WHERE group_id = $1 AND code = $2 AND id != $3', [current.group_id, data.code, id]);
       if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });

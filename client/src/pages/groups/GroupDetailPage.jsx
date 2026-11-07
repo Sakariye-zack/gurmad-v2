@@ -9,6 +9,9 @@ import GroupFormModal from './GroupFormModal.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { useUsers } from '../../hooks/useUsers.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
+import { useDailyListOptions } from '../../hooks/useDailyLists.js';
+
+const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
 
 // Group Detail — Group & Group-Based Collection CR, Spec §8. Group
 // information, Zone, status, customer/route counts and lists, and current
@@ -127,15 +130,20 @@ export default function GroupDetailPage() {
           <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('group.no_routes_yet_in_this')}</p>
         )}
         {group.routes && group.routes.length > 0 && (
+          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <tbody>
               {routeSections.map((sec) => (
                 <React.Fragment key={sec.key}>
-                  <tr><td colSpan={5} style={{ padding: '10px 4px 4px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{sec.label}</td></tr>
+                  <tr><td colSpan={6} style={{ padding: '10px 4px 4px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{sec.label}</td></tr>
                   {sec.routes.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 4px' }}><strong>{r.code}</strong>{r.name && r.name !== r.code ? ` — ${r.name}` : ''}</td>
-                  <td style={{ padding: '8px 4px', color: r.collector_name ? 'inherit' : 'var(--text-muted)' }}>{r.collector_name || t('group.unassigned', 'Unassigned')}</td>
+                  <td style={{ padding: '8px 4px', color: r.collector_name ? 'inherit' : 'var(--text-muted)' }}>
+                    {r.collector_name || t('group.unassigned', 'Unassigned')}
+                    {r.truck_plate && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{r.truck_plate}</div>}
+                  </td>
+                  <td style={{ padding: '8px 4px', fontSize: '11px' }}><DaysText days={r.work_days} /></td>
                   <td style={{ padding: '8px 4px' }} className="tabular-nums">{t('group.m.nCustomers', undefined, { n: r.customer_count })}</td>
                   <td style={{ padding: '8px 4px' }}><StatusBadge status={r.status} /></td>
                   <td style={{ padding: '8px 4px', textAlign: 'right' }}>
@@ -149,6 +157,7 @@ export default function GroupDetailPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 
@@ -199,26 +208,28 @@ export default function GroupDetailPage() {
       </p>
 
       <GroupFormModal open={editOpen} onClose={() => setEditOpen(false)} group={group} />
-      <RouteFormModal open={routeFormOpen} onClose={() => setRouteFormOpen(false)} groupId={group.id} zones={zones} />
-      <EditRouteModal route={editRouteTarget} zones={zones} onClose={() => setEditRouteTarget(null)} onDone={refetch} />
+      <RouteFormModal open={routeFormOpen} onClose={() => setRouteFormOpen(false)} groupId={group.id} zones={zones} districtId={group.zone_id} />
+      <EditRouteModal route={editRouteTarget} zones={zones} districtId={group.zone_id} onClose={() => setEditRouteTarget(null)} onDone={refetch} />
       {zoneFormTarget && <ZoneFormModal groupId={group.id} zone={zoneFormTarget.id ? zoneFormTarget : null} onClose={() => setZoneFormTarget(null)} />}
     </div>
   );
 }
 
-function EditRouteModal({ route, zones, onClose, onDone }) {
+function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
   const { t } = useI18n();
   const [code, setCode] = useState(route?.code || '');
   const [name, setName] = useState(route?.name || '');
   const [status, setStatus] = useState(route?.status || 'active');
   const [collectorId, setCollectorId] = useState(route?.collector_user_id ? String(route.collector_user_id) : '');
   const [zoneId, setZoneId] = useState(route?.group_zone_id ? String(route.group_zone_id) : '');
+  const [workDays, setWorkDays] = useState(Array.isArray(route?.work_days) ? route.work_days : []);
+  const [truckId, setTruckId] = useState(route?.truck_id ? String(route.truck_id) : '');
   const [error, setError] = useState('');
   const update = useUpdateRoute(route?.id);
   const toast = useToast();
 
   React.useEffect(() => {
-    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setError(''); }
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setWorkDays(Array.isArray(route.work_days) ? route.work_days : []); setTruckId(route.truck_id ? String(route.truck_id) : ''); setError(''); }
   }, [route]);
 
   if (!route) return null;
@@ -227,8 +238,9 @@ function EditRouteModal({ route, zones, onClose, onDone }) {
     e.preventDefault();
     setError('');
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
+    if (collectorId && workDays.length === 0) { setError(t('subzone.workDaysRequired')); return; }
     try {
-      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null });
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null });
       toast.success(t('group.route_updated'));
       onDone?.();
       onClose();
@@ -258,6 +270,8 @@ function EditRouteModal({ route, zones, onClose, onDone }) {
         </label>
         <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} current={route} />
+        <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
+        <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} current={route} />
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('common.status')}</span>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
@@ -271,12 +285,14 @@ function EditRouteModal({ route, zones, onClose, onDone }) {
   );
 }
 
-function RouteFormModal({ open, onClose, groupId, zones }) {
+function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
   const { t } = useI18n();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [collectorId, setCollectorId] = useState('');
   const [zoneId, setZoneId] = useState('');
+  const [workDays, setWorkDays] = useState([]);
+  const [truckId, setTruckId] = useState('');
   const [error, setError] = useState('');
   const createRoute = useCreateRoute();
   const toast = useToast();
@@ -285,10 +301,11 @@ function RouteFormModal({ open, onClose, groupId, zones }) {
   async function handleSubmit(e) {
     e.preventDefault();
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
+    if (collectorId && workDays.length === 0) { setError(t('subzone.workDaysRequired')); return; }
     try {
-      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null });
+      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null });
       toast.success(t('fin.m.created', undefined, { number: code }));
-      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setError('');
+      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setWorkDays([]); setTruckId(''); setError('');
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));
@@ -318,9 +335,63 @@ function RouteFormModal({ open, onClose, groupId, zones }) {
         </label>
         <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} />
+        <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
+        <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} />
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>
+  );
+}
+
+function DaysText({ days }) {
+  const { t } = useI18n();
+  const list = Array.isArray(days) ? days : [];
+  if (list.length === 0) return <span style={{ color: 'var(--warning)' }}>{t('subzone.noWorkDays')}</span>;
+  return <span style={{ color: 'var(--text-muted)' }}>{WEEK_DAYS.filter((d) => list.includes(d)).map((d) => t('cust.day_' + d)).join(' · ')}</span>;
+}
+
+// Sub Zone work days: every customer of the Sub Zone is on the daily list on
+// these days (a customer's own work days, if set, override them).
+function WorkDaysPicker({ value, onChange, required }) {
+  const { t } = useI18n();
+  const missing = required && value.length === 0;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('subzone.workDays')}{required ? ' *' : ''}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        {WEEK_DAYS.map((d) => {
+          const on = value.includes(d);
+          return (
+            <button key={d} type="button" aria-pressed={on}
+              onClick={() => onChange(on ? value.filter((x) => x !== d) : WEEK_DAYS.filter((x) => x === d || value.includes(x)))}
+              style={{ padding: '6px 11px', borderRadius: '999px', fontSize: '13px', cursor: 'pointer', fontFamily: 'inherit',
+                border: '1px solid ' + (on ? 'var(--brand)' : missing ? 'var(--danger)' : 'var(--border)'),
+                background: on ? 'var(--success-bg)' : 'transparent', color: on ? 'var(--brand)' : 'var(--text)' }}>
+              {t('cust.day_' + d)}
+            </button>
+          );
+        })}
+      </div>
+      {missing && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{t('subzone.workDaysRequired')}</span>}
+    </div>
+  );
+}
+
+// Default truck for the Sub Zone's daily lists — trucks of this district or company-wide, not retired.
+function TruckSelect({ value, onChange, districtId, current }) {
+  const { t } = useI18n();
+  const { data } = useDailyListOptions(districtId, !!districtId);
+  const trucks = data?.data?.trucks || [];
+  const hasCurrent = !value || trucks.some((tk) => String(tk.id) === value);
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('subzone.defaultTruck')}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={inputStyle}>
+        <option value="">{t('subzone.noTruck')}</option>
+        {!hasCurrent && <option value={value}>{current?.truck_plate || `#${value}`}</option>}
+        {trucks.map((tk) => <option key={tk.id} value={String(tk.id)}>{tk.plate_number}{tk.model ? ` — ${tk.model}` : ''}</option>)}
+      </select>
+    </label>
   );
 }
 

@@ -70,7 +70,10 @@ function CycleRow({ cycle: c, onClosed }) {
   return (
     <tr style={{ borderBottom: '1px solid var(--border)' }}>
       <td style={cellStyle}><strong>{c.zone_name}</strong></td>
-      <td style={cellStyle}><span style={{ textTransform: 'capitalize' }}>{c.cycle_type}</span></td>
+      <td style={cellStyle}>
+        <span style={{ textTransform: 'capitalize' }}>{c.cycle_type}</span>
+        {c.auto && <span style={autoChipStyle}>{t('daily.auto')}</span>}
+      </td>
       <td style={cellStyle} className="tabular-nums">{c.start_date}</td>
       <td style={cellStyle} className="tabular-nums">{c.end_date}</td>
       <td style={cellStyle}><StatusBadge status={c.is_active ? 'Active' : 'Closed'} map={{ closed: 'info' }} /></td>
@@ -166,3 +169,5 @@ const inputStyle = {
   padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
   background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit',
 };
+
+const autoChipStyle = { marginLeft: '6px', fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', color: 'var(--info)', border: '1px solid var(--info)' };

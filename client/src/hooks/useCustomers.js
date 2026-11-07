@@ -11,6 +11,8 @@ export function useCustomers(params = {}) {
   // Group & Group-Based Collection — Change Request, Spec §9/§16. Reused by
   // the Group-based batch-creation UI.
   if (params.group_id) qs.set('group_id', params.group_id);
+  if (params.group_zone_id) qs.set('group_zone_id', params.group_zone_id);
+  if (params.route_id) qs.set('route_id', params.route_id);
   if (params.q) qs.set('q', params.q);
   const query = qs.toString();
   return useQuery({

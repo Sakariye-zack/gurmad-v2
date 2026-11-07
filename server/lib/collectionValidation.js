@@ -222,7 +222,15 @@ async function assertCapacityForTruckAssignment(batchId, truckId, client = pool)
 // DR-1 collector-ownership validation is NOT performed here — it stays
 // in the calling route, BEFORE the transaction opens, exactly as today.
 // This function assumes the caller has already authorized the request.
-async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng }) {
+// Late marks on a closed daily list (see applyBatchCustomerStatusChange).
+const AUTO_CLOSE_REASON = 'not visited';
+const LATE_MARK_STATUSES = ['serviced', 'missed'];
+function lateMarkUntilHour() {
+  const h = Number(process.env.DAILY_LATE_MARK_UNTIL_HOUR);
+  return Number.isFinite(h) && h > 0 && h <= 24 ? h : 12;
+}
+
+async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, capturedAt: capturedAtRaw, now = new Date(), lateUntilHour }) {
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return { ok: false, code: 'VALIDATION', error: 'status must be one of: serviced, missed, skipped.' };
   }
@@ -235,18 +243,92 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
     return { ok: false, code: 'NOT_FOUND', error: 'This customer is not in this batch.' };
   }
   const bc = bcRes.rows[0];
-  if (bc.status !== 'pending') {
-    return { ok: false, code: 'CONFLICT', error: `This customer is already ${bc.status} in this batch.`, currentStatus: bc.status };
+  if (bc.status === 'pending') {
+    const updated = await client.query(
+      `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+       WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
+      [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+    );
+    return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
   }
+
+  // Late (offline) mark on YESTERDAY's daily list after the 05:00 run closed
+  // it: a phone that captured the visit before the close may still sync it
+  // until noon (DAILY_LATE_MARK_UNTIL_HOUR) today. Bounded on purpose — it
+  // must never rewrite older history.
+  const conflict = { ok: false, code: 'CONFLICT', error: `This customer is already ${bc.status} in this batch.`, currentStatus: bc.status };
+  if (bc.status !== 'missed' || bc.status_reason !== AUTO_CLOSE_REASON) return conflict;
+  const tz = await require('./autoBilling').getTimezone();
+  const local = require('./autoBilling').localParts(now, tz);
+  const yesterday = require('./autoBilling').shiftDate(local.date, -1);
+  const b = (await client.query(
+    `SELECT id, auto_generated, status, to_char(start_date, 'YYYY-MM-DD') AS day, auto_closed_at FROM batches WHERE id = $1 FOR UPDATE`, [batchId])).rows[0];
+  if (!b || !b.auto_generated || !b.auto_closed_at || !['completed', 'partially_completed'].includes(b.status)) return conflict;
+  if (b.day !== yesterday || local.hour >= (lateUntilHour || lateMarkUntilHour())) return conflict;
+  if (!LATE_MARK_STATUSES.includes(status)) return conflict;
+
+  // The visit must have been captured on the phone between the start of that
+  // list's day and the moment the list was closed.
+  const capMs = typeof capturedAtRaw === 'string' ? Date.parse(capturedAtRaw) : NaN;
+  if (!Number.isFinite(capMs)) return { ok: false, code: 'VALIDATION', error: 'captured_at is required for a mark on a closed daily list.' };
+  const bounds = (await client.query(
+    `SELECT ($1::date::timestamp AT TIME ZONE $2) AS lo, $3::timestamptz AS hi`, [b.day, tz, b.auto_closed_at])).rows[0];
+  if (capMs < new Date(bounds.lo).getTime() || capMs > new Date(bounds.hi).getTime()) {
+    return { ok: false, code: 'VALIDATION', error: 'captured_at is outside that list\'s day.' };
+  }
+  const capturedAt = new Date(capMs).toISOString();
+
+  // Lock the customer's rows on later auto lists before deciding, so a
+  // concurrent mark on today's carried copy cannot slip in (no double visit/invoice).
+  const later = await client.query(
+    `SELECT x.id, x.batch_id, x.status, x.carried_over_from FROM batch_customers x JOIN batches b2 ON b2.id = x.batch_id
+     WHERE x.customer_id = $1 AND b2.start_date > $2::date ORDER BY x.id FOR UPDATE OF x`, [customerId, b.day]);
+  if (later.rows.some((r) => r.status === 'serviced')) {
+    return { ok: false, code: 'CONFLICT', error: 'This customer was already serviced on a later list.', currentStatus: bc.status };
+  }
+
   const updated = await client.query(
-    `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+    `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5,
+       status_at = ($8::timestamptz AT TIME ZONE 'UTC')
      WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId, capturedAt]
   );
-  return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
+  if (status === 'serviced') {
+    // Resolved: drop the still-pending carried copies on later auto lists
+    // and stop later misses from carrying again.
+    const autoLater = await client.query(
+      `SELECT x.id, x.batch_id, x.status, x.carried_over_from, b2.auto_generated FROM batch_customers x JOIN batches b2 ON b2.id = x.batch_id
+       WHERE x.id = ANY($1::int[])`, [later.rows.map((r) => r.id)]);
+    for (const r of autoLater.rows) {
+      if (!r.auto_generated) continue;
+      if (r.status === 'pending' && r.carried_over_from) {
+        await client.query('DELETE FROM batch_customers WHERE id = $1', [r.id]);
+        await client.query('UPDATE batches SET total_customers = GREATEST(total_customers - 1, 0) WHERE id = $1', [r.batch_id]);
+      } else if (r.status === 'missed') {
+        await client.query('UPDATE batch_customers SET carry_resolved_at = NOW() WHERE id = $1 AND carry_resolved_at IS NULL', [r.id]);
+      }
+    }
+  }
+  // Re-apply the close rule to yesterday's list: completed once nothing is
+  // left unvisited.
+  const left = (await client.query(
+    `SELECT COUNT(*)::int AS n FROM batch_customers WHERE batch_id = $1 AND status = 'missed' AND status_reason = $2`, [batchId, AUTO_CLOSE_REASON])).rows[0].n;
+  await client.query(
+    `UPDATE batches SET status = $1::varchar, completed_at = CASE WHEN $1::varchar = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END WHERE id = $2`,
+    [left === 0 ? 'completed' : 'partially_completed', batchId]);
+  return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0], late: true };
+}
+
+// Next batch number/code within (zone, cycle). Shared by manual batch
+// creation/reschedule (routes/batches.js) and the daily-list generator.
+async function generateBatchCode(client, zoneId, cycleId) {
+  const numRow = await client.query(`SELECT COALESCE(MAX(batch_number), 0) + 1 AS n FROM batches WHERE zone_id = $1 AND cycle_id = $2`, [zoneId, cycleId]);
+  const batchNumber = numRow.rows[0].n;
+  return { batchNumber, batchCode: `Z${zoneId}-C${cycleId}-B${batchNumber}` };
 }
 
 module.exports = {
+  generateBatchCode,
   validateResourceAssignment, validateDr7ForCollector, validateResourceEligibility,
   computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment,
   applyBatchCustomerStatusChange,

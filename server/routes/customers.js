@@ -317,6 +317,19 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(gid);
       where.push(`c.group_id = $${params.length}`);
     }
+    // Hierarchy filters (Group › District › Zone › Sub Zone).
+    if (req.query.group_zone_id) {
+      const gzid = parseStrictId(req.query.group_zone_id);
+      if (gzid === null) return res.status(400).json({ error: { message: 'Invalid group_zone_id filter.', code: 'VALIDATION' } });
+      params.push(gzid);
+      where.push(`c.route_id IN (SELECT id FROM routes WHERE group_zone_id = $${params.length})`);
+    }
+    if (req.query.route_id) {
+      const rid = parseStrictId(req.query.route_id);
+      if (rid === null) return res.status(400).json({ error: { message: 'Invalid route_id filter.', code: 'VALIDATION' } });
+      params.push(rid);
+      where.push(`c.route_id = $${params.length}`);
+    }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
@@ -325,8 +338,10 @@ router.get('/', authenticateToken, async (req, res) => {
     const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM customers c ${whereSql}`, params);
     params.push(limit, offset);
     const result = await pool.query(
-      `SELECT c.*, z.name AS zone_name, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code
+      `SELECT c.*, z.name AS zone_name, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
+              concat_ws(' › ', NULLIF(COALESCE(g.name, g.code), ''), z.name, NULLIF(COALESCE(gz.name, gz.code), ''), NULLIF(COALESCE(rt.name, rt.code), '')) AS path
        FROM customers c JOIN zones z ON c.zone_id = z.id
+       LEFT JOIN groups g ON g.id = c.group_id
        LEFT JOIN routes rt ON rt.id = c.route_id LEFT JOIN group_zones gz ON gz.id = rt.group_zone_id
        ${whereSql}
        ORDER BY c.created_at DESC
@@ -632,6 +647,13 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     const effectiveGroupId = data.group_id !== undefined ? data.group_id : current.group_id;
     const groupRouteError = await validateGroupRoute(data, effectiveZoneId, effectiveGroupId);
     if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+    // District moved while keeping the current group: that group must belong to the new district.
+    if (data.zone_id !== undefined && data.group_id === undefined && current.group_id && data.zone_id !== current.zone_id) {
+      const g = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [current.group_id]);
+      if (g.rows[0] && g.rows[0].zone_id !== data.zone_id) {
+        return res.status(400).json({ error: { message: 'The customer\'s current group does not belong to the new district — choose a group in that district (or none).', code: 'VALIDATION' } });
+      }
+    }
 
     // Door change (differs from current) -> pending request; other fields still apply.
     let numberRequest = null;

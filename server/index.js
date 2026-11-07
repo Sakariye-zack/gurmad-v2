@@ -161,6 +161,7 @@ app.use('/api/v2/staff-tasks', staffTasksRouter);
 app.use('/api/v2/groups', groupsRouter);
 app.use('/api/v2/group-zones', groupZonesRouter);
 app.use('/api/v2/routes', routesEntityRouter);
+app.use('/api/v2/daily-lists', require('./routes/dailyLists'));
 app.use('/api/v2/audit', auditRouter);
 app.use('/api/v2/settings', settingsRouter);
 app.use('/api/v2/collection-sync', collectionSyncRouter);
@@ -232,6 +233,7 @@ runMigrations()
     app.listen(PORT, () => {
       console.log(`gurmad-v2-server listening on :${PORT}`);
       require('./lib/autoBilling').startScheduler();
+      require('./lib/dailyLists').startScheduler();
       require('./lib/backupMonitor').startMonitor();
       require('./lib/fleetMonitor').startMonitor();
     });

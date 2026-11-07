@@ -13,7 +13,7 @@ import MapCanvas from './MapCanvas.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { PAYMENT_STATUSES, PAYMENT_COLORS, TODAY_STATUSES, TODAY_COLORS, customerPath, matchCustomer } from './mapStatus.js';
 
-// Route & GIS / Map. Hierarchy: District (zones) > Group > Zone
+// Route & GIS / Map. Filters are Group first: Group > District (zones) > Zone
 // (group_zones) > Sub Zone (routes) > Customer. This page owns filter state,
 // data fetching, search, the legend/counts, the "Today" toggle and the
 // missing-location side panel; MapCanvas owns the Mapbox instance.
@@ -44,10 +44,10 @@ export default function MapPage() {
   const { data: zonesData } = useZonesList();
   const districts = zonesData?.data || [];
 
-  // Group dropdown scoped to the selected district (Admin) or the caller's
-  // own district (non-Admin) — server enforces the real boundary regardless.
-  const { data: groupsData } = useGroups(zoneId ? { zone_id: zoneId } : {});
-  const groups = groupsData?.data || [];
+  // Group first: every group in scope (server limits non-Admins to their own
+  // district); a chosen District narrows the list, choosing a Group sets it.
+  const { data: groupsData } = useGroups({ limit: 200 });
+  const groups = (groupsData?.data || []).filter((g) => !zoneId || String(g.zone_id) === String(zoneId) || String(g.id) === String(groupId));
 
   const { data: gzData } = useGroupZones(groupId || undefined);
   const groupZones = gzData?.data || [];
@@ -106,7 +106,11 @@ export default function MapPage() {
   }, [points]);
 
   function handleDistrictChange(v) { setZoneId(v); setGroupId(''); setGroupZoneId(''); setRouteId(''); }
-  function handleGroupChange(v) { setGroupId(v); setGroupZoneId(''); setRouteId(''); }
+  function handleGroupChange(v) {
+    setGroupId(v); setGroupZoneId(''); setRouteId('');
+    const g = groups.find((x) => String(x.id) === String(v));
+    if (g && !isZoneScoped) setZoneId(String(g.zone_id));
+  }
   function handleGroupZoneChange(v) { setGroupZoneId(v); setRouteId(''); }
 
   async function runSearch(e) {
@@ -137,16 +141,16 @@ export default function MapPage() {
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+        <SelectField icon={ListFilter} label={t('map.f.group')} value={groupId} onChange={handleGroupChange}>
+          <option value="">{t('map.all_groups')}</option>
+          {groups.map((g) => <option key={g.id} value={g.id}>{(g.name || g.code) + (!isZoneScoped && g.zone_name ? ` — ${g.zone_name}` : '')}</option>)}
+        </SelectField>
         {!isZoneScoped && (
           <SelectField icon={MapPin} label={t('map.f.district')} value={zoneId} onChange={handleDistrictChange}>
             <option value="">{t('map.f.all_districts')}</option>
             {districts.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </SelectField>
         )}
-        <SelectField icon={ListFilter} label={t('map.f.group')} value={groupId} onChange={handleGroupChange}>
-          <option value="">{t('map.all_groups')}</option>
-          {groups.map((g) => <option key={g.id} value={g.id}>{g.name || g.code}</option>)}
-        </SelectField>
         <SelectField icon={Layers} label={t('map.f.zone')} value={groupZoneId} onChange={handleGroupZoneChange} disabled={!groupId}>
           <option value="">{t('map.f.all_zones')}</option>
           {groupZones.map((z) => <option key={z.id} value={z.id}>{z.name || z.code}</option>)}

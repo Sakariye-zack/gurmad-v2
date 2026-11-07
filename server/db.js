@@ -2168,6 +2168,54 @@ async function runFleetUpgradeMigrations() {
       UNIQUE (truck_id, day)
     );
   `);
+
+  // Daily lists ("Today's list"): every morning each Sub Zone with work days
+  // and a collector gets an auto-generated batch for the day (lib/dailyLists.js).
+  // All additive / nullable / defaulted — existing rows are untouched.
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS truck_id INTEGER REFERENCES trucks(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS work_days JSONB;`);
+  await pool.query(`ALTER TABLE collection_cycles ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // When the morning run closed this auto list (upper bound for late offline marks).
+  await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS auto_closed_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS carried_over_from DATE;`);
+  // Set on an auto-list 'missed' row whose carry-over was ended by hand
+  // (customer removed from a later list, or resolved by a late offline mark).
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS carry_resolved_at TIMESTAMP;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_auto_start ON batches(start_date) WHERE auto_generated;`);
+  // Hard idempotency guards. Never fail boot on live data: skip with a warning
+  // if duplicates already exist (the generator's own existence checks still hold).
+  const dupAutoCycle = await pool.query(`SELECT 1 FROM collection_cycles WHERE auto GROUP BY zone_id, start_date HAVING COUNT(*) > 1 LIMIT 1`);
+  if (dupAutoCycle.rows.length === 0) {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_cycles_auto_zone_month ON collection_cycles (zone_id, start_date) WHERE auto;`);
+  } else {
+    console.warn('WARNING: duplicate auto collection cycles exist; skipping uq_cycles_auto_zone_month.');
+  }
+  // Cancelled auto batches stay in the index on purpose: a supervisor who
+  // cancels today's auto batch must not see the generator recreate it.
+  const dupAutoBatch = await pool.query(`SELECT 1 FROM batches WHERE auto_generated
+    GROUP BY route_id, start_date, customer_type, COALESCE(commercial_shift, '-') HAVING COUNT(*) > 1 LIMIT 1`);
+  if (dupAutoBatch.rows.length === 0) {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_batches_auto_daily
+      ON batches (route_id, start_date, customer_type, COALESCE(commercial_shift, '-')) WHERE auto_generated;`);
+  } else {
+    console.warn('WARNING: duplicate auto batches exist; skipping uq_batches_auto_daily.');
+  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_list_runs (
+      id SERIAL PRIMARY KEY,
+      run_date DATE NOT NULL,
+      started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TIMESTAMP,
+      created_batches INTEGER NOT NULL DEFAULT 0,
+      customers INTEGER NOT NULL DEFAULT 0,
+      closed_batches INTEGER NOT NULL DEFAULT 0,
+      skipped JSONB NOT NULL DEFAULT '[]',
+      error TEXT,
+      triggered_by INTEGER
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_daily_list_runs_date ON daily_list_runs(run_date, id DESC);`);
 }
 
 // Allowed auth_events.event values. Adding one here is picked up on the

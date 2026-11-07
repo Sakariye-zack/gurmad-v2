@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { AlertTriangle, MapPin, LocateFixed } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
-import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
+import { useGroups, useGroup, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
+// "Group 2 — Farah Omar": group (code, name) then its district.
+const groupOptionLabel = (g) => `${g.name && g.name !== g.code ? `${g.code} ${g.name}` : g.code}${g.zone_name ? ` — ${g.zone_name}` : ''}`;
 
 const EMPTY = {
   customer_type: 'residential', name: '', business_name: '', phone: '', alternate_phone: '',
@@ -71,8 +73,14 @@ function CustomerFormModalContent({ onClose, customer }) {
   // Group & Group-Based Collection — Change Request, Spec §6: Group scoped
   // to the selected Zone, Route scoped to the selected Group — cascading
   // selectors, same pattern as Zone->Sub-zone already used above.
-  const { data: groupsData } = useGroups({ zone_id: form.zone_id || undefined, status: 'active' });
-  const groups = form.zone_id ? (groupsData?.data || []) : [];
+  // Group-first: every active group in scope is listed (labelled with its
+  // district); choosing one fixes the District.
+  const { data: groupsData } = useGroups({ status: 'active', limit: 200 });
+  // The customer's current group may be inactive or beyond the first 200: fetch it so the select still shows it.
+  const listed = groupsData?.data || [];
+  const missingGroupId = form.group_id && groupsData && !listed.some((g) => String(g.id) === String(form.group_id)) ? form.group_id : undefined;
+  const { data: oneGroup } = useGroup(missingGroupId);
+  const groups = oneGroup?.data && missingGroupId ? [...listed, oneGroup.data] : listed;
   const { data: routesData } = useRoutesForGroup(form.group_id || undefined);
   const { data: gzData } = useGroupZones(form.group_id || undefined);
   const groupZones = form.group_id ? (gzData?.data || []).filter((z) => z.status === 'active') : [];
@@ -90,7 +98,11 @@ function CustomerFormModalContent({ onClose, customer }) {
       // changing Group invalidates any previously-selected Route — a
       // stale, no-longer-valid selection must never be silently submitted.
       if (field === 'zone_id') { next.group_id = ''; next.route_id = ''; next.gz_filter = ''; }
-      if (field === 'group_id') { next.route_id = ''; next.gz_filter = ''; }
+      if (field === 'group_id') {
+        next.route_id = ''; next.gz_filter = '';
+        const g = groups.find((x) => String(x.id) === String(value));
+        if (g) next.zone_id = String(g.zone_id);
+      }
       if (field === 'gz_filter') { next.route_id = ''; }
       return next;
     });
@@ -286,23 +298,18 @@ function CustomerFormModalContent({ onClose, customer }) {
           )}
         </Field>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-          <Field label={t('common.zone')} error={fieldErrors.zone_id}>
-            <select value={form.zone_id} onChange={(e) => set('zone_id', e.target.value)} style={inputStyle}>
-              <option value="">{t('cust.select_a_zone')}</option>
-              {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+        {/* Group › District › Zone › Sub Zone (group first; the group fixes the district). */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+          <Field label={t('cust.group_optional')} hint={t('cust.not_required_a_customer_can')}>
+            <select value={form.group_id} onChange={(e) => set('group_id', e.target.value)} style={inputStyle}>
+              <option value="">{t('cust.no_group')}</option>
+              {groups.map((g) => <option key={g.id} value={g.id}>{groupOptionLabel(g)}</option>)}
             </select>
           </Field>
-          <Field label={t('cust.sub_zone_area')}>
-            <input value={form.sub_zone} onChange={(e) => set('sub_zone', e.target.value)} style={inputStyle} />
-          </Field>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-          <Field label={t('cust.group_optional')} hint={t('cust.not_required_a_customer_can')}>
-            <select value={form.group_id} onChange={(e) => set('group_id', e.target.value)} style={inputStyle} disabled={!form.zone_id}>
-              <option value="">{form.zone_id ? t('cust.no_group') : t('cust.select_a_zone_first')}</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.code}</option>)}
+          <Field label={t('cust.district')} error={fieldErrors.zone_id} hint={form.group_id ? t('cust.districtFromGroup') : undefined}>
+            <select value={form.zone_id} onChange={(e) => set('zone_id', e.target.value)} style={inputStyle} disabled={!!form.group_id}>
+              <option value="">{t('cust.select_a_zone')}</option>
+              {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </Field>
           <Field label={t('group.zone', 'Zone')}>
@@ -315,10 +322,14 @@ function CustomerFormModalContent({ onClose, customer }) {
           <Field label={t('cust.route_optional')}>
             <select value={form.route_id} onChange={(e) => set('route_id', e.target.value)} style={inputStyle} disabled={!form.group_id}>
               <option value="">{form.group_id ? t('cust.no_route') : t('cust.select_a_group_first')}</option>
-              {routes.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
+              {routes.map((r) => <option key={r.id} value={r.id}>{r.name && r.name !== r.code ? `${r.code} — ${r.name}` : r.code}</option>)}
             </select>
           </Field>
         </div>
+
+        <Field label={t('cust.sub_zone_area')}>
+          <input value={form.sub_zone} onChange={(e) => set('sub_zone', e.target.value)} style={inputStyle} />
+        </Field>
 
         <Field
           label={t('cust.door_number', 'Door # (Route)')}
@@ -362,7 +373,7 @@ function CustomerFormModalContent({ onClose, customer }) {
           </Field>
         </div>
 
-        <Field label={t('cust.work_days')}>
+        <Field label={t('cust.work_days_optional')}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             {WEEK_DAYS.map((d) => {
               const on = form.work_days.includes(d);

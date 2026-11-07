@@ -18,7 +18,7 @@ import { useI18n } from '../i18n/I18nContext.jsx';
 // MobileNavDrawer.jsx, which renders it unmodified) needs zero changes.
 // A label with no entry here just renders in English, same as today.
 export const NAV_LABEL_KEYS = {
-  Dashboard: 'nav.dashboard', Customers: 'nav.customers', Zones: 'nav.zones', Groups: 'nav.groups',
+  Dashboard: 'nav.dashboard', "Today's list": 'nav.today', Customers: 'nav.customers', Zones: 'nav.zones', Groups: 'nav.groups',
   'Collection Cycles': 'nav.collectionCycles', Batches: 'nav.batches', Calendar: 'nav.calendar', Map: 'nav.map',
   Billing: 'nav.billing', Invoices: 'nav.invoices', Debts: 'nav.debts', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
   Employees: 'nav.employees', Attendance: 'nav.attendance', 'Leave Requests': 'nav.leaveRequests', 'Leave Types': 'nav.leaveTypes',
@@ -59,6 +59,7 @@ export const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, group: null },
 
   // ---- Operations ----
+  { to: '/operations/today', label: "Today's list", icon: ListChecks, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'Operations' },
   { to: '/customers', label: 'Customers', icon: Users, group: 'Operations' },
   { to: '/zones', label: 'Zones', icon: MapPinned, group: 'Operations' },
   { to: '/groups', label: 'Groups', icon: Boxes, group: 'Operations' },
