@@ -792,15 +792,24 @@ router.put('/:id/status', authenticateToken, requireRole('admin', 'gudoomiye'), 
       return res.status(403).json({ error: { message: 'You do not have access to this customer.', code: 'FORBIDDEN' } });
     }
 
+    // F3 debt suspension: a status set here is a manual decision. Leaving
+    // 'suspended' clears the suspension fields; a fresh manual suspension is
+    // recorded as reason 'manual' (never auto-reactivated). Re-saving an
+    // already-suspended customer keeps its existing reason.
     const result = await pool.query(
-      `UPDATE customers SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
-      [status, id]
+      `UPDATE customers SET status = $1::varchar,
+         suspended_reason = CASE WHEN $1::varchar <> 'suspended' THEN NULL WHEN status = 'suspended' THEN suspended_reason ELSE 'manual' END,
+         suspended_at = CASE WHEN $1::varchar <> 'suspended' THEN NULL WHEN status = 'suspended' THEN suspended_at ELSE CURRENT_TIMESTAMP END,
+         suspended_by = CASE WHEN $1::varchar <> 'suspended' THEN NULL WHEN status = 'suspended' THEN suspended_by ELSE $3::int END,
+         updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+      [status, id, req.user.id]
     );
     const customer = result.rows[0];
     await logAudit({
       actorId: req.user.id, actorUsername: req.user.username, action: 'customer.status_change',
       entityType: 'customer', entityId: customer.id,
-      before: { status: current.status }, after: { status: customer.status },
+      before: { status: current.status, suspended_reason: current.suspended_reason ?? null },
+      after: { status: customer.status, suspended_reason: customer.suspended_reason ?? null },
     });
     res.json({ data: customer });
   } catch (err) {

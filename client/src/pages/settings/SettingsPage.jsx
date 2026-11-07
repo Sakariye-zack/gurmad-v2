@@ -3,6 +3,7 @@ import { Settings as SettingsIcon } from 'lucide-react';
 import { PageHeader, Button, Card, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { useCompanySettings, useUpdateCompanySettings, useUpdateCompanyLogo } from '../../hooks/useSettings.js';
 import { apiClient } from '../../lib/apiClient.js';
+import DebtSuspensionSettingsCard from './DebtSuspensionSettingsCard.jsx';
 
 // System Settings — Phase 1 (Company Settings). Admin-only (Sidebar/router
 // gate this page; the backend independently re-enforces it — frontend
@@ -149,6 +150,7 @@ export default function SettingsPage() {
           </div>
         </form>
       </Card>
+      <DebtSuspensionSettingsCard />
     </div>
   );
 }

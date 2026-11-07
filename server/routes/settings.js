@@ -272,6 +272,16 @@ function validateSettingsInput(body) {
       out.timezone = body.timezone;
     }
   }
+  // F3 debt suspension: days of unpaid debt before a customer becomes a
+  // suspension candidate. 0 turns candidates off.
+  if (body.debt_suspend_days !== undefined) {
+    const d = body.debt_suspend_days;
+    if (!Number.isInteger(d) || d < 0 || d > 3650) {
+      errors.push('debt_suspend_days must be a whole number from 0 to 3650.');
+    } else {
+      out.debt_suspend_days = d;
+    }
+  }
   return { errors, data: out };
 }
 
@@ -291,6 +301,7 @@ function shapeRow(row) {
     phone: row.phone,
     email: row.email,
     timezone: row.timezone,
+    debt_suspend_days: row.debt_suspend_days ?? 90,
     updated_at: row.updated_at,
   };
 }

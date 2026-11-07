@@ -2010,6 +2010,30 @@ async function runMigrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id) WHERE revoked_at IS NULL;`);
   await runFleetUpgradeMigrations();
+
+  // ============================================================
+  // F3 — Debt suspension (90 days). Spec 2026-11-07-proof-route-debt-reports.
+  // Additive / idempotent. customers.suspended_reason is 'debt' only for a
+  // suspension approved from the Debt suspensions page (lib/debtSuspension.js);
+  // 'manual' for one set by hand; NULL for legacy rows. Only 'debt' rows are
+  // ever auto-reactivated. debt_suspend_days = 0 turns candidates off.
+  // ============================================================
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_reason VARCHAR(20);`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS suspended_by INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_suspended_reason ON customers(suspended_reason) WHERE suspended_reason IS NOT NULL;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS debt_suspend_days INTEGER NOT NULL DEFAULT 90;`);
+  await addCheckIfMissing('company_settings', 'company_settings_debt_suspend_days_check', 'debt_suspend_days >= 0 AND debt_suspend_days <= 3650');
+  // "Dismiss" on a candidate snoozes it for 30 days (one row per customer).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debt_suspension_dismissals (
+      customer_id INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+      dismissed_until TIMESTAMP NOT NULL,
+      dismissed_by INTEGER,
+      dismissed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // ============================================================ end F3
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance

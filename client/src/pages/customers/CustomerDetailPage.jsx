@@ -10,6 +10,10 @@ import CustomerFormModal from './CustomerFormModal.jsx';
 import CustomerNumberEditModal from './CustomerNumberEditModal.jsx';
 import CustomerPortalAccessCard from './CustomerPortalAccessCard.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { useQuery } from '@tanstack/react-query';
+import { apiClient } from '../../lib/apiClient.js';
+import { appLocale } from '../../lib/dateLocale.js';
+import { fmtByCurrency } from '../../lib/money.js';
 
 // P1 Functional Gaps — Customer Detail: Invoices, Debts, Collection
 // History only (no Cashout, no Payments aggregate, no Outstanding
@@ -81,6 +85,8 @@ export default function CustomerDetailPage() {
           </RoleGate>
         }
       />
+
+      {customer.status === 'suspended' && customer.suspended_reason === 'debt' && <DebtSuspendedBanner customer={customer} />}
 
       <RoleGate roles={['admin', 'gudoomiye']}>
         <PendingNumberRequestCard customerId={customer.id} />
@@ -293,3 +299,26 @@ const backLinkStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',
   color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', padding: 0, marginBottom: '16px',
 };
+
+// F3: red banner for a customer suspended for debt. Outstanding comes from the
+// debt-suspensions endpoint (finance roles); others see the date only.
+const DEBT_OUTSTANDING_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'cashier', 'head_of_cashiers'];
+function DebtSuspendedBanner({ customer }) {
+  const { t } = useI18n();
+  const since = customer.suspended_at ? new Date(customer.suspended_at).toLocaleDateString(appLocale(), { dateStyle: 'medium' }) : '';
+  return (
+    <div role="alert" style={{ background: 'var(--danger)', color: '#fff', borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: '16px' }}>
+      <div style={{ fontWeight: 800 }}>{t('debtSusp.banner', undefined, { date: since })}</div>
+      <RoleGate roles={DEBT_OUTSTANDING_ROLES}>
+        <DebtOutstandingLine customerId={customer.id} />
+      </RoleGate>
+    </div>
+  );
+}
+function DebtOutstandingLine({ customerId }) {
+  const { t } = useI18n();
+  const q = useQuery({ queryKey: ['debt-suspensions', 'customer', customerId], queryFn: () => apiClient.get(`/v2/debt-suspensions/customer/${customerId}`) });
+  const out = q.data?.data?.outstanding;
+  if (!out) return null;
+  return <div style={{ fontSize: '13px', marginTop: '4px' }}>{t('debtSusp.bannerOutstanding', undefined, { amount: fmtByCurrency(out) })}</div>;
+}

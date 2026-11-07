@@ -3,6 +3,7 @@ const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { recalculateInvoiceStatus, getCurrentExchangeRate, paidInInvoiceCurrency, EPSILON } = require('../lib/financialCalculations');
 const { requestZaadPayment } = require('../lib/zaadService');
+const debtSuspension = require('../lib/debtSuspension');
 
 const router = express.Router();
 
@@ -222,8 +223,10 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { payment, recalculated } = await recordPaymentCore(client, req.user, { invoiceId, amt, cur, method, referenceCode: reference_code });
+    const { payment, recalculated, invoice } = await recordPaymentCore(client, req.user, { invoiceId, amt, cur, method, referenceCode: reference_code });
     await client.query('COMMIT');
+    // F3: a debt-suspended customer whose balance is now cleared is reactivated (best-effort, never fails the payment).
+    await debtSuspension.afterPayment(invoice.customer_id);
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: payment });
     res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
   } catch (err) {
@@ -302,6 +305,7 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
         invoiceId, amt, cur, method: 'zaad', referenceCode: zaadResult.transactionId,
       });
       await client.query('COMMIT');
+      await debtSuspension.afterPayment(invoice.customer_id);
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, zaad_raw: zaadResult.raw } });
       res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
     } catch (err) {
