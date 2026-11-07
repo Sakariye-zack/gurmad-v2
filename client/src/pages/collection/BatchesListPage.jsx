@@ -59,7 +59,10 @@ export default function BatchesListPage() {
       >
         {batches.map((b) => (
           <tr key={b.id} onClick={() => navigate(`/collection-cycles/batches/${b.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
-            <td style={cellStyle}><strong>{b.batch_code}</strong></td>
+            <td style={cellStyle}>
+              <strong>{b.batch_code}</strong>
+              {b.auto_generated && <span style={autoChipStyle}>{t('daily.auto')}</span>}
+            </td>
             <td style={cellStyle}>{b.zone_name}</td>
             <td style={cellStyle}>
               <span style={{ textTransform: 'capitalize' }}>{t('cust.' + b.customer_type, b.customer_type)}</span>
@@ -244,3 +247,5 @@ const inputStyle = {
   padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
   background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit',
 };
+
+const autoChipStyle = { marginLeft: '6px', fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', color: 'var(--info)', border: '1px solid var(--info)' };

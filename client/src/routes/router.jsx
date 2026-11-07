@@ -63,6 +63,7 @@ const EmployeesListPage = lazy(() => import('../pages/employees/EmployeesListPag
 const EmployeeDetailPage = lazy(() => import('../pages/employees/EmployeeDetailPage.jsx'));
 const TrucksListPage = lazy(() => import('../pages/trucks/TrucksListPage.jsx'));
 const TruckDetailPage = lazy(() => import('../pages/trucks/TruckDetailPage.jsx'));
+const TodayListsPage = lazy(() => import('../pages/collection/TodayListsPage.jsx'));
 const CyclesListPage = lazy(() => import('../pages/collection/CyclesListPage.jsx'));
 const BatchesListPage = lazy(() => import('../pages/collection/BatchesListPage.jsx'));
 const BatchDetailPage = lazy(() => import('../pages/collection/BatchDetailPage.jsx'));
@@ -141,6 +142,7 @@ export const router = createBrowserRouter([
       { path: 'employees/:id', element: <EmployeeDetailPage /> },
       { path: 'trucks', element: <TrucksListPage /> },
       { path: 'trucks/:id', element: <TruckDetailPage /> },
+      { path: 'operations/today', element: <TodayListsPage /> },
       { path: 'collection-cycles', element: <CyclesListPage /> },
       { path: 'collection-cycles/batches', element: <BatchesListPage /> },
       { path: 'collection-cycles/batches/:id', element: <BatchDetailPage /> },
