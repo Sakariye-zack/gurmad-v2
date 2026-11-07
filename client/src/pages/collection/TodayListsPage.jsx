@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ListChecks, Play, ChevronDown, ChevronUp, UserPlus, Repeat, Trash2, AlertTriangle, Truck, User } from 'lucide-react';
+import { ListChecks, Play, ChevronDown, ChevronUp, UserPlus, Repeat, Trash2, AlertTriangle, Truck, User, ArrowUp, ArrowDown, Route as RouteIcon, ShieldCheck } from 'lucide-react';
 import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState, EmptyState, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
@@ -10,6 +10,7 @@ import { useCustomers } from '../../hooks/useCustomers.js';
 import {
   useDailyLists, useDailyListWarnings, useDailyListOptions, useRunDailyLists,
   useAddDailyListCustomer, useRemoveDailyListCustomer, useReassignDailyList,
+  useReorderDailyList, useMoveDailyListCustomer, useOverrideServiced,
 } from '../../hooks/useDailyLists.js';
 
 const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
@@ -252,7 +253,25 @@ function BatchRows({ batch, multi, canEdit, onAdd, onReassign }) {
   const toast = useToast();
   const { data, isLoading } = useBatchCustomers(batch.id);
   const remove = useRemoveDailyListCustomer();
+  const reorder = useReorderDailyList();
+  const move = useMoveDailyListCustomer();
+  const [overrideFor, setOverrideFor] = useState(null);
   const rows = data?.data || [];
+  async function doReorder() {
+    try {
+      await reorder.mutateAsync(batch.id);
+      toast.success(t('daily.reordered'));
+    } catch (e) {
+      toast.error(e.message || t('common.somethingWrong'));
+    }
+  }
+  async function doMove(customerId, direction) {
+    try {
+      await move.mutateAsync({ batchId: batch.id, customerId, direction });
+    } catch (e) {
+      toast.error(e.message || t('common.somethingWrong'));
+    }
+  }
   async function doRemove(customerId) {
     try {
       await remove.mutateAsync({ batchId: batch.id, customerId });
@@ -276,14 +295,31 @@ function BatchRows({ batch, multi, canEdit, onAdd, onReassign }) {
         </div>
       )}
       {batch.status === 'draft' && <p style={{ fontSize: '12px', color: 'var(--warning)', margin: '0 0 6px' }}>{t('daily.draftNoCollector')}</p>}
+      {canEdit && rows.length > 1 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+          <Button variant="ghost" icon={RouteIcon} style={smallBtn} onClick={doReorder} disabled={reorder.isPending}>{t('daily.reorder')}</Button>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('daily.reorderHint')}</span>
+        </div>
+      )}
       {isLoading && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>…</div>}
       <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {rows.map((r) => (
+        {rows.map((r, i) => (
           <li key={r.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
+            <span className="tabular-nums" title={t('daily.visitOrder')} style={orderNumStyle}>{r.visit_order ?? i + 1}</span>
             <span style={{ flex: '1 1 160px', minWidth: 0, overflowWrap: 'anywhere' }}>
               {r.business_name || r.name} <span style={{ color: 'var(--text-muted)' }}>({r.customer_number})</span>
             </span>
             <StatusBadge status={r.status} />
+            {r.status === 'serviced' && <ProofBadge row={r} />}
+            {canEdit && (
+              <span style={{ display: 'inline-flex', gap: '2px' }}>
+                <Button variant="ghost" icon={ArrowUp} style={iconBtn} aria-label={t('daily.moveUp')} title={t('daily.moveUp')} onClick={() => doMove(r.customer_id, 'up')} disabled={move.isPending || i === 0} />
+                <Button variant="ghost" icon={ArrowDown} style={iconBtn} aria-label={t('daily.moveDown')} title={t('daily.moveDown')} onClick={() => doMove(r.customer_id, 'down')} disabled={move.isPending || i === rows.length - 1} />
+              </span>
+            )}
+            {canEdit && r.status === 'pending' && (
+              <Button variant="ghost" icon={ShieldCheck} style={smallBtn} onClick={() => setOverrideFor(r)}>{t('daily.override')}</Button>
+            )}
             {r.carried_over_from && <span style={chipStyle('var(--info)')}>{t('daily.carriedFrom', undefined, { date: String(r.carried_over_from).slice(0, 10) })}</span>}
             {canEdit && r.status === 'pending' && (
               <Button variant="ghost" icon={Trash2} style={smallBtn} onClick={() => doRemove(r.customer_id)} disabled={remove.isPending}>{t('daily.remove')}</Button>
@@ -291,7 +327,56 @@ function BatchRows({ batch, multi, canEdit, onAdd, onReassign }) {
           </li>
         ))}
       </ul>
+      {overrideFor && <OverrideModal batch={batch} row={overrideFor} onClose={() => setOverrideFor(null)} />}
     </div>
+  );
+}
+
+// Proof of service on a serviced row: distance from the house, supervisor
+// override, or the customer has no location on file.
+function ProofBadge({ row }) {
+  const { t } = useI18n();
+  if (row.proof_flag === 'override') return <span style={chipStyle('var(--warning)')} title={row.proof_override_reason || ''}>{t('daily.proofOverride')}</span>;
+  if (row.proof_flag === 'no_customer_location') return <span style={chipStyle('var(--text-muted)')}>{t('daily.proofNoLocation')}</span>;
+  if (row.proof_distance_m != null) return <span style={chipStyle('var(--success)')}>✓ {t('daily.proofMeters', undefined, { m: row.proof_distance_m })}</span>;
+  return null;
+}
+
+// Supervisor "mark serviced" without the geofence — reason required, audited.
+function OverrideModal({ batch, row, onClose }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const override = useOverrideServiced();
+  const [reason, setReason] = useState('');
+  async function submit(e) {
+    e.preventDefault();
+    if (!reason.trim()) { toast.error(t('daily.overrideReasonRequired')); return; }
+    try {
+      await override.mutateAsync({ batchId: batch.id, customerId: row.customer_id, reason: reason.trim() });
+      toast.success(t('daily.overrideDone'));
+      onClose();
+    } catch (err) {
+      toast.error(err.message || t('common.somethingWrong'));
+    }
+  }
+  return (
+    <Modal
+      open
+      onClose={override.isPending ? () => {} : onClose}
+      title={t('daily.overrideTitle')}
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={override.isPending}>{t('common.cancel')}</Button>
+        <Button type="submit" form="override-form" disabled={override.isPending || !reason.trim()}>{override.isPending ? t('common.saving') : t('daily.overrideConfirm')}</Button>
+      </>}
+    >
+      <form id="override-form" onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <p style={{ ...hintStyle, margin: 0 }}><strong>{row.business_name || row.name}</strong> ({row.customer_number}) · {t('daily.overrideHint')}</p>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>{t('daily.overrideReason')}</span>
+          <textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={3} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+        </label>
+      </form>
+    </Modal>
   );
 }
 
@@ -400,6 +485,8 @@ const fieldStyle = { display: 'flex', flexDirection: 'column', gap: '4px' };
 const labelStyle = { fontSize: '12px', fontWeight: 700 };
 const hintStyle = { fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0' };
 const smallBtn = { padding: '4px 8px', fontSize: '12px' };
+const iconBtn = { padding: '4px 6px', fontSize: '12px', minWidth: 0 };
+const orderNumStyle = { minWidth: '24px', textAlign: 'center', fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '999px', padding: '1px 6px' };
 const metaStyle = { display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 };
 const dayChipStyle = { fontSize: '11px', padding: '1px 6px', borderRadius: '999px', border: '1px solid var(--border)', color: 'var(--text-muted)' };
 const chipStyle = (c) => ({ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', color: c, border: `1px solid ${c}`, whiteSpace: 'nowrap' });

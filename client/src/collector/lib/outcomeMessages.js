@@ -7,6 +7,8 @@ const MESSAGES = {
   already_applied: { key: 'collector.outcome.recorded', text: 'Visit recorded', tone: 'success' },
   rejected_stale: { key: 'collector.outcome.stale', text: "This customer's status has changed — refreshing your list", tone: 'warning' },
   rejected_invalid_state: { key: 'collector.outcome.invalidState', text: 'This task is no longer assigned to you — refreshing your list', tone: 'warning' },
+  rejected_geofence: { key: 'collector.outcome.geofence', text: 'Too far from the house — visit not recorded', tone: 'danger' },
+  rejected_no_gps: { key: 'collector.outcome.noGps', text: 'No GPS — visit not recorded. Turn on location and mark again', tone: 'danger' },
   requires_reauthentication: { key: 'collector.outcome.reauth', text: 'Please sign in again to sync your visits', tone: 'info' },
   technical_error: { key: 'collector.outcome.technical', text: "Couldn't sync — will retry automatically", tone: 'info' },
   captured: { key: 'collector.outcome.queued', text: 'Queued — not yet synced', tone: 'info' },

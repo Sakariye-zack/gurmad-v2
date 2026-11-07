@@ -4,6 +4,7 @@ import { RefreshCw, MapPin } from 'lucide-react';
 import { PageHeader, Button, StatusBadge, LoadingState, EmptyState, ErrorState } from '../../components/ui/index.js';
 import { useAssignments } from '../hooks/useAssignments.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import NextHouseCard from './NextHouseCard.jsx';
 
 // Screen 6.2 (Decisions §17). Refresh occurs ONLY at: mount (the "login"
 // trigger, since this hook mounts fresh each time the collector reaches
@@ -47,6 +48,8 @@ export default function AssignmentsScreen() {
         </div>
       )}
 
+      <NextHouseCard batches={batches} />
+
       {batches.length === 0 ? (
         <EmptyState title={t('collector.noAssignments')} subtitle={t('collector.noAssignmentsHint')} />
       ) : (
@@ -65,6 +68,10 @@ export default function AssignmentsScreen() {
                   background: 'var(--surface)', minHeight: '64px', textAlign: 'left', cursor: 'pointer',
                 }}
               >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                {c.visit_order != null && (
+                  <span style={{ minWidth: '26px', textAlign: 'center', fontSize: '12px', fontWeight: 800, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '999px', padding: '2px 6px' }}>{c.visit_order}</span>
+                )}
                 <div>
                   {/* Fix: a bare <button> does not inherit body's text color
                       in any browser (buttons default to their own control
@@ -76,6 +83,7 @@ export default function AssignmentsScreen() {
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
                     <MapPin size={12} /> {c.address_line || t('collector.noAddress')}
                   </div>
+                </div>
                 </div>
                 <StatusBadge status={c.status} />
               </button>

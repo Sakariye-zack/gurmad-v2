@@ -224,12 +224,13 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
   const [zoneId, setZoneId] = useState(route?.group_zone_id ? String(route.group_zone_id) : '');
   const [workDays, setWorkDays] = useState(Array.isArray(route?.work_days) ? route.work_days : []);
   const [truckId, setTruckId] = useState(route?.truck_id ? String(route.truck_id) : '');
+  const [startPt, setStartPt] = useState(startOf(route));
   const [error, setError] = useState('');
   const update = useUpdateRoute(route?.id);
   const toast = useToast();
 
   React.useEffect(() => {
-    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setWorkDays(Array.isArray(route.work_days) ? route.work_days : []); setTruckId(route.truck_id ? String(route.truck_id) : ''); setError(''); }
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setWorkDays(Array.isArray(route.work_days) ? route.work_days : []); setTruckId(route.truck_id ? String(route.truck_id) : ''); setStartPt(startOf(route)); setError(''); }
   }, [route]);
 
   if (!route) return null;
@@ -239,8 +240,10 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
     setError('');
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     if (collectorId && workDays.length === 0) { setError(t('subzone.workDaysRequired')); return; }
+    const sp = startPayload(startPt);
+    if (!sp) { setError(t('subzone.startInvalid')); return; }
     try {
-      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null });
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
       toast.success(t('group.route_updated'));
       onDone?.();
       onClose();
@@ -272,6 +275,7 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
         <CollectorSelect value={collectorId} onChange={setCollectorId} current={route} />
         <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
         <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} current={route} />
+        <StartPointInput value={startPt} onChange={setStartPt} />
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('common.status')}</span>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
@@ -293,6 +297,7 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
   const [zoneId, setZoneId] = useState('');
   const [workDays, setWorkDays] = useState([]);
   const [truckId, setTruckId] = useState('');
+  const [startPt, setStartPt] = useState({ lat: '', lng: '' });
   const [error, setError] = useState('');
   const createRoute = useCreateRoute();
   const toast = useToast();
@@ -302,10 +307,12 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
     e.preventDefault();
     if (!code.trim()) { setError(t('group.route_code_is_required')); return; }
     if (collectorId && workDays.length === 0) { setError(t('subzone.workDaysRequired')); return; }
+    const sp = startPayload(startPt);
+    if (!sp) { setError(t('subzone.startInvalid')); return; }
     try {
-      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null });
+      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
       toast.success(t('fin.m.created', undefined, { number: code }));
-      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setWorkDays([]); setTruckId(''); setError('');
+      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setWorkDays([]); setTruckId(''); setStartPt({ lat: '', lng: '' }); setError('');
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));
@@ -337,6 +344,7 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
         <CollectorSelect value={collectorId} onChange={setCollectorId} />
         <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
         <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} />
+        <StartPointInput value={startPt} onChange={setStartPt} />
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>
@@ -373,6 +381,46 @@ function WorkDaysPicker({ value, onChange, required }) {
         })}
       </div>
       {missing && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{t('subzone.workDaysRequired')}</span>}
+    </div>
+  );
+}
+
+// Route order start point (where the collector starts the day). Optional;
+// both blank clears it. "Use my location" fills it from this device's GPS.
+function startOf(route) {
+  return { lat: route?.start_lat != null ? String(Number(route.start_lat)) : '', lng: route?.start_lng != null ? String(Number(route.start_lng)) : '' };
+}
+// {start_lat, start_lng} for the API, or null when the input is invalid.
+function startPayload(v) {
+  const la = String(v.lat).trim();
+  const ln = String(v.lng).trim();
+  if (!la && !ln) return { start_lat: null, start_lng: null };
+  const a = Number(la);
+  const b = Number(ln);
+  if (!la || !ln || !Number.isFinite(a) || !Number.isFinite(b) || a < -90 || a > 90 || b < -180 || b > 180) return null;
+  return { start_lat: a, start_lng: b };
+}
+function StartPointInput({ value, onChange }) {
+  const { t } = useI18n();
+  const [locating, setLocating] = useState(false);
+  function useMine() {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setLocating(false); onChange({ lat: pos.coords.latitude.toFixed(6), lng: pos.coords.longitude.toFixed(6) }); },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('subzone.startPoint')}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+        <input inputMode="decimal" placeholder={t('subzone.lat')} value={value.lat} onChange={(e) => onChange({ ...value, lat: e.target.value })} style={{ ...inputStyle, flex: '1 1 110px', minWidth: 0 }} />
+        <input inputMode="decimal" placeholder={t('subzone.lng')} value={value.lng} onChange={(e) => onChange({ ...value, lng: e.target.value })} style={{ ...inputStyle, flex: '1 1 110px', minWidth: 0 }} />
+        <Button type="button" variant="secondary" onClick={useMine} disabled={locating}>{locating ? t('common.loading') : t('subzone.useMyLocation')}</Button>
+      </div>
+      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('subzone.startPointHint')}</span>
     </div>
   );
 }

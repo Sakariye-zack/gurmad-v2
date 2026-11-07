@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Camera, ChevronLeft, RotateCcw } from 'lucide-react';
+import { Camera, ChevronLeft, RotateCcw, MapPin, Navigation } from 'lucide-react';
 import { Button, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { getCachedAssignments } from '../lib/collectorStore.js';
 import { useSyncQueueContext } from '../SyncQueueContext.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { useLivePosition, distanceMeters, hasLocation, navigateUrl, DEFAULT_PROOF } from '../hooks/useLivePosition.js';
+import { formatMeters } from './NextHouseCard.jsx';
 
 const STATUSES = [
   { value: 'serviced', label: 'Serviced' },
@@ -35,6 +37,7 @@ export default function CollectionActionScreen() {
   const { captureAction } = useSyncQueueContext();
 
   const [customer, setCustomer] = useState(undefined);
+  const [proof, setProof] = useState(DEFAULT_PROOF);
   const [status, setStatus] = useState(null);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -52,6 +55,7 @@ export default function CollectionActionScreen() {
       const batch = cached?.data?.batches?.find((b) => String(b.id) === batchId);
       const c = batch?.customers?.find((cc) => String(cc.customer_id) === customerId);
       setCustomer(c || null);
+      if (cached?.data?.proof) setProof({ ...DEFAULT_PROOF, ...cached.data.proof });
     })();
   }, [batchId, customerId]);
 
@@ -118,6 +122,18 @@ export default function CollectionActionScreen() {
       );
     });
 
+  // Proof of service: live distance to the house. The server enforces the
+  // same rule on sync; this only stops a mark that would be rejected.
+  const located = !!customer && hasLocation(customer);
+  const { pos, error: gpsError } = useLivePosition(!!customer);
+  const distance = located && pos ? distanceMeters(pos, customer) : null;
+  let servicedBlock = null; // translated reason Serviced is disabled, or null
+  if (located && !pos) servicedBlock = gpsError ? t('collector.proof.noGps') : t('collector.proof.locating');
+  else if (located && distance > proof.radius_m) servicedBlock = t('collector.proof.tooFar', undefined, { m: distance, r: proof.radius_m });
+  useEffect(() => {
+    if (servicedBlock && status === 'serviced') setStatus(null);
+  }, [servicedBlock, status]);
+
   if (customer === undefined) return <LoadingState />;
   // Hardening finding (P3): a stale/tampered/directly-typed URL for a
   // batch/customer not in this collector's own cached assignments
@@ -130,6 +146,8 @@ export default function CollectionActionScreen() {
   const submit = async () => {
     if (!status) return toast.error(t('collector.selectStatus'));
     if (status === 'missed' && !reason.trim()) return toast.error(t('collector.reasonRequired'));
+    if (status === 'serviced' && servicedBlock) return toast.error(servicedBlock);
+    if (status === 'serviced' && proof.require_photo && !photo) return toast.error(t('collector.proof.photoRequired'));
     // User-requested (Phase 10): photo is optional for Serviced, not
     // required — the "required" copy/validation below is removed; the
     // capture UI and upload path are unchanged, a collector can still
@@ -137,7 +155,8 @@ export default function CollectionActionScreen() {
 
     setSubmitting(true);
     try {
-      const { lat, lng } = await captureGps(); // §16 — automatic, at submission time
+      // §16 — automatic, at submission time; the live fix when we have one.
+      const { lat, lng } = pos ? { lat: pos.lat, lng: pos.lng } : await captureGps();
       await captureAction({
         batchId: Number(batchId), customerId: Number(customerId), taskId: customer.task_id,
         status, reason: reason.trim() || null, note: note.trim() || null, lat, lng,
@@ -156,12 +175,32 @@ export default function CollectionActionScreen() {
       <button onClick={() => navigate(-1)} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', fontWeight: 700, fontSize: '13px', marginBottom: '16px', cursor: 'pointer', minHeight: '44px' }}>
         <ChevronLeft size={18} /> {t('common.back')}
       </button>
-      <h2 style={{ margin: '0 0 16px' }}>{customer.business_name || customer.name}</h2>
+      <h2 style={{ margin: '0 0 8px' }}>{customer.business_name || customer.name}</h2>
+
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '16px',
+        borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--surface)', fontSize: '13px', color: 'var(--text)',
+      }}>
+        <MapPin size={15} style={{ flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0, fontWeight: 700 }}>
+          {!located ? t('collector.noHouseLocation')
+            : distance === null ? (gpsError ? t('collector.proof.noGps') : t('collector.locating'))
+            : t('collector.proof.distance', undefined, { m: formatMeters(distance), r: proof.radius_m })}
+        </span>
+        {located && (
+          <a href={navigateUrl(customer)} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--brand)', fontWeight: 700, minHeight: '32px' }}>
+            <Navigation size={14} /> {t('collector.navigate')}
+          </a>
+        )}
+      </div>
 
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-        {STATUSES.map((s) => (
-          <button key={s.value} onClick={() => setStatus(s.value)}
+        {STATUSES.map((s) => {
+          const blocked = s.value === 'serviced' && !!servicedBlock;
+          return (
+          <button key={s.value} onClick={() => setStatus(s.value)} disabled={blocked}
             style={{
+              opacity: blocked ? 0.45 : 1,
               flex: 1, padding: '16px 8px', borderRadius: 'var(--radius-md)', minHeight: '56px', fontWeight: 700, fontSize: '14px',
               border: status === s.value ? '2px solid var(--brand)' : '1px solid var(--border)',
               background: status === s.value ? 'var(--success-bg)' : 'var(--surface)', cursor: 'pointer',
@@ -172,8 +211,12 @@ export default function CollectionActionScreen() {
             }}>
             {tc('status.' + s.value, s.label)}
           </button>
-        ))}
+          );
+        })}
       </div>
+      {servicedBlock && (
+        <div role="status" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--danger)', margin: '-8px 0 14px' }}>{servicedBlock}</div>
+      )}
 
       {status === 'missed' && (
         <textarea placeholder={t('collector.reasonPlaceholder')} value={reason} onChange={(e) => setReason(e.target.value)}
@@ -204,7 +247,7 @@ export default function CollectionActionScreen() {
             </div>
           ) : (
             <Button icon={Camera} onClick={openCamera} style={{ width: '100%', minHeight: '48px' }}>
-              {t('collector.takePhoto')}
+              {proof.require_photo ? t('collector.takePhotoRequired') : t('collector.takePhoto')}
             </Button>
           )}
           {cameraDenied && (

@@ -38,3 +38,16 @@ export function useReassignDailyList() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ batchId, ...body }) => apiClient.put(`/v2/daily-lists/${batchId}/assignment`, body), onSuccess: () => invalidate(qc) });
 }
+// Route order + proof of service (supervisor actions on a list).
+export function useReorderDailyList() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (batchId) => apiClient.post(`/v2/daily-lists/${batchId}/reorder`, {}), onSuccess: () => invalidate(qc) });
+}
+export function useMoveDailyListCustomer() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ batchId, customerId, direction }) => apiClient.put(`/v2/daily-lists/${batchId}/customers/${customerId}/order`, { direction }), onSuccess: () => invalidate(qc) });
+}
+export function useOverrideServiced() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ batchId, customerId, reason }) => apiClient.post(`/v2/daily-lists/${batchId}/customers/${customerId}/override`, { reason }), onSuccess: () => invalidate(qc) });
+}
