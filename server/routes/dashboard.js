@@ -5,6 +5,8 @@ const {
   resolvePeriod, getExecutiveSummary, getRevenueForPeriod, getZonePerformance,
   getCollectorPerformance, getCashoutSummary,
 } = require('../lib/reportsCalculations');
+const { getTimezone, localParts } = require('../lib/autoBilling');
+const { getLiveTrucks } = require('../lib/liveTrucks');
 
 const router = express.Router();
 
@@ -69,6 +71,113 @@ router.get('/summary', authenticateToken, requireRole('admin', 'gudoomiye', 'zon
     res.json({ data: summary });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load dashboard summary.', code: 'INTERNAL' } });
+  }
+});
+
+// ---------- F7. Operations panel ("Today" cards) ----------
+// GET /api/v2/dashboard/operations-today — admin (company-wide) and
+// gudoomiye (own district, same resolver as /summary; a gudoomiye with no
+// district gets an all-zero panel, never company-wide). Each figure reuses
+// the module that owns it: today's auto lists (lib/dailyLists' batches),
+// live trucks (lib/liveTrucks, the Map's own query), backups
+// (lib/backups.getStatus, same overdue rule as lib/backupMonitor), fleet
+// alerts (Fleet > Expiry documents + maintenance due from lib/fleetInsights)
+// and debt-suspension candidates (lib/debtSuspension.countDebtCandidates —
+// null while that module is not installed). Backups are admin-only (same as
+// the Backups page): null for gudoomiye.
+const OPS_ROLES = ['admin', 'gudoomiye'];
+
+function loadDebtCandidateCounter() {
+  try {
+    // eslint-disable-next-line global-require
+    const mod = require('../lib/debtSuspension');
+    return typeof mod.countDebtCandidates === 'function' ? mod.countDebtCandidates : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function opsLists(zoneId, today) {
+  const params = [today];
+  let zoneSql = '';
+  if (zoneId !== null) { params.push(zoneId); zoneSql = ` AND b.zone_id = $${params.length}`; }
+  const r = await pool.query(
+    `SELECT COUNT(DISTINCT b.id)::int AS lists,
+            COUNT(bc.id)::int AS total,
+            COUNT(bc.id) FILTER (WHERE bc.status = 'serviced')::int AS serviced,
+            COUNT(bc.id) FILTER (WHERE bc.status = 'missed')::int AS missed,
+            COUNT(bc.id) FILTER (WHERE bc.status = 'pending')::int AS pending
+     FROM batches b
+     LEFT JOIN batch_customers bc ON bc.batch_id = b.id
+     WHERE b.auto_generated AND b.start_date = $1::date AND b.status <> 'cancelled'${zoneSql}`,
+    params
+  );
+  return r.rows[0];
+}
+
+async function opsBackup() {
+  const backups = require('../lib/backups');
+  const status = await backups.getStatus();
+  const lastAt = status.last ? status.last.at : null;
+  const overdue = !status.last || Date.now() - Date.parse(lastAt) > backups.OVERDUE_MS;
+  const failed = !!status.last_error;
+  return { ok: !overdue && !failed, last_at: lastAt, overdue, failed };
+}
+
+async function opsFleetAlerts(zoneId, today) {
+  const { getExpiringDocuments } = require('../lib/fleetCalculations');
+  const { getNextMaintenance } = require('../lib/fleetInsights');
+  const docs = await getExpiringDocuments({ zoneId, withinDays: 30 });
+  const next = await getNextMaintenance({ today });
+  let due = 0;
+  for (const m of next.values()) {
+    // Same visibility as Fleet overview: own district + company-wide trucks.
+    if (m.due && (zoneId === null || m.zone_id === zoneId || m.zone_id === null)) due += 1;
+  }
+  return { documents: docs.length, maintenance_due: due, total: docs.length + due };
+}
+
+router.get('/operations-today', authenticateToken, requireRole(...OPS_ROLES), async (req, res) => {
+  const role = (req.user.role || '').toLowerCase();
+  try {
+    const tz = await getTimezone();
+    const today = localParts(new Date(), tz).date;
+    const zoneId = await resolveUserZoneId(req.user);
+    const noZone = role !== 'admin' && zoneId === null;
+    const counter = loadDebtCandidateCounter();
+
+    if (noZone) {
+      return res.json({ data: {
+        date: today, zone_id: null,
+        lists: { lists: 0, total: 0, serviced: 0, missed: 0, pending: 0 },
+        collectors_active: 0, trucks_live: 0,
+        debt_candidates: counter ? 0 : null,
+        backup: null,
+        fleet_alerts: { documents: 0, maintenance_due: 0, total: 0 },
+      } });
+    }
+
+    const [lists, live, fleetAlerts, backup, debt] = await Promise.all([
+      opsLists(zoneId, today),
+      getLiveTrucks({ zoneId }),
+      opsFleetAlerts(zoneId, today),
+      role === 'admin' ? opsBackup() : Promise.resolve(null),
+      counter ? Promise.resolve().then(() => counter({ zoneId })).then((n) => (n == null ? null : Number(n))).catch(() => null) : Promise.resolve(null),
+    ]);
+    const liveTruckIds = new Set(live.filter((x) => x.status === 'live' && x.truck_id != null).map((x) => x.truck_id));
+
+    res.json({ data: {
+      date: today,
+      zone_id: zoneId,
+      lists,
+      collectors_active: live.length,
+      trucks_live: liveTruckIds.size,
+      debt_candidates: debt,
+      backup,
+      fleet_alerts: fleetAlerts,
+    } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load today\'s operations.', code: 'INTERNAL' } });
   }
 });
 
