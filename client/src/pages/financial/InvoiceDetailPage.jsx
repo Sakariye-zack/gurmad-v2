@@ -194,7 +194,7 @@ export default function InvoiceDetailPage() {
               {invoice.payments.map((p) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={cellStyle} className="tabular-nums">{fmtMoney(p.amount, p.currency)}</td>
-                  <td style={{ ...cellStyle, textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)}</td>
+                  <td style={{ ...cellStyle, textTransform: p.channel === 'portal_zaad' ? 'none' : 'capitalize' }}>{p.channel === 'portal_zaad' ? t('portal.zaad.viaPortal') : t('method.' + p.method, p.method)}</td>
                   <td style={cellStyle} className="tabular-nums">${parseFloat(p.amount_usd).toFixed(2)}</td>
                   <td style={cellStyle}><StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} /></td>
                   <td style={cellStyle}>{new Date(p.created_at).toLocaleString()}</td>

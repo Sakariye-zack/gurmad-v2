@@ -21,6 +21,9 @@ const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
 // business logic between the two API surfaces, per the approved contract.
 const { createComplaint, getComplaintsForCustomer, getComplaintDetail } = require('../lib/complaintsService');
 const { rejectIfInfected } = require('../lib/virusScan');
+const paymentsRouter = require('./payments');
+const { createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
+const { EPSILON } = require('../lib/financialCalculations');
 
 const COMPLAINT_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'complaints');
 fs.mkdirSync(COMPLAINT_UPLOAD_DIR, { recursive: true });
@@ -492,12 +495,30 @@ router.get('/collection-history/:id', authenticateCustomerPortal, async (req, re
 
 router.get('/invoices', authenticateCustomerPortal, async (req, res) => {
   try {
+    // One query: each invoice plus what is already paid on it, in the invoice's
+    // own currency (same rules as paidInInvoiceCurrency) -> outstanding, which
+    // drives the portal's "Pay with ZAAD" button.
+    const rate = await getCurrentExchangeRate(pool);
     const r = await pool.query(
-      `SELECT id, invoice_number, invoice_total, discount_amount, currency, status, created_at
-       FROM invoices WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 200`,
-      [req.customerId]
+      `SELECT i.id, i.invoice_number, i.invoice_total, i.discount_amount, i.currency, i.status, i.created_at,
+              COALESCE(SUM(CASE WHEN i.currency = 'SLSH'
+                                THEN COALESCE(p.amount_invoice_currency,
+                                              CASE WHEN p.currency = 'SLSH' THEN p.amount
+                                                   ELSE p.amount_usd * COALESCE(er.rate, $2::numeric) END)
+                                ELSE p.amount_usd END) FILTER (WHERE p.status = 'recorded'), 0) AS paid
+       FROM invoices i
+       LEFT JOIN payments p ON p.invoice_id = i.id
+       LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
+       WHERE i.customer_id = $1
+       GROUP BY i.id
+       ORDER BY i.created_at DESC LIMIT 200`,
+      [req.customerId, rate ? parseFloat(rate.rate) : null]
     );
-    return res.json({ data: r.rows });
+    const rows = r.rows.map(({ paid, ...inv }) => {
+      const net = parseFloat(inv.invoice_total) - parseFloat(inv.discount_amount);
+      return { ...inv, outstanding: inv.status === 'voided' ? 0 : Math.max(net - parseFloat(paid), 0) };
+    });
+    return res.json({ data: rows });
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to load invoices.', code: 'INTERNAL' } });
   }
@@ -513,7 +534,7 @@ router.get('/invoices/:id', authenticateCustomerPortal, async (req, res) => {
     if (r.rows.length === 0) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
     const balance = await getInvoiceBalance(id);
     const payments = await pool.query(
-      `SELECT amount, currency, method, amount_usd, status, created_at FROM payments WHERE invoice_id = $1 AND status = 'recorded' ORDER BY created_at ASC`,
+      `SELECT amount, currency, method, amount_usd, status, channel, reference_code, created_at FROM payments WHERE invoice_id = $1 AND status = 'recorded' ORDER BY created_at ASC`,
       [id]
     );
     return res.json({ data: { ...r.rows[0], balance, payments: payments.rows } });
@@ -577,10 +598,285 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
   }
 });
 
+// ==================================================================
+// ZAAD SELF-PAYMENT — the customer pays their own invoice from the portal.
+// Same WAAFI flow as staff POST /payments/zaad-request (shared
+// runZaadCollect in routes/payments.js). Guards, in order:
+//   ownership (404), archived customer (403), voided / already paid (409),
+//   amount <= outstanding (precheck BEFORE any gateway call), target phone
+//   must be one of the customer's registered numbers, an invoice with an
+//   unconfirmed (unknown) attempt in the last 15 min is blocked, one
+//   in-flight request per invoice (in-process lock + DB partial unique index
+//   on pending attempts), max 5 attempts per customer and 3 per target phone
+//   per 10 minutes (count + insert serialised by an advisory lock).
+// Outcome 'unknown' (gateway timeout / transport error after sending, or a
+// pending row older than the stale window) is never treated as declined:
+// it is audited as reconciliation-required and every admin is notified.
+// Payments are recorded with cashier_id NULL, channel 'portal_zaad' and an
+// audit actor of 'portal:<customer_number>'.
+// ==================================================================
+const { GATEWAY_TIMEOUT_MS } = require('../lib/zaadService');
+// Canonical international form for comparing / counting numbers
+// (0XXXXXXXX, XXXXXXXX and 252XXXXXXXX are the same number).
+function canonicalPhone(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (d.startsWith('252')) return d;
+  return '252' + (d.startsWith('0') ? d.slice(1) : d);
+}
+
+const ZAAD_INFLIGHT = new Set(); // invoice ids with a request in flight in this process
+const ZAAD_RATE_MAX = 5;
+const ZAAD_PHONE_RATE_MAX = 3;
+const ZAAD_RATE_WINDOW_MIN = 10;
+// >= 2x the gateway timeout: a pending row older than this cannot still be in flight.
+const ZAAD_STALE_MIN = Math.max(5, Math.ceil((2 * GATEWAY_TIMEOUT_MS) / 60000));
+const ZAAD_UNKNOWN_BLOCK_MIN = 15;
+const PORTAL_ZAAD_CHANNEL = 'portal_zaad';
+const ZAAD_ADVISORY_NS = 7390; // advisory-lock namespace for portal ZAAD attempts
+
+// Fixed customer-facing messages per code: raw gateway text is never shown.
+const ZAAD_MSG = {
+  NOT_FOUND: 'Invoice not found.',
+  ARCHIVED: 'Online payment is not available for this account. Please contact customer service.',
+  VOIDED: 'This invoice has been voided and cannot be paid.',
+  ALREADY_PAID: 'This invoice is already fully paid.',
+  VALIDATION_AMOUNT: 'Amount must be a positive number.',
+  VALIDATION_SLSH: 'SLSH amounts must be whole numbers.',
+  PHONE_NOT_REGISTERED: 'Payments can only be sent to one of the phone numbers registered on your account.',
+  OVERPAYMENT: 'The amount is more than what you owe on this invoice.',
+  IN_PROGRESS: 'A ZAAD payment for this invoice is already in progress. Please check your phone.',
+  PAYMENT_UNCONFIRMED: 'A recent payment on this invoice could not be confirmed. Please wait 15 minutes, or contact customer service, before paying again.',
+  TOO_MANY_ATTEMPTS: 'Too many payment attempts. Please wait 10 minutes and try again.',
+  NOT_CONFIGURED: 'Online ZAAD payment is not available right now. Please pay at our office or contact customer service.',
+  ZAAD_DECLINED: 'The payment was not approved. No money was taken.',
+  PAYMENT_UNKNOWN: 'We could not confirm your payment. If money left your wallet, it will be reconciled — do not pay again for now.',
+  INTERNAL: 'Payment could not be processed.',
+};
+
+const fmtAmt = (n, cur) => (cur === 'SLSH' ? `${Math.round(n).toLocaleString('en-US')} SLSH` : `$${Number(n).toFixed(2)}`);
+const zaadErr = (res, status, code, msgKey = code) => res.status(status).json({ error: { message: ZAAD_MSG[msgKey], code } });
+
+async function finishZaadAttempt(id, status, fields = {}) {
+  await pool.query(
+    `UPDATE portal_zaad_attempts SET status = $2, transaction_id = $3, payment_id = $4, error_code = $5, finished_at = NOW() WHERE id = $1`,
+    [id, status, fields.transactionId || null, fields.paymentId || null, fields.errorCode || null]
+  ).catch(() => {});
+}
+
+async function notifyAdmins({ title, body, invoiceId }) {
+  try {
+    const admins = await pool.query(`SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE`);
+    for (const a of admins.rows) {
+      await createStaffNotification({ recipientId: a.id, eventType: 'payment.zaad_reconciliation', title, body, entityType: 'invoice', entityId: invoiceId });
+    }
+  } catch (e) {
+    logNotificationFailure('portal_zaad_reconciliation', e);
+  }
+}
+
+// Unknown outcome: audit + admin alert. `attempt` is a portal_zaad_attempts row
+// (or the same fields), joined with invoice_number / customer_number.
+async function flagUnknownAttempt(attempt, reason) {
+  const { logAudit } = require('../db');
+  await logAudit({
+    actorId: null, actorUsername: `portal:${attempt.customer_number}`.slice(0, 50), action: 'payment.zaad_reconciliation_required',
+    entityType: 'invoice', entityId: attempt.invoice_id, before: null,
+    after: { invoice_id: attempt.invoice_id, amount: Number(attempt.amount), currency: attempt.currency, target_phone: attempt.phone, attempt_id: attempt.id, reference: attempt.reference, channel: PORTAL_ZAAD_CHANNEL, outcome: 'unknown', reason },
+  }).catch(() => {});
+  await notifyAdmins({
+    invoiceId: attempt.invoice_id,
+    title: `ZAAD payment outcome unknown — ${attempt.invoice_number}`,
+    body: `Customer ${attempt.customer_number} tried to pay ${fmtAmt(attempt.amount, attempt.currency)} via ZAAD in the customer portal (attempt ${attempt.id}, reference ${attempt.reference}, phone ${attempt.phone}) but the result could not be confirmed (${reason}). Check the merchant account; if the money arrived, record it manually against the invoice.`,
+  });
+}
+
+// Pending attempts older than the stale window -> unknown + alert. Runs on
+// every pay request and once at boot (index.js).
+async function sweepStaleZaadAttempts() {
+  const r = await pool.query(
+    `UPDATE portal_zaad_attempts a SET status = 'unknown', error_code = 'STALE', finished_at = NOW()
+     FROM invoices i, customers c
+     WHERE a.status = 'pending' AND a.created_at < NOW() - make_interval(mins => $1)
+       AND i.id = a.invoice_id AND c.id = a.customer_id
+     RETURNING a.*, i.invoice_number, c.customer_number`,
+    [ZAAD_STALE_MIN]
+  );
+  for (const row of r.rows) await flagUnknownAttempt(row, 'pending attempt went stale');
+  return r.rows.length;
+}
+
+const registeredPhones = (c) => [c.phone, c.alternate_phone, c.whatsapp]
+  .map((p) => String(p || '').replace(/\D/g, ''))
+  .filter((p) => p.length >= 7);
+
+router.post('/invoices/:id/pay-zaad', authenticateCustomerPortal, async (req, res) => {
+  const id = parseStrictId(req.params.id);
+  if (id === null) return zaadErr(res, 404, 'NOT_FOUND');
+  let attemptId = null;
+  let locked = false;
+  try {
+    const invRes = await pool.query('SELECT * FROM invoices WHERE id = $1 AND customer_id = $2', [id, req.customerId]);
+    if (invRes.rows.length === 0) return zaadErr(res, 404, 'NOT_FOUND');
+    const invoice = invRes.rows[0];
+    const customer = (await pool.query('SELECT id, phone, alternate_phone, whatsapp, customer_number, status FROM customers WHERE id = $1', [req.customerId])).rows[0];
+    if (customer.status === 'archived') return zaadErr(res, 403, 'ACCOUNT_ARCHIVED', 'ARCHIVED');
+    if (invoice.status === 'voided') return zaadErr(res, 409, 'CONFLICT', 'VOIDED');
+
+    const cur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
+    const { outstanding } = await getInvoiceBalance(id);
+    if (outstanding <= EPSILON) return zaadErr(res, 409, 'ALREADY_PAID');
+
+    const rawAmount = req.body?.amount;
+    let amt;
+    if (rawAmount === undefined || rawAmount === null || rawAmount === '') {
+      // floor, never round up past the outstanding
+      amt = cur === 'SLSH' ? Math.floor(outstanding + 1e-6) : Math.floor(outstanding * 100 + 1e-6) / 100;
+    } else {
+      amt = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
+      if (!Number.isFinite(amt)) return zaadErr(res, 400, 'VALIDATION', 'VALIDATION_AMOUNT');
+      if (cur === 'SLSH' && !Number.isInteger(amt)) return zaadErr(res, 400, 'VALIDATION', 'VALIDATION_SLSH');
+      amt = Math.round(amt * 100) / 100;
+    }
+    if (!(amt > 0)) return zaadErr(res, 400, 'VALIDATION', 'VALIDATION_AMOUNT');
+
+    // Target phone: only the customer's own registered numbers.
+    const allowed = registeredPhones(customer);
+    const requested = String(req.body?.phone || customer.phone || '').replace(/\D/g, '');
+    const match = allowed.find((p) => canonicalPhone(p) === canonicalPhone(requested));
+    if (!match) return zaadErr(res, 400, 'PHONE_NOT_REGISTERED');
+    const phoneDigits = match;
+    const phoneKey = canonicalPhone(match);
+
+    // Read-only precheck before bothering WAAFI / the customer's phone.
+    const blocked = await paymentsRouter.precheckPayment(pool, invoice, { amt, cur });
+    if (blocked) {
+      if (blocked.code === 'OVERPAYMENT') return zaadErr(res, 409, 'OVERPAYMENT');
+      return res.status(blocked.status).json({ error: { message: ZAAD_MSG.INTERNAL, code: blocked.code } });
+    }
+
+    // In-process lock first (cheap), then the DB guards below.
+    if (ZAAD_INFLIGHT.has(id)) return zaadErr(res, 409, 'IN_PROGRESS');
+    ZAAD_INFLIGHT.add(id);
+    locked = true;
+
+    await sweepStaleZaadAttempts();
+    const unknownRecent = await pool.query(
+      `SELECT 1 FROM portal_zaad_attempts WHERE invoice_id = $1 AND status = 'unknown'
+         AND COALESCE(finished_at, created_at) > NOW() - make_interval(mins => $2) LIMIT 1`,
+      [id, ZAAD_UNKNOWN_BLOCK_MIN]
+    );
+    if (unknownRecent.rows.length) return zaadErr(res, 409, 'PAYMENT_UNCONFIRMED');
+
+    // Count + insert serialised per customer (advisory xact lock), so two
+    // parallel requests cannot both slip under the limits.
+    const reference = (n) => `${invoice.invoice_number}-A${n}`;
+    const db = await pool.connect();
+    let limitHit = null;
+    try {
+      await db.query('BEGIN');
+      await db.query('SELECT pg_advisory_xact_lock($1, $2)', [ZAAD_ADVISORY_NS, req.customerId]);
+      const counted = (await db.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE customer_id = $1)::int AS by_customer,
+           COUNT(*) FILTER (WHERE phone = $2)::int AS by_phone
+         FROM portal_zaad_attempts
+         WHERE (customer_id = $1 OR phone = $2) AND created_at > NOW() - make_interval(mins => $3)
+           AND COALESCE(error_code, '') <> 'NOT_CONFIGURED'`,
+        [req.customerId, phoneKey, ZAAD_RATE_WINDOW_MIN]
+      )).rows[0];
+      if (counted.by_customer >= ZAAD_RATE_MAX) limitHit = 'TOO_MANY_ATTEMPTS';
+      else if (counted.by_phone >= ZAAD_PHONE_RATE_MAX) limitHit = 'TOO_MANY_ATTEMPTS_PHONE';
+      if (!limitHit) {
+        const ins = await db.query(
+          `INSERT INTO portal_zaad_attempts (customer_id, invoice_id, amount, currency, phone) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+          [req.customerId, id, amt, cur, phoneKey]
+        );
+        attemptId = ins.rows[0].id;
+        await db.query('UPDATE portal_zaad_attempts SET reference = $2 WHERE id = $1', [attemptId, reference(attemptId)]);
+      }
+      await db.query('COMMIT');
+    } catch (e) {
+      await db.query('ROLLBACK').catch(() => {});
+      attemptId = null;
+      if (e.code === '23505') return zaadErr(res, 409, 'IN_PROGRESS');
+      throw e;
+    } finally {
+      db.release();
+    }
+    if (limitHit) return zaadErr(res, 429, limitHit, 'TOO_MANY_ATTEMPTS');
+
+    const attemptRow = { id: attemptId, invoice_id: id, amount: amt, currency: cur, phone: phoneKey, reference: reference(attemptId), invoice_number: invoice.invoice_number, customer_number: customer.customer_number };
+    const actor = { id: null, username: `portal:${customer.customer_number}`.slice(0, 50), role: 'portal', zone: null };
+    const auditExtra = { target_phone: phoneKey, attempt_id: attemptId, reference: attemptRow.reference };
+    let r;
+    try {
+      r = await paymentsRouter.runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel: PORTAL_ZAAD_CHANNEL, reference: attemptRow.reference, auditExtra });
+    } catch (e) {
+      // Transport error after the request may have been sent: outcome unknown.
+      r = { kind: 'unknown', reason: 'gateway transport error' };
+    }
+
+    if (r.kind === 'unknown') {
+      await finishZaadAttempt(attemptId, 'unknown', { errorCode: 'UNKNOWN' });
+      await flagUnknownAttempt(attemptRow, r.reason || 'gateway timeout');
+      await logPortalAudit({ portalAccountId: req.portalAccountId, customerId: req.customerId, action: 'zaad_payment_unknown', ipAddress: clientIp(req), details: auditExtra }).catch(() => {});
+      return zaadErr(res, 504, 'PAYMENT_UNKNOWN');
+    }
+
+    if (r.kind === 'declined') {
+      if (r.zaadResult.notConfigured) {
+        await finishZaadAttempt(attemptId, 'failed', { errorCode: 'NOT_CONFIGURED' });
+        return zaadErr(res, 503, 'NOT_CONFIGURED');
+      }
+      await finishZaadAttempt(attemptId, 'failed', { errorCode: 'ZAAD_DECLINED' });
+      await logPortalAudit({ portalAccountId: req.portalAccountId, customerId: req.customerId, action: 'zaad_payment_failed', ipAddress: clientIp(req), details: { ...auditExtra, invoice_id: id, amount: amt, currency: cur, gateway_message: r.zaadResult.message } }).catch(() => {});
+      return zaadErr(res, 402, 'ZAAD_DECLINED');
+    }
+
+    if (r.kind === 'reconciliation') {
+      const txId = r.zaadResult.transactionId;
+      await finishZaadAttempt(attemptId, 'reconciliation_required', { transactionId: txId, errorCode: 'RECONCILIATION_REQUIRED' });
+      await notifyAdmins({
+        invoiceId: id,
+        title: `ZAAD payment needs reconciliation — ${invoice.invoice_number}`,
+        body: `Customer ${customer.customer_number} paid ${fmtAmt(amt, cur)} via ZAAD in the customer portal (transaction ${txId}, attempt ${attemptId}, phone ${phoneKey}), but it could not be recorded: ${r.error.message}. Review the invoice and record it manually with reference code ${txId}.`,
+      });
+      await logPortalAudit({ portalAccountId: req.portalAccountId, customerId: req.customerId, action: 'zaad_payment_reconciliation', ipAddress: clientIp(req), details: { ...auditExtra, invoice_id: id, amount: amt, currency: cur, transaction_id: txId } }).catch(() => {});
+      return res.status(409).json({ error: {
+        code: 'RECONCILIATION_REQUIRED',
+        message: `Your ZAAD payment was received (transaction ${txId}) but could not be applied to this invoice automatically. Our team has been notified and will apply it — please keep this transaction number.`,
+        transaction_id: txId,
+      } });
+    }
+
+    const { payment, recalculated } = r;
+    await finishZaadAttempt(attemptId, 'ok', { transactionId: r.zaadResult.transactionId, paymentId: payment.id });
+    await logPortalAudit({ portalAccountId: req.portalAccountId, customerId: req.customerId, action: 'zaad_payment_success', ipAddress: clientIp(req), details: { ...auditExtra, invoice_id: id, payment_id: payment.id, amount: amt, currency: cur } }).catch(() => {});
+    return res.status(201).json({ data: {
+      payment_id: payment.id,
+      invoice_id: id,
+      invoice_number: invoice.invoice_number,
+      amount: Number(payment.amount),
+      currency: payment.currency,
+      method: 'zaad',
+      transaction_id: r.zaadResult.transactionId,
+      paid_at: payment.created_at,
+      invoice_status: recalculated.status,
+      outstanding: recalculated.outstanding,
+      outstanding_currency: recalculated.currency,
+    } });
+  } catch (err) {
+    if (attemptId) await finishZaadAttempt(attemptId, 'failed', { errorCode: 'INTERNAL' });
+    return zaadErr(res, 500, 'INTERNAL');
+  } finally {
+    if (locked) ZAAD_INFLIGHT.delete(id);
+  }
+});
+
 router.get('/payments', authenticateCustomerPortal, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT p.id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.created_at,
+      `SELECT p.id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.channel, p.reference_code, p.created_at,
               i.invoice_number, i.id AS invoice_id
        FROM payments p JOIN invoices i ON i.id = p.invoice_id
        WHERE i.customer_id = $1 ORDER BY p.created_at DESC LIMIT 200`,
@@ -749,4 +1045,5 @@ router.get('/complaints/:id', authenticateCustomerPortal, async (req, res) => {
   }
 });
 
+router.sweepStaleZaadAttempts = sweepStaleZaadAttempts;
 module.exports = router;

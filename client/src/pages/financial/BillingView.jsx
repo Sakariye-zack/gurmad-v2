@@ -239,7 +239,7 @@ function PaymentPanel({ invoiceId, onRecorded }) {
         {(invoice.payments || []).length === 0 && <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('fin.none_yet')}</p>}
         {(invoice.payments || []).map((p) => (
           <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
-            <span style={{ textTransform: 'capitalize' }}>{t('method.' + p.method, p.method)} — {fmtMoney(p.amount, p.currency)}</span>
+            <span style={{ textTransform: p.channel === 'portal_zaad' ? 'none' : 'capitalize' }}>{p.channel === 'portal_zaad' ? t('portal.zaad.viaPortal') : t('method.' + p.method, p.method)} — {fmtMoney(p.amount, p.currency)}</span>
             <StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} />
           </div>
         ))}

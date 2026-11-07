@@ -153,7 +153,7 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
 
     const balance = await getInvoiceBalance(id);
     const payments = await pool.query(
-      `SELECT id, amount, currency, method, amount_usd, status, reference_code, cashier_id, created_at, reversed_at, reversed_reason
+      `SELECT id, amount, currency, method, amount_usd, status, reference_code, cashier_id, channel, created_at, reversed_at, reversed_reason
        FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
       [id]
     );

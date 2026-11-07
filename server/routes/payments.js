@@ -2,7 +2,9 @@ const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { recalculateInvoiceStatus, getCurrentExchangeRate, paidInInvoiceCurrency, EPSILON } = require('../lib/financialCalculations');
-const { requestZaadPayment } = require('../lib/zaadService');
+// Called as zaadService.requestZaadPayment(...) (module property, not a
+// destructured binding) so the test server's preload can stub the gateway.
+const zaadService = require('../lib/zaadService');
 const debtSuspension = require('../lib/debtSuspension');
 
 const router = express.Router();
@@ -96,7 +98,7 @@ async function precheckPayment(client, invoice, { amt, cur }) {
 // 10) so POST /zaad-request below can reuse the EXACT same rules after
 // a WAAFI-confirmed payment, instead of a second, drift-prone copy.
 // Caller owns the transaction (BEGIN/COMMIT/ROLLBACK) and audit logging.
-async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, referenceCode }) {
+async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, referenceCode, channel = null }) {
   // Lock the invoice FIRST — deterministic lock order across every
   // Module 6 route (OD-7 / non-negotiable rule #7), so two concurrent
   // payment attempts against the same invoice can never both read a
@@ -143,9 +145,9 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   }
 
   const inserted = await client.query(
-    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded',$9,$10) RETURNING *`,
-    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id, referenceCode || null, sized.aic, sized.conversionRateId]
+    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id, channel)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded',$9,$10,$11) RETURNING *`,
+    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id ?? null, referenceCode || null, sized.aic, sized.conversionRateId, channel]
   );
   const payment = inserted.rows[0];
 
@@ -179,18 +181,67 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
       await client.query(
         `INSERT INTO debts (customer_id, invoice_id, amount, currency, description, status, source, created_by)
          VALUES ($1,$2,$3,$6,$4,'unpaid','auto_invoice',$5)`,
-        [invoice.customer_id, invoiceId, trueOutstanding, `Auto-tracked remaining balance on ${invoice.invoice_number}`, user.id, invCur]
+        [invoice.customer_id, invoiceId, trueOutstanding, `Auto-tracked remaining balance on ${invoice.invoice_number}`, user.id ?? null, invCur]
       );
     }
   } else if (existingAutoDebt.rows.length > 0) {
     await client.query(
       `UPDATE debts SET status = 'paid', settled_at = NOW(), settled_by = $1 WHERE id = $2`,
-      [user.id, existingAutoDebt.rows[0].id]
+      [user.id ?? null, existingAutoDebt.rows[0].id]
     );
   }
 
   return { payment, recalculated, invoice };
 }
+
+// Shared ZAAD collect flow (staff POST /zaad-request and the customer
+// portal's POST /invoices/:id/pay-zaad). The caller has already validated
+// input, checked access and run precheckPayment. This pushes the WAAFI
+// request, then records the payment through recordPaymentCore in its own
+// transaction. `actor` is { id, username, role, zone } — a staff user, or
+// the portal actor { id: null, username: 'portal:<customer_number>' }.
+// Returns one of:
+//   { kind: 'declined', zaadResult }
+//   { kind: 'ok', payment, recalculated, zaadResult }
+//   { kind: 'reconciliation', zaadResult, error }  (WAAFI approved, record failed)
+// Throws only on a gateway transport error.
+async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel = null, reference = null, auditExtra = {} }) {
+  const zaadResult = await zaadService.requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: reference || invoice.invoice_number });
+  // A gateway timeout is an UNKNOWN outcome, not a decline.
+  if (!zaadResult.ok && zaadResult.timedOut) return { kind: 'unknown', zaadResult };
+  if (!zaadResult.ok) return { kind: 'declined', zaadResult };
+
+  let recorded;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    recorded = await recordPaymentCore(client, actor, {
+      invoiceId: invoice.id, amt, cur, method: 'zaad', referenceCode: zaadResult.transactionId, channel,
+    });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    // WAAFI already approved and moved the money — this is not a normal
+    // failure path. Logged distinctly so it surfaces in the Audit Center.
+    await logAudit({
+      actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.zaad_reconciliation_required',
+      entityType: 'invoice', entityId: invoice.id,
+      before: null,
+      after: { ...auditExtra, invoice_id: invoice.id, amount: amt, currency: cur, channel, zaad_transaction_id: zaadResult.transactionId, zaad_raw: zaadResult.raw, reason: err.message },
+    }).catch(() => {});
+    return { kind: 'reconciliation', zaadResult, error: err };
+  } finally {
+    client.release();
+  }
+  const { payment, recalculated } = recorded;
+  await debtSuspension.afterPayment(invoice.customer_id);
+  await logAudit({ actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, ...auditExtra, zaad_raw: zaadResult.raw } })
+    .catch((e) => console.error('payment.create audit failed:', e && e.message));
+  return { kind: 'ok', payment, recalculated, zaadResult };
+}
+
+const reconciliationMessage = (txId, reason) =>
+  `ZAAD approved this payment (transaction ${txId}) but it could not be recorded against the invoice: ${reason}. The money has already been received into the merchant account — record it manually with reference code ${txId} once resolved.`;
 
 // GET /?invoice_id=X — payment history for one invoice.
 router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
@@ -294,44 +345,22 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     const blocked = await precheckPayment(pool, invoice, { amt, cur });
     if (blocked) return res.status(blocked.status).json({ error: { message: blocked.message, code: blocked.code } });
 
-    const zaadResult = await requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: invoice.invoice_number });
-    if (!zaadResult.ok) {
+    const r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user });
+    if (r.kind === 'unknown') {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.zaad_reconciliation_required', entityType: 'invoice', entityId: invoice.id, before: null,
+        after: { invoice_id: invoice.id, amount: amt, currency: cur, target_phone: phoneDigits, reference: invoice.invoice_number, reason: 'gateway timeout - outcome unknown' } }).catch(() => {});
+      return res.status(504).json({ error: { message: 'ZAAD did not answer in time, so the outcome is unknown. Check the merchant account before requesting again.', code: 'ZAAD_UNKNOWN' } });
+    }
+    if (r.kind === 'declined') {
       return res.status(402).json({
-        error: { message: zaadResult.message, code: zaadResult.notConfigured ? 'NOT_CONFIGURED' : 'ZAAD_DECLINED' },
+        error: { message: r.zaadResult.message, code: r.zaadResult.notConfigured ? 'NOT_CONFIGURED' : 'ZAAD_DECLINED' },
       });
     }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const { payment, recalculated } = await recordPaymentCore(client, req.user, {
-        invoiceId, amt, cur, method: 'zaad', referenceCode: zaadResult.transactionId,
-      });
-      await client.query('COMMIT');
-      await debtSuspension.afterPayment(invoice.customer_id);
-      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, zaad_raw: zaadResult.raw } });
-      res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      // WAAFI already approved and moved the money — this is not a
-      // normal failure path. Logged distinctly so it surfaces in the
-      // Audit Center, and the response tells the cashier exactly what
-      // to do next rather than reading as a generic error.
-      await logAudit({
-        actorId: req.user.id, actorUsername: req.user.username, action: 'payment.zaad_reconciliation_required',
-        entityType: 'invoice', entityId: invoiceId,
-        before: null,
-        after: { invoice_id: invoiceId, amount: amt, currency: cur, zaad_transaction_id: zaadResult.transactionId, zaad_raw: zaadResult.raw, reason: err.message },
-      });
-      return res.status(409).json({
-        error: {
-          message: `ZAAD approved this payment (transaction ${zaadResult.transactionId}) but it could not be recorded against the invoice: ${err.message}. The money has already been received into the merchant account — record it manually with reference code ${zaadResult.transactionId} once resolved.`,
-          code: 'RECONCILIATION_REQUIRED',
-        },
-      });
-    } finally {
-      client.release();
+    if (r.kind === 'reconciliation') {
+      return res.status(409).json({ error: { message: reconciliationMessage(r.zaadResult.transactionId, r.error.message), code: 'RECONCILIATION_REQUIRED' } });
     }
+    const { payment, recalculated } = r;
+    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
   } catch (err) {
     res.status(502).json({ error: { message: 'Could not reach ZAAD to process this payment request.', code: 'GATEWAY_ERROR' } });
   }
@@ -429,4 +458,6 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
 });
 
 router.precheckPayment = precheckPayment;
+router.runZaadCollect = runZaadCollect;
+router.reconciliationMessage = reconciliationMessage;
 module.exports = router;
