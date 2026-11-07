@@ -10,3 +10,13 @@ export function useDashboardSummary(period = 'today') {
     queryFn: () => apiClient.get(`/v2/dashboard/summary?period=${period}`),
   });
 }
+
+// F7 — the "Today" operations panel (admin / gudoomiye only).
+export function useOperationsToday(enabled = true) {
+  return useQuery({
+    queryKey: ['v2', 'dashboard', 'operations-today'],
+    queryFn: () => apiClient.get('/v2/dashboard/operations-today'),
+    enabled,
+    refetchInterval: 60 * 1000,
+  });
+}

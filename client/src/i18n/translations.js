@@ -21,6 +21,7 @@ import { PHASE2 } from './phase2.js';
 import { ACCOUNT_SECURITY } from './accountSecurity.js';
 import { FLEET } from './fleet.js';
 import { DAILY_LISTS } from './dailyLists.js';
+import { COLLECTORS_OPS } from './collectorsOps.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -34,6 +35,7 @@ export const TRANSLATIONS = {
   ...ACCOUNT_SECURITY,
   ...FLEET,
   ...DAILY_LISTS,
+  ...COLLECTORS_OPS,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

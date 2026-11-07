@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BarChart3, Printer, Download } from 'lucide-react';
+import { BarChart3, Printer, Download, ArrowLeft } from 'lucide-react';
 import { PageHeader, Button, Card, DataTable, StatusBadge, StatCard, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import PrintLetterhead from '../../components/PrintLetterhead.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 import { fmtMoney } from '../../lib/money.js';
 import {
   useExecutiveSummary, useCollectorPerformance, useZonePerformance, useTruckPerformance,
   useCollectionHistory, useRevenue, useInvoicesSummary, usePaymentsSummary, useDebtsSummary,
-  useCashoutSummary, downloadReportCsv,
+  useCashoutSummary, useCollectorDaily, downloadReportCsv,
 } from '../../hooks/useReports.js';
 
 // Module 8 — Reports. One page, internal tabs (per instruction: tabs/
@@ -28,6 +29,9 @@ const PERIOD_OPTIONS = [
 const TABS = [
   { key: 'overview', label: 'Overview', financial: false },
   { key: 'collector', label: 'Collector', financial: false, group: 'Collection Performance' },
+  // F5: the extended collector report (proof, km, visit times, daily
+  // drill-down). Staff roles only — a Collector keeps the own-row tab above.
+  { key: 'collectors', labelKey: 'rep.col.tab', label: 'Collectors', financial: false, staffOnly: true, group: 'Collection Performance' },
   { key: 'zone', label: 'Zone', financial: false, group: 'Collection Performance' },
   { key: 'truck', label: 'Truck', financial: false, group: 'Collection Performance' },
   { key: 'history', label: 'Collection History', financial: false },
@@ -54,6 +58,7 @@ export default function ReportsPage() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const toast = useToast();
+  const { t } = useI18n();
 
   async function handleExport(category, extra = {}) {
     try {
@@ -64,7 +69,7 @@ export default function ReportsPage() {
     }
   }
 
-  const visibleTabs = TABS.filter((t) => !t.financial || !isCollector);
+  const visibleTabs = TABS.filter((x) => (!x.financial && !x.staffOnly) || !isCollector);
 
   return (
     <div>
@@ -85,8 +90,8 @@ export default function ReportsPage() {
       </Card>
 
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }} className="no-print">
-        {visibleTabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={tabButtonStyle(tab === t.key)}>{t.label}</button>
+        {visibleTabs.map((x) => (
+          <button key={x.key} onClick={() => setTab(x.key)} style={tabButtonStyle(tab === x.key)}>{x.labelKey ? t(x.labelKey) : x.label}</button>
         ))}
       </div>
 
@@ -94,6 +99,7 @@ export default function ReportsPage() {
 
       {tab === 'overview' && <OverviewTab period={period} customStart={customStart} customEnd={customEnd} />}
       {tab === 'collector' && <CollectorTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('collector-performance')} isCollector={isCollector} />}
+      {tab === 'collectors' && !isCollector && <CollectorsTab period={period} customStart={customStart} customEnd={customEnd} />}
       {tab === 'zone' && <ZoneTab period={period} customStart={customStart} customEnd={customEnd} onExport={() => handleExport('zone-performance')} />}
       {tab === 'truck' && <TruckTab period={period} customStart={customStart} customEnd={customEnd} />}
       {tab === 'history' && <HistoryTab period={period} customStart={customStart} customEnd={customEnd} initialStatus={initialStatus} onExport={(extra) => handleExport('collection-history', extra)} />}
@@ -184,6 +190,120 @@ function CollectorTab({ period, customStart, customEnd, onExport, isCollector })
           </tr>
         ))}
       </DataTable>
+    </div>
+  );
+}
+
+// F5 — Collectors tab: per-collector table (assigned, serviced, missed,
+// completion, proof overrides, no-location marks, average proof distance,
+// km driven, first/last visit) with CSV export and a drill-down to the
+// collector's daily rows. Every figure comes from the server.
+function CollectorsTab({ period, customStart, customEnd }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const [selected, setSelected] = useState(null);
+  const { data, isLoading, error, refetch } = useCollectorPerformance(period, customStart, customEnd);
+
+  async function exportCsv(category, extra = {}) {
+    try {
+      await downloadReportCsv(category, period, customStart, customEnd, extra);
+      toast.success(t('rep.col.exported'));
+    } catch (err) {
+      toast.error(err.message || t('rep.col.exportFailed'));
+    }
+  }
+
+  if (selected) {
+    return (
+      <CollectorDays
+        collector={selected} period={period} customStart={customStart} customEnd={customEnd}
+        onBack={() => setSelected(null)}
+        onExport={() => exportCsv('collector-daily', { employee_id: selected.employee_id })}
+      />
+    );
+  }
+  if (isLoading) return <LoadingState label={t('rep.col.loading')} />;
+  if (error) return <ErrorState message={error.message} onRetry={refetch} />;
+  const rows = data?.data || [];
+  return (
+    <div>
+      <div className="no-print" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <Button variant="secondary" icon={Download} onClick={() => exportCsv('collectors')}>{t('rep.col.export')}</Button>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)', flex: '1 1 280px' }}>{t('rep.col.kmHint')}</span>
+      </div>
+      <DataTable
+        isEmpty={rows.length === 0}
+        emptyTitle={t('rep.col.empty')}
+        columns={[
+          { label: t('rep.col.collector') }, { label: t('rep.col.zone') }, { label: t('rep.col.assigned') },
+          { label: t('rep.col.serviced') }, { label: t('rep.col.missed') }, { label: t('rep.col.completion') },
+          { label: t('rep.col.overrides') }, { label: t('rep.col.noLocation') }, { label: t('rep.col.avgDistance') },
+          { label: t('rep.col.km') }, { label: t('rep.col.firstVisit') }, { label: t('rep.col.lastVisit') }, { label: '' },
+        ]}
+      >
+        {rows.map((r) => (
+          <tr key={`${r.employee_id}-${r.zone_name || ''}`} onClick={() => setSelected(r)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+            <td style={cellStyle}><strong>{r.collector_name || `#${r.employee_id}`}</strong></td>
+            <td style={cellStyle}>{r.zone_name || '—'}</td>
+            <td style={cellStyle} className="tabular-nums">{r.assigned}</td>
+            <td style={cellStyle} className="tabular-nums">{r.serviced}</td>
+            <td style={cellStyle} className="tabular-nums">{r.missed}</td>
+            <td style={cellStyle} className="tabular-nums">{r.completionRate != null ? `${r.completionRate}%` : '—'}</td>
+            <td style={{ ...cellStyle, color: r.overrides > 0 ? 'var(--warning)' : undefined }} className="tabular-nums">{r.overrides}</td>
+            <td style={cellStyle} className="tabular-nums">{r.no_location}</td>
+            <td style={cellStyle} className="tabular-nums">{r.avg_proof_distance_m != null ? r.avg_proof_distance_m : '—'}</td>
+            <td style={cellStyle} className="tabular-nums">{r.km_driven != null ? r.km_driven.toFixed(1) : '—'}</td>
+            <td style={cellStyle} className="tabular-nums">{r.first_visit_at || '—'}</td>
+            <td style={cellStyle} className="tabular-nums">{r.last_visit_at || '—'}</td>
+            <td style={cellStyle} className="no-print"><span style={{ color: 'var(--brand)', fontWeight: 700, fontSize: '12px' }}>{t('rep.col.viewDays')}</span></td>
+          </tr>
+        ))}
+      </DataTable>
+    </div>
+  );
+}
+
+function CollectorDays({ collector, period, customStart, customEnd, onBack, onExport }) {
+  const { t } = useI18n();
+  const { data, isLoading, error, refetch } = useCollectorDaily(collector.employee_id, period, customStart, customEnd);
+  const rows = data?.data || [];
+  return (
+    <div>
+      <div className="no-print" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <Button variant="secondary" icon={ArrowLeft} onClick={onBack}>{t('rep.col.back')}</Button>
+        <Button variant="secondary" icon={Download} onClick={onExport}>{t('rep.col.export')}</Button>
+      </div>
+      <h3 style={{ margin: '0 0 12px', fontSize: '15px' }}>{t('rep.col.daysOf', undefined, { name: collector.collector_name || `#${collector.employee_id}` })}</h3>
+      {isLoading && <LoadingState label={t('rep.col.loadingDays')} />}
+      {error && <ErrorState message={error.message} onRetry={refetch} />}
+      {!isLoading && !error && (
+        <DataTable
+          isEmpty={rows.length === 0}
+          emptyTitle={t('rep.col.emptyDays')}
+          columns={[
+            { label: t('rep.col.date') }, { label: t('rep.col.assigned') }, { label: t('rep.col.serviced') },
+            { label: t('rep.col.missed') }, { label: t('rep.col.completion') }, { label: t('rep.col.overrides') },
+            { label: t('rep.col.noLocation') }, { label: t('rep.col.avgDistance') }, { label: t('rep.col.km') },
+            { label: t('rep.col.firstVisit') }, { label: t('rep.col.lastVisit') },
+          ]}
+        >
+          {rows.map((r) => (
+            <tr key={r.day} style={{ borderBottom: '1px solid var(--border)' }}>
+              <td style={cellStyle}><strong>{r.day}</strong></td>
+              <td style={cellStyle} className="tabular-nums">{r.assigned}</td>
+              <td style={cellStyle} className="tabular-nums">{r.serviced}</td>
+              <td style={cellStyle} className="tabular-nums">{r.missed}</td>
+              <td style={cellStyle} className="tabular-nums">{r.completionRate != null ? `${r.completionRate}%` : '—'}</td>
+              <td style={{ ...cellStyle, color: r.overrides > 0 ? 'var(--warning)' : undefined }} className="tabular-nums">{r.overrides}</td>
+              <td style={cellStyle} className="tabular-nums">{r.no_location}</td>
+              <td style={cellStyle} className="tabular-nums">{r.avg_proof_distance_m != null ? r.avg_proof_distance_m : '—'}</td>
+              <td style={cellStyle} className="tabular-nums">{r.km_driven != null ? r.km_driven.toFixed(1) : '—'}</td>
+              <td style={cellStyle} className="tabular-nums">{r.first_visit_at || '—'}</td>
+              <td style={cellStyle} className="tabular-nums">{r.last_visit_at || '—'}</td>
+            </tr>
+          ))}
+        </DataTable>
+      )}
     </div>
   );
 }
