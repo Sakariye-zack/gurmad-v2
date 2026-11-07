@@ -227,7 +227,8 @@ function isValidTimezone(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
-// Server-side field whitelist — only these 5 business fields are ever
+// Server-side field whitelist — only these business fields (5 company +
+// 2 operations) are ever
 // read from the PUT body. id/created_by/updated_by/logo_* internals/any
 // unexpected field (role, zone_id, secret, password, jwt_secret,
 // database_url, ...) are never read from req.body at all, so there is
@@ -272,6 +273,16 @@ function validateSettingsInput(body) {
       out.timezone = body.timezone;
     }
   }
+  // Operations — proof of service (geofence on Serviced marks).
+  if (body.proof_radius_m !== undefined) {
+    const n = body.proof_radius_m;
+    if (!Number.isInteger(n) || n < 10 || n > 1000) errors.push('proof_radius_m must be a whole number between 10 and 1000.');
+    else out.proof_radius_m = n;
+  }
+  if (body.proof_require_photo !== undefined) {
+    if (typeof body.proof_require_photo !== 'boolean') errors.push('proof_require_photo must be true or false.');
+    else out.proof_require_photo = body.proof_require_photo;
+  }
   return { errors, data: out };
 }
 
@@ -291,6 +302,8 @@ function shapeRow(row) {
     phone: row.phone,
     email: row.email,
     timezone: row.timezone,
+    proof_radius_m: row.proof_radius_m,
+    proof_require_photo: row.proof_require_photo,
     updated_at: row.updated_at,
   };
 }

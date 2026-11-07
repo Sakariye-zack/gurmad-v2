@@ -325,9 +325,10 @@ router.get('/:id/customers', authenticateToken, requireRole(...VIEW_ROLES), asyn
       if (!owns) return res.status(403).json({ error: { message: 'You are not assigned to this batch.', code: 'FORBIDDEN' } });
     }
     const result = await pool.query(
-      `SELECT batch_customers.*, customers.customer_number, customers.name, customers.business_name, customers.phone, customers.address_line
+      `SELECT batch_customers.*, customers.customer_number, customers.name, customers.business_name, customers.phone, customers.address_line,
+              (customers.lat IS NOT NULL AND customers.lng IS NOT NULL) AS has_location
        FROM batch_customers JOIN customers ON customers.id = batch_customers.customer_id
-       WHERE batch_customers.batch_id = $1 ORDER BY customers.name`,
+       WHERE batch_customers.batch_id = $1 ORDER BY batch_customers.visit_order NULLS LAST, customers.name`,
       [id]
     );
     res.json({ data: result.rows });

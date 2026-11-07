@@ -19,6 +19,7 @@
 const { pool, logAudit } = require('../db');
 const { getTimezone, localParts, shiftDate } = require('./autoBilling');
 const { generateBatchCode, validateDr7ForCollector, validateResourceEligibility } = require('./collectionValidation');
+const { toPoint, nearestNeighbourOrder } = require('./geo');
 
 const ADVISORY_LOCK_KEY = 74120031;
 const RUN_FROM_HOUR = 5;
@@ -74,6 +75,35 @@ async function ensureAutoCycle(client, zoneId, date, createdBy) {
     `INSERT INTO collection_cycles (zone_id, cycle_type, start_date, end_date, auto, created_by) VALUES ($1, 'monthly', $2, $3, TRUE, $4) RETURNING id`,
     [zoneId, start, end, createdBy]);
   return ins.rows[0].id;
+}
+
+// Route order ("next house"): nearest-neighbour over the list's customers,
+// starting from the Sub Zone's start point (routes.start_lat/lng), else the
+// list collector's last known location, else the first located customer by
+// id. Customers without a location go last, by id. Writes
+// batch_customers.visit_order 1..n. Used at generation time and by the
+// supervisor "Re-order" action — one implementation.
+async function computeVisitOrder(client, batchId) {
+  const rows = (await client.query(
+    `SELECT bc.id, c.lat, c.lng FROM batch_customers bc JOIN customers c ON c.id = bc.customer_id WHERE bc.batch_id = $1 ORDER BY bc.id`,
+    [batchId])).rows;
+  if (rows.length === 0) return [];
+  const startRow = (await client.query(
+    `SELECT r.start_lat, r.start_lng, cl.lat AS col_lat, cl.lng AS col_lng
+     FROM batches b
+     LEFT JOIN routes r ON r.id = b.route_id
+     LEFT JOIN LATERAL (
+       SELECT l.lat, l.lng FROM tasks t JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'collector'
+       JOIN collector_locations l ON l.employee_id = tr.resource_id
+       WHERE t.batch_id = b.id ORDER BY tr.id LIMIT 1
+     ) cl ON TRUE
+     WHERE b.id = $1`, [batchId])).rows[0] || {};
+  const start = toPoint(startRow.start_lat, startRow.start_lng) || toPoint(startRow.col_lat, startRow.col_lng);
+  const order = nearestNeighbourOrder(rows, start);
+  await client.query(
+    `UPDATE batch_customers bc SET visit_order = o.ord FROM unnest($1::int[]) WITH ORDINALITY AS o(id, ord) WHERE bc.id = o.id`,
+    [order]);
+  return order;
 }
 
 async function generate(client, date, triggeredBy) {
@@ -183,6 +213,7 @@ async function generate(client, date, triggeredBy) {
           await client.query(`INSERT INTO task_resources (task_id, resource_type, resource_id, role_note) VALUES ($1,$2,$3,'daily list')`, [task.id, type, rid]);
           await client.query(`INSERT INTO task_resource_history (task_id, resource_type, resource_id, action, performed_by) VALUES ($1,$2,$3,'assigned',$4)`, [task.id, type, rid, triggeredBy]);
         }
+        await computeVisitOrder(client, b.id);
         await client.query('RELEASE SAVEPOINT daily_batch');
         for (const c of free) busy.add(c.id);
         created.push(b);
@@ -269,4 +300,4 @@ function startScheduler() {
   return { first, timer };
 }
 
-module.exports = { runForDate, schedulerTick, startScheduler, weekdayOf, todayLocal, shiftDate, RUN_FROM_HOUR };
+module.exports = { computeVisitOrder, runForDate, schedulerTick, startScheduler, weekdayOf, todayLocal, shiftDate, RUN_FROM_HOUR };

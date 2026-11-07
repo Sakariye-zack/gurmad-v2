@@ -2216,6 +2216,20 @@ async function runFleetUpgradeMigrations() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_daily_list_runs_date ON daily_list_runs(run_date, id DESC);`);
+
+  // Proof of service (geofence on Serviced marks) + route order ("next house").
+  // All additive / nullable / defaulted — existing rows are untouched.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_radius_m INTEGER NOT NULL DEFAULT 50;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_require_photo BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // Distance (m) between the phone and the customer at a Serviced mark.
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_distance_m INTEGER;`);
+  // 'no_customer_location' | 'override' | NULL (geofence passed).
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_flag VARCHAR(30);`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_override_reason TEXT;`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_override_by INTEGER;`);
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS visit_order INTEGER;`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lat NUMERIC(10,6);`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lng NUMERIC(10,6);`);
 }
 
 // Allowed auth_events.event values. Adding one here is picked up on the

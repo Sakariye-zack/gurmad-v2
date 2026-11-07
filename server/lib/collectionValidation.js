@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { toPoint, haversineMeters } = require('./geo');
 
 // Shared by assignment-time AND task-start-time validation (OD-4, approved:
 // enforce DR-7 at both points) — one implementation, not two copies that
@@ -230,7 +231,42 @@ function lateMarkUntilHour() {
   return Number.isFinite(h) && h > 0 && h <= 24 ? h : 12;
 }
 
-async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, capturedAt: capturedAtRaw, now = new Date(), lateUntilHour }) {
+// ---------- Proof of service (geofence) ----------
+// Company setting (company_settings row 1), defaults when no row exists.
+const PROOF_DEFAULT_RADIUS_M = 50;
+async function getProofSettings(client = pool) {
+  const r = await client.query('SELECT proof_radius_m, proof_require_photo FROM company_settings ORDER BY id LIMIT 1');
+  const row = r.rows[0];
+  return {
+    radius_m: row && Number.isInteger(row.proof_radius_m) ? row.proof_radius_m : PROOF_DEFAULT_RADIUS_M,
+    require_photo: !!(row && row.proof_require_photo),
+  };
+}
+
+// Decides the proof columns for a Serviced mark, or rejects it.
+//  - customer has a location: the phone's GPS is required and must be within
+//    the radius;
+//  - customer has no location: accepted, flagged 'no_customer_location';
+//  - supervisor override: accepted, flagged 'override' (distance kept when known).
+async function computeServicedProof(client, customerId, lat, lng, override) {
+  const c = (await client.query('SELECT lat, lng FROM customers WHERE id = $1', [customerId])).rows[0];
+  const house = c ? toPoint(c.lat, c.lng) : null;
+  const phone = toPoint(lat, lng);
+  const distance = house && phone ? Math.round(haversineMeters(house, phone)) : null;
+  if (override) return { ok: true, proof_distance_m: distance, proof_flag: 'override' };
+  if (!house) return { ok: true, proof_distance_m: null, proof_flag: 'no_customer_location' };
+  if (!phone) return { ok: false, code: 'VALIDATION', error: 'Turn on GPS to mark Serviced.' };
+  const { radius_m: radius } = await getProofSettings(client);
+  if (distance > radius) {
+    return { ok: false, code: 'VALIDATION', error: `You are ${distance} m from this house (limit ${radius} m).`, distance_m: distance, radius_m: radius };
+  }
+  return { ok: true, proof_distance_m: distance, proof_flag: null };
+}
+
+// override: supervisor "mark serviced" from the web Today's list (routes/
+// dailyLists.js) — never reachable from the collector routes, which do not
+// pass it.
+async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, capturedAt: capturedAtRaw, now = new Date(), lateUntilHour, override = null }) {
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return { ok: false, code: 'VALIDATION', error: 'status must be one of: serviced, missed, skipped.' };
   }
@@ -244,10 +280,14 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
   }
   const bc = bcRes.rows[0];
   if (bc.status === 'pending') {
+    const proof = await proofFor(client, status, customerId, lat, lng, override);
+    if (!proof.ok) return proof;
     const updated = await client.query(
-      `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+      `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW(),
+         proof_distance_m = $8, proof_flag = $9, proof_override_reason = $10, proof_override_by = $11
        WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-      [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+      [status, reason || null, note || null, lat || null, lng || null, batchId, customerId,
+        proof.proof_distance_m, proof.proof_flag, proof.override_reason, proof.override_by]
     );
     return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
   }
@@ -287,11 +327,16 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
     return { ok: false, code: 'CONFLICT', error: 'This customer was already serviced on a later list.', currentStatus: bc.status };
   }
 
+  // Late marks pass the same geofence as live ones.
+  const proof = await proofFor(client, status, customerId, lat, lng, override);
+  if (!proof.ok) return proof;
   const updated = await client.query(
     `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5,
-       status_at = ($8::timestamptz AT TIME ZONE 'UTC')
+       status_at = ($8::timestamptz AT TIME ZONE 'UTC'),
+       proof_distance_m = $9, proof_flag = $10, proof_override_reason = $11, proof_override_by = $12
      WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId, capturedAt]
+    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId, capturedAt,
+      proof.proof_distance_m, proof.proof_flag, proof.override_reason, proof.override_by]
   );
   if (status === 'serviced') {
     // Resolved: drop the still-pending carried copies on later auto lists
@@ -319,6 +364,14 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
   return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0], late: true };
 }
 
+// Missed/skipped never need the geofence (proof columns stay NULL).
+async function proofFor(client, status, customerId, lat, lng, override) {
+  if (status !== 'serviced') return { ok: true, proof_distance_m: null, proof_flag: null, override_reason: null, override_by: null };
+  const p = await computeServicedProof(client, customerId, lat, lng, !!override);
+  if (!p.ok) return p;
+  return { ...p, override_reason: override ? override.reason : null, override_by: override ? override.by : null };
+}
+
 // Next batch number/code within (zone, cycle). Shared by manual batch
 // creation/reschedule (routes/batches.js) and the daily-list generator.
 async function generateBatchCode(client, zoneId, cycleId) {
@@ -331,5 +384,5 @@ module.exports = {
   generateBatchCode,
   validateResourceAssignment, validateDr7ForCollector, validateResourceEligibility,
   computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment,
-  applyBatchCustomerStatusChange,
+  applyBatchCustomerStatusChange, getProofSettings,
 };
