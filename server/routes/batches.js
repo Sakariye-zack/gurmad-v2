@@ -201,6 +201,16 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
       if (conflicts.rows.length > 0) {
         return res.status(409).json({ error: { message: 'One or more customers are already Pending in another open batch.', code: 'CONFLICT' }, conflicting_customer_ids: conflicts.rows.map((r) => r.customer_id) });
       }
+      // Daily lists: a customer already serviced on that day's automatic list
+      // must not be put on a second (manual) batch for the same day.
+      const servicedOnList = await pool.query(
+        `SELECT DISTINCT bc.customer_id FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id
+         WHERE bc.customer_id = ANY($1::int[]) AND b.auto_generated AND bc.status = 'serviced'
+           AND b.start_date >= $2::date AND b.start_date <= COALESCE($3::date, $2::date)`,
+        [ids, start_date, /^\d{4}-\d{2}-\d{2}$/.test(end_date || '') ? end_date : null]);
+      if (servicedOnList.rows.length > 0) {
+        return res.status(400).json({ error: { message: 'One or more customers were already serviced on that day\'s list.', code: 'already_serviced_today' }, serviced_customer_ids: servicedOnList.rows.map((r) => r.customer_id) });
+      }
       // DR-7: every customer in a Commercial/Residential batch must match
       // the batch's own classification — a batch is either all-Residential
       // or all-Commercial (DR-7's own approved design).
@@ -739,7 +749,7 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
   const id = parseStrictId(req.params.id);
   const customerId = parseStrictId(req.params.customerId);
   if (id === null || customerId === null) return res.status(400).json({ error: { message: 'Invalid id.', code: 'VALIDATION' } });
-  const { status, task_id, reason, note, lat, lng } = req.body;
+  const { status, task_id, reason, note, lat, lng, captured_at } = req.body;
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return res.status(400).json({ error: { message: `status must be one of: serviced, missed, skipped.`, code: 'VALIDATION' } });
   }
@@ -764,7 +774,7 @@ router.put('/:id/customers/:customerId/status', authenticateToken, requireRole(.
       // route without a second copy of this business rule. This route
       // retains transaction ownership (BEGIN/COMMIT/ROLLBACK/release) and
       // calls logAudit() itself, after COMMIT, exactly as before extraction.
-      const result = await applyBatchCustomerStatusChange(client, { batchId: id, customerId, status, reason, note, lat, lng });
+      const result = await applyBatchCustomerStatusChange(client, { batchId: id, customerId, status, reason, note, lat, lng, capturedAt: captured_at });
       if (!result.ok) {
         await client.query('ROLLBACK');
         if (result.code === 'NOT_FOUND') return res.status(404).json({ error: { message: result.error, code: 'NOT_FOUND' } });

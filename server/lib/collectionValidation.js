@@ -222,7 +222,7 @@ async function assertCapacityForTruckAssignment(batchId, truckId, client = pool)
 // DR-1 collector-ownership validation is NOT performed here — it stays
 // in the calling route, BEFORE the transaction opens, exactly as today.
 // This function assumes the caller has already authorized the request.
-async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng }) {
+async function applyBatchCustomerStatusChange(client, { batchId, customerId, status, reason, note, lat, lng, capturedAt: capturedAtRaw }) {
   if (!['serviced', 'missed', 'skipped'].includes(status)) {
     return { ok: false, code: 'VALIDATION', error: 'status must be one of: serviced, missed, skipped.' };
   }
@@ -235,15 +235,63 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
     return { ok: false, code: 'NOT_FOUND', error: 'This customer is not in this batch.' };
   }
   const bc = bcRes.rows[0];
+  let late = null;
   if (bc.status !== 'pending') {
-    return { ok: false, code: 'CONFLICT', error: `This customer is already ${bc.status} in this batch.`, currentStatus: bc.status };
+    // Late (offline) mark on a daily list that the 05:00 run already closed:
+    // a 'not visited' row may still be resolved, unless the customer was
+    // already serviced on a later list.
+    late = bc.status === 'missed' && bc.status_reason === AUTO_CLOSE_REASON ? await lateAutoCloseContext(client, bc) : null;
+    if (!late || late.servicedLater) {
+      return { ok: false, code: 'CONFLICT', error: `This customer is already ${bc.status} in this batch.`, currentStatus: bc.status };
+    }
   }
+  // Late marks keep the time they were captured on the phone (so daily
+  // billing dates the visit correctly); anything else is "now".
+  const capturedAt = late ? validCaptureTime(capturedAtRaw) : null;
+  const params = [status, reason || null, note || null, lat || null, lng || null, batchId, customerId];
+  let atSql = 'NOW()';
+  if (capturedAt) { params.push(capturedAt); atSql = `($8::timestamptz AT TIME ZONE 'UTC')`; }
   const updated = await client.query(
-    `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = NOW()
+    `UPDATE batch_customers SET status = $1, status_reason = $2, status_note = $3, status_lat = $4, status_lng = $5, status_at = ${atSql}
      WHERE batch_id = $6 AND customer_id = $7 RETURNING *`,
-    [status, reason || null, note || null, lat || null, lng || null, batchId, customerId]
+    params
   );
-  return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
+  if (late && status !== 'missed') {
+    // Resolved: drop the still-pending carried-over copies on later auto
+    // lists (so nobody visits twice) and stop any later miss from carrying.
+    const removed = await client.query(
+      `DELETE FROM batch_customers bc USING batches b
+       WHERE bc.batch_id = b.id AND bc.customer_id = $1 AND b.auto_generated AND b.start_date > $2::date
+         AND bc.status = 'pending' AND bc.carried_over_from IS NOT NULL
+       RETURNING bc.batch_id`, [customerId, late.startDate]);
+    for (const r of removed.rows) {
+      await client.query('UPDATE batches SET total_customers = GREATEST(total_customers - 1, 0) WHERE id = $1', [r.batch_id]);
+    }
+    await client.query(
+      `UPDATE batch_customers bc SET carry_resolved_at = NOW() FROM batches b
+       WHERE bc.batch_id = b.id AND bc.customer_id = $1 AND b.auto_generated AND b.start_date > $2::date
+         AND bc.status = 'missed' AND bc.carry_resolved_at IS NULL`, [customerId, late.startDate]);
+  }
+  return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0], late: !!late };
+}
+
+const AUTO_CLOSE_REASON = 'not visited';
+
+async function lateAutoCloseContext(client, bc) {
+  const b = (await client.query(`SELECT auto_generated, to_char(start_date, 'YYYY-MM-DD') AS start_date FROM batches WHERE id = $1`, [bc.batch_id])).rows[0];
+  if (!b || !b.auto_generated) return null;
+  const later = await client.query(
+    `SELECT 1 FROM batch_customers x JOIN batches b2 ON b2.id = x.batch_id
+     WHERE x.customer_id = $1 AND x.status = 'serviced' AND b2.start_date > $2::date LIMIT 1`, [bc.customer_id, b.start_date]);
+  return { startDate: b.start_date, servicedLater: later.rows.length > 0 };
+}
+
+// ISO capture time from the phone; ignored when missing, unparsable, or in the future.
+function validCaptureTime(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t) || t > Date.now() + 5 * 60 * 1000) return null;
+  return new Date(t).toISOString();
 }
 
 // Next batch number/code within (zone, cycle). Shared by manual batch

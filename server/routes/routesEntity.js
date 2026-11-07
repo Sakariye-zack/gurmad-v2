@@ -265,9 +265,11 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     if (gzErr) return res.status(400).json({ error: { message: gzErr, code: 'VALIDATION' } });
     const tErr = data.truck_id !== undefined && data.truck_id === current.truck_id ? null : await truckError(data.truck_id, current.zone_id);
     if (tErr) return res.status(400).json({ error: { message: tErr, code: 'VALIDATION' } });
-    // Clearing the days of a Sub Zone that keeps a collector is refused.
+    // A Sub Zone that has a collector after this update must have work days
+    // after it too (merged current + request state).
     const nextCollector = data.collector_user_id !== undefined ? data.collector_user_id : current.collector_user_id;
-    if (data.work_days !== undefined && !data.work_days && nextCollector) {
+    const nextDays = data.work_days !== undefined ? data.work_days : (Array.isArray(current.work_days) && current.work_days.length ? current.work_days : null);
+    if (nextCollector && !nextDays) {
       return res.status(400).json({ error: { message: 'Work days are required for a Sub Zone with a collector.', code: 'VALIDATION' } });
     }
     if (data.code) {

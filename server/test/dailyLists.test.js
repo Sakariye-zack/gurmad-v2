@@ -1,6 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { api, db, setupWorld, insertUser, tokenFor } = require('./helpers');
+// Past/future days are simulated by calling the generator directly (the
+// admin endpoint only ever runs today).
+const { runForDate } = require('../lib/dailyLists');
+const { runDaily } = require('../lib/autoBilling');
 
 // Daily lists: generator (Sub Zone work days, customer override, carry-over,
 // idempotency, DR-7 split), Sub Zone truck/work-day validation, edit
@@ -27,11 +31,11 @@ async function mkCollector(zone, { type = 'residential', shiftName = null } = {}
   return { uid, emp, username };
 }
 
-async function mkSubZone(w, { zone = w.zoneA, collector = true, days = ALL_DAYS, truckId } = {}) {
+async function mkSubZone(w, { zone = w.zoneA, collector = true, days = ALL_DAYS, truckId, colType } = {}) {
   const n = uniq();
   const g = await api('POST', '/groups', { token: w.tokens.admin, body: { zone_id: zone.id, code: 'DLG' + n, name: 'DL Group ' + n } });
   assert.equal(g.status, 201, JSON.stringify(g.body));
-  const col = collector ? await mkCollector(zone) : null;
+  const col = collector ? await mkCollector(zone, colType || {}) : null;
   const body = { group_id: g.data.id, code: 'DLR' + n, name: 'DL Sub ' + n, work_days: days };
   if (col) body.collector_user_id = col.uid;
   if (truckId) body.truck_id = truckId;
@@ -52,7 +56,10 @@ async function mkCust(w, sz, extra = {}) {
   return r.data;
 }
 
+let todayCache = null;
 async function run(w, date) {
+  if (!todayCache) todayCache = await today(w);
+  if (date !== todayCache) return runForDate({ date });
   const r = await api('POST', '/daily-lists/run', { token: w.tokens.admin, body: { date } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.data;
@@ -108,6 +115,7 @@ test('generator: Sub Zone days drive inclusion, customer override wins, no Sub Z
 
   const r1 = await run(w, d1);
   assert.ok(r1.run_id);
+  assert.equal((await api('POST', '/daily-lists/run', { token: w.tokens.admin, body: { date: d1 } })).status, 400);
   const b1 = await autoBatches(sz.route.id, d1);
   assert.equal(b1.length, 1);
   assert.deepEqual((await rows(b1[0].id)).map((x) => x.customer_id), [override.id]);
@@ -205,31 +213,56 @@ test('generator: Sub Zone without a collector is skipped', async () => {
   assert.equal(list.data.lists.find((l) => l.route_id === sz.route.id).not_generated, 'no_collector');
 });
 
-test('generator: separate batches for residential and commercial', async () => {
+test('generator: separate lists per customer type; DR-7 mismatch creates nothing and is reported', async () => {
   const w = await setupWorld();
   const t = await today(w);
   const truck = (await db.query(`INSERT INTO trucks (plate_number, zone_id) VALUES ($1,$2) RETURNING id`, ['DLT-' + uniq(), w.zoneA.id])).rows[0].id;
   const sz = await mkSubZone(w, { truckId: truck });
   const res = await mkCust(w, sz);
-  const com = await mkCust(w, sz, { type: 'commercial', shift: 'night' });
+  await mkCust(w, sz, { type: 'commercial', shift: 'night' });
+  const szN = await mkSubZone(w, { colType: { type: 'commercial', shiftName: 'night' } });
+  await mkCust(w, szN);
+  const comN = await mkCust(w, szN, { type: 'commercial', shift: 'night' });
   const r = await run(w, t);
+
   const bs = await autoBatches(sz.route.id, t);
-  assert.equal(bs.length, 2);
-  const [bc, br] = [bs.find((b) => b.customer_type === 'commercial'), bs.find((b) => b.customer_type === 'residential')];
-  assert.equal(bc.commercial_shift, 'night');
-  assert.deepEqual((await rows(br.id)).map((x) => x.customer_id), [res.id]);
-  assert.deepEqual((await rows(bc.id)).map((x) => x.customer_id), [com.id]);
-  // Residential collector: residential list assigned (collector + truck); commercial list left as draft (DR-7).
-  assert.equal(br.status, 'assigned');
-  const resRes = (await db.query(`SELECT tr.resource_type, tr.resource_id FROM tasks t JOIN task_resources tr ON tr.task_id = t.id WHERE t.batch_id = $1 ORDER BY tr.resource_type`, [br.id])).rows;
+  assert.equal(bs.length, 1);
+  assert.equal(bs[0].customer_type, 'residential');
+  assert.equal(bs[0].status, 'assigned');
+  assert.deepEqual((await rows(bs[0].id)).map((x) => x.customer_id), [res.id]);
+  const resRes = (await db.query(`SELECT tr.resource_type, tr.resource_id FROM tasks t JOIN task_resources tr ON tr.task_id = t.id WHERE t.batch_id = $1 ORDER BY tr.resource_type`, [bs[0].id])).rows;
   assert.deepEqual(resRes, [{ resource_type: 'collector', resource_id: sz.col.emp }, { resource_type: 'truck', resource_id: truck }]);
-  assert.equal(bc.status, 'draft');
-  assert.ok(r.skipped.some((s) => s.route_id === sz.route.id && s.reason === 'collector_type_mismatch'));
-  // Supervisor fixes it with a commercial night collector.
-  const night = await mkCollector(w.zoneA, { type: 'commercial', shiftName: 'night' });
-  const re = await api('PUT', `/daily-lists/${bc.id}/assignment`, { token: w.tokens.gudoomiye, body: { collector_user_id: night.uid } });
-  assert.equal(re.status, 200, JSON.stringify(re.body));
-  assert.equal(re.data.status, 'assigned');
+  assert.ok(r.skipped.some((s) => s.route_id === sz.route.id && s.reason === 'collector_type_mismatch' && s.customer_type === 'commercial'));
+
+  const bn = await autoBatches(szN.route.id, t);
+  assert.equal(bn.length, 1);
+  assert.equal(bn[0].customer_type, 'commercial');
+  assert.equal(bn[0].commercial_shift, 'night');
+  assert.deepEqual((await rows(bn[0].id)).map((x) => x.customer_id), [comN.id]);
+
+  const list = await api('GET', '/daily-lists?date=' + t, { token: w.tokens.admin });
+  assert.ok(list.data.mismatches.some((m) => m.route_id === sz.route.id && m.customer_type === 'commercial'));
+  assert.ok(list.data.mismatches.some((m) => m.route_id === szN.route.id && m.customer_type === 'residential'));
+});
+
+test('sub zone: PUT checks the merged collector + work days state', async () => {
+  const w = await setupWorld();
+  const sz = await mkSubZone(w, { collector: false, days: null });
+  const col = await mkCollector(w.zoneA);
+  const bad = await api('PUT', '/routes/' + sz.route.id, { token: w.tokens.admin, body: { collector_user_id: col.uid } });
+  assert.equal(bad.status, 400, JSON.stringify(bad.body));
+  const ok = await api('PUT', '/routes/' + sz.route.id, { token: w.tokens.admin, body: { collector_user_id: col.uid, work_days: ['mon'] } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const keep = await api('PUT', '/routes/' + sz.route.id, { token: w.tokens.admin, body: { name: 'renamed' } });
+  assert.equal(keep.status, 200, JSON.stringify(keep.body));
+});
+
+test('customer: moving district while keeping a group of the old district is refused', async () => {
+  const w = await setupWorld();
+  const sz = await mkSubZone(w, { collector: false });
+  const c = await mkCust(w, sz);
+  const r = await api('PUT', '/customers/' + c.id, { token: w.tokens.admin, body: { zone_id: w.zoneB.id } });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
 });
 
 test('edit endpoints: add / remove / reassign with scoping and roles', async () => {
@@ -321,6 +354,10 @@ test('collector app + tracking gate accept auto batches without a Start', async 
   const taskId = mine.customers[0].task_id;
   const m = await api('PUT', `/batches/${b.id}/customers/${c.id}/status`, { token, body: { status: 'serviced', task_id: taskId } });
   assert.equal(m.status, 200, JSON.stringify(m.body));
+  // Serviced on today's list -> cannot go on a manual batch for today.
+  const manual = await api('POST', '/batches', { token: w.tokens.admin, body: { zone_id: w.zoneA.id, cycle_id: b.cycle_id, start_date: t, customer_ids: [c.id] } });
+  assert.equal(manual.status, 400, JSON.stringify(manual.body));
+  assert.equal(manual.body.error.code, 'already_serviced_today');
 });
 
 test('options: collectors and trucks scoped to the district', async () => {
@@ -333,4 +370,67 @@ test('options: collectors and trucks scoped to the district', async () => {
   assert.ok(!g.data.collectors.some((c) => c.user_id === b.uid));
   const adm = await api('GET', '/daily-lists/options?zone_id=' + w.zoneB.id, { token: w.tokens.admin });
   assert.ok(adm.data.collectors.some((c) => c.user_id === b.uid));
+});
+
+test('late offline mark: 04:30 capture synced after the 05:00 close is accepted and billed; carried copy removed', async () => {
+  const w = await setupWorld();
+  const t = await today(w);
+  const y = shift(t, -1);
+  const sz = await mkSubZone(w, { days: [wd(y)] });
+  const c = await mkCust(w, sz, { billing: 'daily' });
+  await db.query(`UPDATE customers SET billing_type = 'daily', fee = 4 WHERE id = $1`, [c.id]);
+  await run(w, y);
+  const [by] = await autoBatches(sz.route.id, y);
+  const token = await tokenFor(sz.col.username);
+  // Before today's run, yesterday's list is still open but no longer shown in the app.
+  const myBefore = await api('GET', '/collection-sync/my-assignments', { token });
+  assert.ok(!myBefore.data.batches.some((x) => x.id === by.id));
+  const taskId = (await db.query('SELECT id FROM tasks WHERE batch_id = $1', [by.id])).rows[0].id;
+
+  await run(w, t); // the 05:00 close: never visited -> missed 'not visited', carried to today
+  const [bt] = await autoBatches(sz.route.id, t);
+  assert.deepEqual((await rows(bt.id)).map((x) => x.customer_id), [c.id]);
+  const total0 = (await db.query('SELECT total_customers FROM batches WHERE id = $1', [bt.id])).rows[0].total_customers;
+
+  const tz = (await db.query(`SELECT COALESCE((SELECT timezone FROM company_settings WHERE timezone IS NOT NULL AND timezone <> '' ORDER BY id LIMIT 1), 'Africa/Mogadishu') AS tz`)).rows[0].tz;
+  const cap = (await db.query(`SELECT (($1::date + TIME '04:30') AT TIME ZONE $2) AS at`, [t, tz])).rows[0].at;
+  const capturedAt = new Date(Math.min(new Date(cap).getTime(), Date.now() - 60000)).toISOString();
+  const uuid = require('crypto').randomUUID();
+  const rep = await api('POST', '/collection-sync/replay', { token, body: { actions: [{ action_uuid: uuid, action_type: 'batch_customer.status_change', batch_id: by.id, customer_id: c.id, task_id: taskId, status: 'serviced', captured_at: capturedAt }] } });
+  assert.equal(rep.status, 200, JSON.stringify(rep.body));
+  assert.equal(rep.body.results[0].outcome, 'accepted', JSON.stringify(rep.body));
+  const row = (await db.query(`SELECT id, status, to_char(status_at, 'YYYY-MM-DD"T"HH24:MI') AS at FROM batch_customers WHERE batch_id = $1 AND customer_id = $2`, [by.id, c.id])).rows[0];
+  assert.equal(row.status, 'serviced');
+  assert.equal(row.at, new Date(capturedAt).toISOString().slice(0, 16));
+  assert.equal((await rows(bt.id)).length, 0);
+  assert.equal((await db.query('SELECT total_customers FROM batches WHERE id = $1', [bt.id])).rows[0].total_customers, total0 - 1);
+  // A second late mark on the same row is a conflict now.
+  const again = await api('PUT', `/batches/${by.id}/customers/${c.id}/status`, { token: w.tokens.admin, body: { status: 'skipped' } });
+  assert.equal(again.status, 409);
+  // Daily billing picks the visit up on its own (local) day.
+  const localDay = (await db.query(`SELECT to_char(($1::timestamptz AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS d`, [capturedAt, tz])).rows[0].d;
+  await runDaily({ date: localDay });
+  const inv = await db.query('SELECT 1 FROM invoices WHERE batch_customer_id = $1', [row.id]);
+  assert.equal(inv.rows.length, 1);
+});
+
+// Runs a future day (it closes today's lists), so it is the last test in this file.
+test('removing a carried customer from today\'s list ends the carry-over', async () => {
+  const w = await setupWorld();
+  const t = await today(w);
+  const y = shift(t, -1);
+  const sz = await mkSubZone(w, { days: [wd(y)] });
+  const c = await mkCust(w, sz);
+  await run(w, y);
+  await run(w, t);
+  const [bt] = await autoBatches(sz.route.id, t);
+  assert.deepEqual((await rows(bt.id)).map((x) => x.customer_id), [c.id]);
+  const del = await api('DELETE', `/daily-lists/${bt.id}/customers/${c.id}`, { token: w.tokens.gudoomiye });
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  const resolved = (await db.query(`SELECT carry_resolved_at FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id WHERE b.route_id = $1 AND b.start_date = $2::date AND bc.customer_id = $3`, [sz.route.id, y, c.id])).rows[0];
+  assert.ok(resolved.carry_resolved_at);
+  const tomorrow = shift(t, 1);
+  await runForDate({ date: tomorrow });
+  const any = await db.query(`SELECT 1 FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id WHERE b.start_date = $1::date AND bc.customer_id = $2`, [tomorrow, c.id]);
+  assert.equal(any.rows.length, 0);
 });

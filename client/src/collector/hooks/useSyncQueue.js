@@ -129,6 +129,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
         note: e.note,
         lat: e.lat,
         lng: e.lng,
+        captured_at: e.captured_at,
       }));
       const res = await apiClient.post('/v2/collection-sync/replay', { actions });
       for (const result of res.results) {

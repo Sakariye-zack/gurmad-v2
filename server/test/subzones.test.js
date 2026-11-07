@@ -7,7 +7,7 @@ async function mkRoute(w) {
   const n = ++seq;
   const g = await api('POST', '/groups', { token: w.tokens.admin, body: { zone_id: w.zoneA.id, code: 'SZG' + n } });
   assert.equal(g.status, 201, JSON.stringify(g.body));
-  const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'SZR' + n } });
+  const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'SZR' + n, work_days: ['sat'] } });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return { group: g.data, route: r.data };
 }
@@ -118,7 +118,7 @@ test('collector: 11th sub zone rejected', async () => {
   const eleventh = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAP11', collector_user_id: cid, work_days: ['sat'] } });
   assert.equal(eleventh.status, 400, JSON.stringify(eleventh.body));
   assert.match(eleventh.body.error.message, /at most 10/);
-  const free = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAPFREE' } });
+  const free = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAPFREE', work_days: ['sat'] } });
   const put = await api('PUT', '/routes/' + free.data.id, { token: w.tokens.admin, body: { collector_user_id: cid } });
   assert.equal(put.status, 400, JSON.stringify(put.body));
   const first = (await db.query(`SELECT id FROM routes WHERE group_id=$1 AND code='CAP1'`, [g.data.id])).rows[0].id;

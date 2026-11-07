@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { runForDate, todayLocal, shiftDate } = require('../lib/dailyLists');
+const { runForDate, todayLocal } = require('../lib/dailyLists');
 const { validateDr7ForCollector, validateResourceEligibility } = require('../lib/collectionValidation');
 const { resolveRecipientForEmployee, createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
 
@@ -94,10 +94,19 @@ router.get('/', requireRole(...VIEW_ROLES), async (req, res) => {
         truck: firstTruck, default_truck_id: row.default_truck_id, batches, counts, not_generated: notGenerated,
       };
     });
+    // DR-7 mismatches (no list created) from the latest successful run of that day.
+    const dayRun = (await pool.query(
+      `SELECT skipped FROM daily_list_runs WHERE run_date = $1::date AND error IS NULL ORDER BY id DESC LIMIT 1`, [date])).rows[0];
+    const visible = new Map(rows.map((r) => [r.route_id, r]));
+    const mismatches = (dayRun?.skipped || [])
+      .filter((x) => x.reason === 'collector_type_mismatch' && (zoneId === null || visible.has(x.route_id)))
+      .map((x) => ({ route_id: x.route_id, route: x.route, path: visible.get(x.route_id)?.path || x.route, customer_type: x.customer_type,
+        commercial_shift: x.commercial_shift, customers: x.customers || 0, collector: visible.get(x.route_id)?.default_collector_name || null }));
+    for (const l of lists) l.mismatches = mismatches.filter((m) => m.route_id === l.route_id);
     const lastRun = (await pool.query(
       `SELECT id, to_char(run_date, 'YYYY-MM-DD') AS run_date, started_at, finished_at, created_batches, customers, closed_batches, skipped, error, triggered_by
        FROM daily_list_runs ORDER BY id DESC LIMIT 1`)).rows[0] || null;
-    res.json({ data: { date, today: local.date, weekday, lists, last_run: lastRun } });
+    res.json({ data: { date, today: local.date, weekday, lists, mismatches, last_run: lastRun } });
   } catch (e) {
     err(res, 500, 'INTERNAL', 'Failed to load daily lists.');
   }
@@ -159,16 +168,15 @@ router.get('/options', requireRole(...VIEW_ROLES), async (req, res) => {
   }
 });
 
-// POST /api/v2/daily-lists/run {date?} — admin. Today by default; the last
-// 7 days are allowed (catch-up), never a future day (closing would end
-// today's lists early).
+// POST /api/v2/daily-lists/run {date?} — admin, TODAY only (a past day would
+// create stale lists that are closed and carried at once; a future day would
+// close today's lists early).
 router.post('/run', requireRole('admin'), async (req, res) => {
   try {
     const local = await todayLocal();
     const date = req.body?.date || local.date;
     if (!DATE_RE.test(date)) return err(res, 400, 'VALIDATION', 'date must be YYYY-MM-DD.');
-    if (date > local.date) return err(res, 400, 'VALIDATION', 'A daily list cannot be generated for a future day.');
-    if (date < shiftDate(local.date, -7)) return err(res, 400, 'VALIDATION', 'Only the last 7 days can be generated.');
+    if (date !== local.date) return err(res, 400, 'VALIDATION', 'Daily lists can only be generated for today.');
     const result = await runForDate({ date, triggeredBy: req.user.id });
     res.json({ data: result });
   } catch (e) {
@@ -247,6 +255,12 @@ router.delete('/:batchId/customers/:customerId', requireRole(...WRITE_ROLES), as
       if (bc.status !== 'pending') { await client.query('ROLLBACK'); return err(res, 409, 'CONFLICT', `This customer is already ${bc.status}.`); }
       await client.query('DELETE FROM batch_customers WHERE id = $1', [bc.id]);
       await client.query('UPDATE batches SET total_customers = GREATEST(total_customers - 1, 0), updated_at = NOW() WHERE id = $1', [b.id]);
+      // Removing a customer ends their carry-over: earlier auto-list misses
+      // are marked resolved so the next run does not put them back.
+      await client.query(
+        `UPDATE batch_customers x SET carry_resolved_at = NOW() FROM batches pb
+         WHERE x.batch_id = pb.id AND x.customer_id = $1 AND pb.auto_generated AND pb.start_date < $2::date
+           AND x.status = 'missed' AND x.carry_resolved_at IS NULL`, [customerId, b.start_date]);
       await client.query('COMMIT');
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'daily_list.remove_customer', entityType: 'batch_customer', entityId: bc.id, before: bc, after: null });
       res.json({ data: { success: true } });

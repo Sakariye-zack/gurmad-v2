@@ -2177,6 +2177,9 @@ async function runFleetUpgradeMigrations() {
   await pool.query(`ALTER TABLE collection_cycles ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS carried_over_from DATE;`);
+  // Set on an auto-list 'missed' row whose carry-over was ended by hand
+  // (customer removed from a later list, or resolved by a late offline mark).
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS carry_resolved_at TIMESTAMP;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_batches_auto_start ON batches(start_date) WHERE auto_generated;`);
   // Hard idempotency guards. Never fail boot on live data: skip with a warning
   // if duplicates already exist (the generator's own existence checks still hold).

@@ -647,6 +647,13 @@ router.put('/:id', authenticateToken, requireRole('admin', 'gudoomiye'), async (
     const effectiveGroupId = data.group_id !== undefined ? data.group_id : current.group_id;
     const groupRouteError = await validateGroupRoute(data, effectiveZoneId, effectiveGroupId);
     if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+    // District moved while keeping the current group: that group must belong to the new district.
+    if (data.zone_id !== undefined && data.group_id === undefined && current.group_id && data.zone_id !== current.zone_id) {
+      const g = await pool.query('SELECT zone_id FROM groups WHERE id = $1', [current.group_id]);
+      if (g.rows[0] && g.rows[0].zone_id !== data.zone_id) {
+        return res.status(400).json({ error: { message: 'The customer\'s current group does not belong to the new district — choose a group in that district (or none).', code: 'VALIDATION' } });
+      }
+    }
 
     // Door change (differs from current) -> pending request; other fields still apply.
     let numberRequest = null;

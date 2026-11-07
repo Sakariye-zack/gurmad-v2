@@ -92,10 +92,10 @@ async function generate(client, date, triggeredBy) {
 
   const custs = (await client.query(
     `SELECT c.id, c.customer_number, c.name, c.customer_type, COALESCE(c.commercial_shift, 'day') AS shift, c.route_id, c.zone_id, c.work_days,
-            lm.status AS last_status, lm.auto_generated AS last_auto, to_char(lm.carried_from, 'YYYY-MM-DD') AS carried_from
+            lm.status AS last_status, lm.auto_generated AS last_auto, lm.carry_resolved_at AS last_resolved, to_char(lm.carried_from, 'YYYY-MM-DD') AS carried_from
      FROM customers c
      LEFT JOIN LATERAL (
-       SELECT bc.status, b.auto_generated, COALESCE(bc.carried_over_from, b.start_date) AS carried_from
+       SELECT bc.status, b.auto_generated, bc.carry_resolved_at, COALESCE(bc.carried_over_from, b.start_date) AS carried_from
        FROM batch_customers bc JOIN batches b ON b.id = bc.batch_id
        WHERE bc.customer_id = c.id AND b.status <> 'cancelled' AND b.start_date < $1::date
        ORDER BY b.start_date DESC, bc.id DESC LIMIT 1
@@ -123,7 +123,7 @@ async function generate(client, date, triggeredBy) {
     for (const c of list) {
       const override = daysArray(c.work_days);
       const scheduled = (override.length ? override : own).includes(weekday);
-      const carried = c.last_status === 'missed' && c.last_auto === true;
+      const carried = c.last_status === 'missed' && c.last_auto === true && !c.last_resolved;
       if (!scheduled && !carried) continue;
       picked.push({ ...c, carried_over_from: carried ? c.carried_from : null });
     }
@@ -140,46 +140,51 @@ async function generate(client, date, triggeredBy) {
     }
     for (const [key, members] of groups) {
       const [customerType, shift = null] = key.split(':');
-      const exists = await client.query(
-        `SELECT id FROM batches WHERE auto_generated AND route_id = $1 AND start_date = $2::date AND customer_type = $3 AND COALESCE(commercial_shift, '-') = COALESCE($4::varchar, '-') LIMIT 1`,
-        [route.id, date, customerType, shift]);
-      if (exists.rows[0]) continue; // already generated (possibly edited / cancelled) — never touched again
-      const free = [];
-      for (const c of members) {
-        if (busy.has(c.id)) skipped.push({ route_id: route.id, customer_id: c.id, customer_number: c.customer_number, name: c.name, reason: 'already_on_batch' });
-        else free.push(c);
-      }
-      if (free.length === 0) continue;
-
-      const batchShape = { customer_type: customerType, commercial_shift: shift };
-      const dr7 = await validateDr7ForCollector(route.employee_id, batchShape);
-      const truckOk = route.truck_id ? (await validateResourceEligibility('truck', route.truck_id)).ok : false;
-      if (!dr7.ok) skipped.push({ route_id: route.id, route: route.name || route.code, reason: 'collector_type_mismatch', customer_type: customerType, commercial_shift: shift, message: dr7.error });
-
+      // Everything for one Sub Zone/type runs inside a savepoint: an error
+      // here is reported and skipped, never aborting the whole run.
       await client.query('SAVEPOINT daily_batch');
       try {
+        const exists = await client.query(
+          `SELECT id FROM batches WHERE auto_generated AND route_id = $1 AND start_date = $2::date AND customer_type = $3 AND COALESCE(commercial_shift, '-') = COALESCE($4::varchar, '-') LIMIT 1`,
+          [route.id, date, customerType, shift]);
+        if (exists.rows[0]) { await client.query('RELEASE SAVEPOINT daily_batch'); continue; } // already generated (possibly edited / cancelled)
+        const free = [];
+        for (const c of members) {
+          if (busy.has(c.id)) skipped.push({ route_id: route.id, customer_id: c.id, customer_number: c.customer_number, name: c.name, reason: 'already_on_batch' });
+          else free.push(c);
+        }
+        if (free.length === 0) { await client.query('RELEASE SAVEPOINT daily_batch'); continue; }
+
+        // DR-7: the Sub Zone's collector must match the list's type/shift.
+        // A mismatch creates nothing (supervisor fixes the Sub Zone).
+        const dr7 = await validateDr7ForCollector(route.employee_id, { customer_type: customerType, commercial_shift: shift });
+        if (!dr7.ok) {
+          skipped.push({ route_id: route.id, route: route.name || route.code, reason: 'collector_type_mismatch', customer_type: customerType, commercial_shift: shift, customers: free.length, message: dr7.error });
+          await client.query('RELEASE SAVEPOINT daily_batch');
+          continue;
+        }
+        const truckOk = route.truck_id ? (await validateResourceEligibility('truck', route.truck_id)).ok : false;
+
         const cycleId = await ensureAutoCycle(client, route.zone_id, date, triggeredBy);
         const { batchNumber, batchCode } = await generateBatchCode(client, route.zone_id, cycleId);
-        const status = dr7.ok ? 'assigned' : 'draft';
         const b = (await client.query(
           `INSERT INTO batches (batch_code, zone_id, cycle_id, batch_number, customer_type, commercial_shift, start_date, end_date, total_customers, status,
              created_by, notes, group_id, route_id, auto_generated, assigned_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7::date,$7::date,$8,$9,$10,$11,$12,$13,TRUE, CASE WHEN $9::varchar = 'assigned' THEN NOW() END) RETURNING *`,
-          [batchCode, route.zone_id, cycleId, batchNumber, customerType, shift, date, free.length, status, triggeredBy,
+           VALUES ($1,$2,$3,$4,$5,$6,$7::date,$7::date,$8,'assigned',$9,$10,$11,$12,TRUE,NOW()) RETURNING *`,
+          [batchCode, route.zone_id, cycleId, batchNumber, customerType, shift, date, free.length, triggeredBy,
             `Today's list ${date} (auto-generated)`, route.group_id, route.id])).rows[0];
         for (const c of free) {
           await client.query(`INSERT INTO batch_customers (batch_id, customer_id, status, carried_over_from) VALUES ($1, $2, 'pending', $3::date)`, [b.id, c.id, c.carried_over_from]);
-          busy.add(c.id);
         }
         const task = (await client.query(`INSERT INTO tasks (batch_id, status, scheduled_at) VALUES ($1, 'pending', $2::date) RETURNING id`, [b.id, date])).rows[0];
-        const resources = [];
-        if (dr7.ok) resources.push(['collector', route.employee_id]);
+        const resources = [['collector', route.employee_id]];
         if (truckOk) resources.push(['truck', route.truck_id]);
         for (const [type, rid] of resources) {
           await client.query(`INSERT INTO task_resources (task_id, resource_type, resource_id, role_note) VALUES ($1,$2,$3,'daily list')`, [task.id, type, rid]);
           await client.query(`INSERT INTO task_resource_history (task_id, resource_type, resource_id, action, performed_by) VALUES ($1,$2,$3,'assigned',$4)`, [task.id, type, rid, triggeredBy]);
         }
         await client.query('RELEASE SAVEPOINT daily_batch');
+        for (const c of free) busy.add(c.id);
         created.push(b);
         customersAdded += free.length;
       } catch (err) {

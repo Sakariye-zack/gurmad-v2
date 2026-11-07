@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, MapPin, LocateFixed } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCustomer, useUpdateCustomer, useCheckDuplicate, useZonesList } from '../../hooks/useCustomers.js';
-import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
+import { useGroups, useGroup, useRoutesForGroup } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
@@ -76,7 +76,11 @@ function CustomerFormModalContent({ onClose, customer }) {
   // Group-first: every active group in scope is listed (labelled with its
   // district); choosing one fixes the District.
   const { data: groupsData } = useGroups({ status: 'active', limit: 200 });
-  const groups = groupsData?.data || [];
+  // The customer's current group may be inactive or beyond the first 200: fetch it so the select still shows it.
+  const listed = groupsData?.data || [];
+  const missingGroupId = form.group_id && groupsData && !listed.some((g) => String(g.id) === String(form.group_id)) ? form.group_id : undefined;
+  const { data: oneGroup } = useGroup(missingGroupId);
+  const groups = oneGroup?.data && missingGroupId ? [...listed, oneGroup.data] : listed;
   const { data: routesData } = useRoutesForGroup(form.group_id || undefined);
   const { data: gzData } = useGroupZones(form.group_id || undefined);
   const groupZones = form.group_id ? (gzData?.data || []).filter((z) => z.status === 'active') : [];

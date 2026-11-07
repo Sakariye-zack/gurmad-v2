@@ -41,6 +41,7 @@ export default function TodayListsPage() {
       />
 
       <RunStatusCard info={info} date={effectiveDate} />
+      <MismatchPanel items={info?.mismatches || []} />
       <WarningsPanel />
 
       {isLoading && <LoadingState />}
@@ -92,6 +93,28 @@ function RunStatusCard({ info, date }) {
         </RoleGate>
       )}
     </Card>
+  );
+}
+
+// DR-7: the Sub Zone's collector cannot serve this customer type, so no list
+// was created for those customers — shown first and in red until fixed.
+function MismatchPanel({ items }) {
+  const { t } = useI18n();
+  if (items.length === 0) return null;
+  return (
+    <div role="alert" style={{ padding: '10px 14px', marginBottom: '14px', borderRadius: 'var(--radius-md)', background: 'var(--danger-bg)', border: '1px solid var(--danger)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '13px' }}>
+        <AlertTriangle size={15} color="var(--danger)" style={{ flexShrink: 0 }} /> {t('daily.mismatchTitle', undefined, { n: items.length })}
+      </div>
+      <p style={{ margin: '4px 0 6px 23px', fontSize: '12px', color: 'var(--text-muted)' }}>{t('daily.mismatchHint')}</p>
+      <ul style={{ margin: '0 0 0 23px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {items.map((m) => (
+          <li key={`${m.route_id}-${m.customer_type}-${m.commercial_shift || ''}`} style={{ fontSize: '12px', overflowWrap: 'anywhere' }}>
+            <strong>{m.path}</strong> — {t('daily.mismatchLine', undefined, { type: batchLabel(t, m), n: m.customers, collector: m.collector || '—' })}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -170,7 +193,12 @@ function SubZoneCard({ list, canEdit }) {
         <span style={metaStyle}><Truck size={13} /> {list.truck?.plate_number || t('daily.none')}</span>
       </div>
 
-      {list.not_generated && (
+      {(list.mismatches || []).map((m) => (
+        <p key={`${m.customer_type}-${m.commercial_shift || ''}`} style={{ margin: '8px 0 0', fontSize: '12px', color: 'var(--danger)', fontWeight: 600 }}>
+          {t('daily.mismatchLine', undefined, { type: batchLabel(t, m), n: m.customers, collector: m.collector || '—' })}
+        </p>
+      ))}
+      {list.not_generated && !(list.mismatches || []).length && (
         <p style={{ margin: '8px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{t('daily.notGenerated.' + list.not_generated)}</p>
       )}
 
