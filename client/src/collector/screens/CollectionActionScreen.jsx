@@ -116,7 +116,7 @@ export default function CollectionActionScreen() {
       if (!navigator.geolocation) return resolve({ lat: null, lng: null });
       const timeout = setTimeout(() => resolve({ lat: null, lng: null }), 5000); // §16 — bounded timeout, never blocks
       navigator.geolocation.getCurrentPosition(
-        (pos) => { clearTimeout(timeout); resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }); },
+        (pos) => { clearTimeout(timeout); resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }); },
         () => { clearTimeout(timeout); resolve({ lat: null, lng: null }); }, // denied/unavailable -> null, non-blocking
         { timeout: 5000 }
       );
@@ -128,8 +128,12 @@ export default function CollectionActionScreen() {
   const { pos, error: gpsError } = useLivePosition(!!customer);
   const distance = located && pos ? distanceMeters(pos, customer) : null;
   let servicedBlock = null; // translated reason Serviced is disabled, or null
-  if (located && !pos) servicedBlock = gpsError ? t('collector.proof.noGps') : t('collector.proof.locating');
+  const gpsWaitMsg = gpsError === 'timeout' ? t('collector.proof.stillSearching')
+    : gpsError ? t('collector.proof.noGps') : t('collector.proof.locating');
+  if (located && !pos) servicedBlock = gpsWaitMsg;
   else if (located && distance > proof.radius_m) servicedBlock = t('collector.proof.tooFar', undefined, { m: distance, r: proof.radius_m });
+  // Weak fix: warn, but do not block (the server only checks the distance).
+  const weakGps = located && pos && pos.accuracy != null && pos.accuracy > proof.radius_m;
   useEffect(() => {
     if (servicedBlock && status === 'serviced') setStatus(null);
   }, [servicedBlock, status]);
@@ -156,10 +160,10 @@ export default function CollectionActionScreen() {
     setSubmitting(true);
     try {
       // §16 — automatic, at submission time; the live fix when we have one.
-      const { lat, lng } = pos ? { lat: pos.lat, lng: pos.lng } : await captureGps();
+      const { lat, lng, accuracy } = pos ? { lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy } : await captureGps();
       await captureAction({
         batchId: Number(batchId), customerId: Number(customerId), taskId: customer.task_id,
-        status, reason: reason.trim() || null, note: note.trim() || null, lat, lng,
+        status, reason: reason.trim() || null, note: note.trim() || null, lat, lng, accuracy: accuracy ?? null,
         photoBase64: status === 'serviced' ? photo?.base64 : null,
         photoMime: status === 'serviced' ? photo?.mime : null,
       });
@@ -184,7 +188,7 @@ export default function CollectionActionScreen() {
         <MapPin size={15} style={{ flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, fontWeight: 700 }}>
           {!located ? t('collector.noHouseLocation')
-            : distance === null ? (gpsError ? t('collector.proof.noGps') : t('collector.locating'))
+            : distance === null ? gpsWaitMsg
             : t('collector.proof.distance', undefined, { m: formatMeters(distance), r: proof.radius_m })}
         </span>
         {located && (
@@ -214,6 +218,9 @@ export default function CollectionActionScreen() {
           );
         })}
       </div>
+      {weakGps && !servicedBlock && (
+        <div role="status" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--warning)', margin: '-8px 0 14px' }}>{t('collector.proof.weakGps', undefined, { m: Math.round(pos.accuracy) })}</div>
+      )}
       {servicedBlock && (
         <div role="status" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--danger)', margin: '-8px 0 14px' }}>{servicedBlock}</div>
       )}

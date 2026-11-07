@@ -86,5 +86,7 @@ export const COLLECTOR = {
   'collector.proof.photoRequired': { en: 'A photo is required to mark Serviced.', so: 'Sawir ayaa loo baahan yahay si La qabtay loo calaamadiyo.' },
   'collector.takePhotoRequired': { en: 'Take Photo (required)', so: 'Qaad Sawir (waa khasab)' },
   'collector.outcome.geofence': { en: 'Too far from the house — visit not recorded', so: 'Guriga waad ka fogayd — booqashada lama diiwaangelin' },
+  'collector.proof.stillSearching': { en: 'Still searching for GPS… go outside or wait a moment.', so: 'GPS-ka weli waa la raadinayaa… bannaanka u bax ama in yar sug.' },
+  'collector.proof.weakGps': { en: 'GPS is weak (±{m} m). The distance may be off.', so: 'GPS-ku waa daciif (±{m} m). Masaafadu way khaldami kartaa.' },
   'collector.outcome.noGps': { en: 'No GPS — visit not recorded. Turn on location and mark again', so: 'GPS ma jirin — booqashada lama diiwaangelin. Shid goobta oo mar kale calaamadi' },
 };

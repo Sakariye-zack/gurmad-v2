@@ -404,11 +404,17 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
   const openTasks = tasks.filter((t) => t.status !== 'completed');
   const defaultTaskId = openTasks[0]?.id ?? tasks[0]?.id ?? null;
 
-  async function handleMark(customerId, status, reason) {
+  // Office Serviced on a customer with a location has no phone proof: it is
+  // an override and needs a reason (the server flags and audits it).
+  const [overrideTarget, setOverrideTarget] = useState(null);
+  const [overrideReason, setOverrideReason] = useState('');
+  async function handleMark(customerId, status, reason, overrideReasonText) {
     try {
-      await markStatus.mutateAsync({ customerId, status, task_id: defaultTaskId, reason });
+      await markStatus.mutateAsync({ customerId, status, task_id: defaultTaskId, reason, ...(overrideReasonText ? { override_reason: overrideReasonText } : {}) });
       toast.success(t('coll.m.marked', undefined, { status: t('status.' + status, status) }));
       setMissedTarget(null);
+      setOverrideTarget(null);
+      setOverrideReason('');
     } catch (err) {
       toast.error(err.message || t('common.somethingWrong'));
     }
@@ -442,7 +448,7 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
                   {canMarkStatus && !defaultTaskId && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('coll.add_a_task_first')}</span>}
                   {canMarkStatus && defaultTaskId && (
                     <>
-                      <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'serviced')} disabled={markStatus.isPending}>{t('status.serviced')}</Button>
+                      <Button variant="secondary" onClick={() => (c.has_location && currentUserRole !== 'collector' ? setOverrideTarget(c) : handleMark(c.customer_id, 'serviced'))} disabled={markStatus.isPending}>{t('status.serviced')}</Button>
                       <Button variant="secondary" onClick={() => setMissedTarget(c)} disabled={markStatus.isPending}>{t('status.missed')}</Button>
                       <Button variant="secondary" onClick={() => handleMark(c.customer_id, 'skipped')} disabled={markStatus.isPending}>{t('coll.skip')}</Button>
                     </>
@@ -456,6 +462,21 @@ function CustomerStatusTable({ batchId, tasks, currentUserRole }) {
           </tr>
         )}
       />
+      <Modal
+        open={!!overrideTarget}
+        onClose={() => { setOverrideTarget(null); setOverrideReason(''); }}
+        title={t('daily.overrideTitle')}
+        footer={<>
+          <Button variant="secondary" onClick={() => { setOverrideTarget(null); setOverrideReason(''); }}>{t('common.cancel')}</Button>
+          <Button onClick={() => handleMark(overrideTarget.customer_id, 'serviced', undefined, overrideReason.trim())} disabled={markStatus.isPending || !overrideReason.trim()}>{t('daily.overrideConfirm')}</Button>
+        </>}
+      >
+        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 10px' }}>{t('daily.overrideHint')}</p>
+        <label style={fieldStyle}>
+          <span style={labelStyle}>{t('daily.overrideReason')}</span>
+          <textarea value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} maxLength={500} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+        </label>
+      </Modal>
       <Modal
         open={!!missedTarget}
         onClose={() => setMissedTarget(null)}

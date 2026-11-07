@@ -315,3 +315,147 @@ test('route order: reorder and move endpoints; added customer goes last; my-assi
   assert.equal(clear.status, 200);
   assert.equal(clear.data.start_lat, null);
 });
+
+// ---------- Fix round ----------
+const { backfillVisitOrder } = require('../lib/dailyLists');
+
+test('office serviced on a located customer is an override: reason required, flagged, audited', async () => {
+  const w = await setupWorld();
+  const { custs: [c, c2, c3], b, token, taskId } = await todaysList(w, [HOUSE, HOUSE, HOUSE]);
+  const url = (x) => `/batches/${b.id}/customers/${x.id}/status`;
+  const noReason = await api('PUT', url(c), { token: w.tokens.admin, body: { status: 'serviced' } });
+  assert.equal(noReason.status, 400, JSON.stringify(noReason.body));
+  assert.equal(noReason.body.error.code, 'OVERRIDE_REASON_REQUIRED');
+  const ok = await api('PUT', url(c), { token: w.tokens.admin, body: { status: 'serviced', override_reason: 'confirmed by phone call' } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const row = await bcRow(b.id, c.id);
+  assert.equal(row.proof_flag, 'override');
+  assert.equal(row.proof_override_reason, 'confirmed by phone call');
+  const adminId = (await db.query(`SELECT id FROM v2_users WHERE username = 't_admin'`)).rows[0].id;
+  assert.equal(row.proof_override_by, adminId);
+  assert.equal((await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'batch_customer.override_serviced' AND entity_id = $1`, [row.id])).rows.length, 1);
+  // Office with GPS inside the radius: a normal mark.
+  const inside = await api('PUT', url(c2), { token: w.tokens.admin, body: { status: 'serviced', ...near(HOUSE, 0.0001), accuracy: 6 } });
+  assert.equal(inside.status, 200, JSON.stringify(inside.body));
+  assert.equal((await bcRow(b.id, c2.id)).proof_flag, null);
+  // A collector can never turn a geofence rejection into an override.
+  const col = await mark(token, b, c3, taskId, { status: 'serviced', override_reason: 'trust me' });
+  assert.equal(col.status, 400);
+  assert.equal(col.body.error.code, 'VALIDATION');
+  // The collector does not see who overrode or why.
+  const view = await api('GET', `/batches/${b.id}/customers`, { token });
+  assert.equal(view.status, 200, JSON.stringify(view.body));
+  const seen = view.data.find((r) => r.customer_id === c.id);
+  assert.equal(seen.proof_flag, 'override');
+  assert.ok(!('proof_override_reason' in seen) && !('proof_override_by' in seen));
+  const adminView = await api('GET', `/batches/${b.id}/customers`, { token: w.tokens.admin });
+  assert.equal(adminView.data.find((r) => r.customer_id === c.id).proof_override_reason, 'confirmed by phone call');
+});
+
+test('legacy offline marks: no GPS, captured before the rollout -> accepted as legacy_no_gps; otherwise strict', async () => {
+  const w = await setupWorld();
+  await api('PUT', '/settings/company', { token: w.tokens.admin, body: { proof_radius_m: 50 } });
+  const orig = (await db.query('SELECT id, proof_enforced_from FROM company_settings ORDER BY id LIMIT 1')).rows[0];
+  assert.ok(orig && orig.proof_enforced_from, 'rollout time set');
+  const { custs: [a, b2, c3], b, token, taskId } = await todaysList(w, [HOUSE, HOUSE, HOUSE]);
+  try {
+    await db.query(`UPDATE company_settings SET proof_enforced_from = NOW() - INTERVAL '2 minutes' WHERE id = $1`, [orig.id]);
+    const before = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+    const legacy = await replay(token, { batch_id: b.id, customer_id: a.id, task_id: taskId, status: 'serviced', captured_at: before });
+    assert.equal(legacy.body.results[0].outcome, 'accepted', JSON.stringify(legacy.body));
+    assert.equal((await bcRow(b.id, a.id)).proof_flag, 'legacy_no_gps');
+    const after = await replay(token, { batch_id: b.id, customer_id: b2.id, task_id: taskId, status: 'serviced', captured_at: new Date().toISOString() });
+    assert.equal(after.body.results[0].outcome, 'rejected_invalid_state');
+    const noCap = await replay(token, { batch_id: b.id, customer_id: c3.id, task_id: taskId, status: 'serviced' });
+    assert.equal(noCap.body.results[0].outcome, 'rejected_invalid_state');
+  } finally {
+    await db.query('UPDATE company_settings SET proof_enforced_from = $2 WHERE id = $1', [orig.id, orig.proof_enforced_from]);
+  }
+});
+
+test('suspect exact point and accuracy stored (online and replay)', async () => {
+  const w = await setupWorld();
+  const { custs: [a, b2, c3], b, token, taskId } = await todaysList(w, [HOUSE, HOUSE, HOUSE]);
+  const exact = await mark(token, b, a, taskId, { status: 'serviced', lat: HOUSE.lat, lng: HOUSE.lng });
+  assert.equal(exact.status, 200, JSON.stringify(exact.body));
+  assert.equal((await bcRow(b.id, a.id)).proof_flag, 'suspect_exact');
+  const withAcc = await mark(token, b, b2, taskId, { status: 'serviced', lat: HOUSE.lat, lng: HOUSE.lng, accuracy: 7.6 });
+  assert.equal(withAcc.status, 200);
+  const r2 = await bcRow(b.id, b2.id);
+  assert.equal(r2.proof_flag, null);
+  assert.equal(r2.proof_accuracy_m, 8);
+  const rp = await replay(token, { batch_id: b.id, customer_id: c3.id, task_id: taskId, status: 'serviced', ...near(HOUSE, 0.0001), accuracy: 12 });
+  assert.equal(rp.body.results[0].outcome, 'accepted');
+  assert.equal((await bcRow(b.id, c3.id)).proof_accuracy_m, 12);
+});
+
+test('override only on the list of today', async () => {
+  const w = await setupWorld();
+  const { t, custs: [c], b } = await todaysList(w, [HOUSE]);
+  await db.query('UPDATE batches SET start_date = $2::date, end_date = $2::date WHERE id = $1', [b.id, shift(t, 1)]);
+  const r = await api('POST', `/daily-lists/${b.id}/customers/${c.id}/override`, { token: w.tokens.admin, body: { reason: 'early' } });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal((await bcRow(b.id, c.id)).status, 'pending');
+});
+
+test('visit order backfill: lists without any order get one (move, boot backfill), id tiebreak', async () => {
+  const w = await setupWorld();
+  const start = { lat: 9.5000, lng: 44.0000 };
+  const one = await todaysList(w, [{ lat: 9.5300, lng: 44.0 }, { lat: 9.5100, lng: 44.0 }], { start });
+  const [f1, n1] = one.custs;
+  await db.query('UPDATE batch_customers SET visit_order = NULL WHERE batch_id = $1', [one.b.id]);
+  const mv = await api('PUT', `/daily-lists/${one.b.id}/customers/${f1.id}/order`, { token: w.tokens.admin, body: { direction: 'up' } });
+  assert.equal(mv.status, 200, JSON.stringify(mv.body));
+  // Backfilled (route start -> n1, f1) and then f1 moved up.
+  assert.deepEqual(await orderOf(one.b.id), [f1.id, n1.id]);
+
+  const two = await todaysList(w, [{ lat: 9.5300, lng: 44.0 }, { lat: 9.5100, lng: 44.0 }], { start });
+  await db.query('UPDATE batch_customers SET visit_order = NULL WHERE batch_id = $1', [two.b.id]);
+  const n = await backfillVisitOrder();
+  assert.ok(n >= 1);
+  assert.deepEqual(await orderOf(two.b.id), [two.custs[1].id, two.custs[0].id]);
+  // Ordering tiebreak is batch_customers.id everywhere.
+  await db.query('UPDATE batch_customers SET visit_order = NULL WHERE batch_id = $1', [two.b.id]);
+  const web = await api('GET', `/batches/${two.b.id}/customers`, { token: w.tokens.admin });
+  const ids = (await db.query('SELECT customer_id FROM batch_customers WHERE batch_id = $1 ORDER BY id', [two.b.id])).rows.map((r) => r.customer_id);
+  assert.deepEqual(web.data.map((r) => r.customer_id), ids);
+});
+
+test('re-order keeps finished rows first; pending from fresh collector location, else last finished house', async () => {
+  const w = await setupWorld();
+  const start = { lat: 9.5000, lng: 44.0000 };
+  const L = (lat) => ({ lat, lng: 44.0 });
+  const { sz, custs, b, token, taskId } = await todaysList(w, [L(9.5100), L(9.5200), L(9.5300), L(9.5400)], { start });
+  const [c1, c2, c3, c4] = custs;
+  assert.deepEqual(await orderOf(b.id), [c1.id, c2.id, c3.id, c4.id]);
+  // c3 visited first (out of order).
+  const m = await mark(token, b, c3, taskId, { status: 'serviced', ...near(L(9.5300), 0.0001) });
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+  // Fresh collector location at the far end -> c4 first among pending.
+  await db.query(`INSERT INTO collector_locations (employee_id, lat, lng, recorded_at) VALUES ($1, 9.55, 44.0, CURRENT_TIMESTAMP)
+    ON CONFLICT (employee_id) DO UPDATE SET lat = 9.55, lng = 44.0, recorded_at = CURRENT_TIMESTAMP`, [sz.col.emp]);
+  const r1 = await api('POST', `/daily-lists/${b.id}/reorder`, { token: w.tokens.admin });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.deepEqual(await orderOf(b.id), [c3.id, c4.id, c2.id, c1.id]);
+  // Stale collector location -> start from the last finished house (c3, 9.53).
+  await db.query(`UPDATE collector_locations SET recorded_at = CURRENT_TIMESTAMP - INTERVAL '2 hours' WHERE employee_id = $1`, [sz.col.emp]);
+  await db.query('UPDATE customers SET lat = 9.5000 WHERE id = $1', [c4.id]); // c4 now at the far bottom
+  const r2 = await api('POST', `/daily-lists/${b.id}/reorder`, { token: w.tokens.admin });
+  assert.equal(r2.status, 200);
+  assert.deepEqual(await orderOf(b.id), [c3.id, c2.id, c1.id, c4.id]);
+});
+
+test('generation ignores a stale collector location', async () => {
+  const w = await setupWorld();
+  const t = await today(w);
+  const sz = await mkSubZone(w);
+  const x = await mkCust(w, sz, { lat: 9.5300, lng: 44.0 });
+  const y = await mkCust(w, sz, { lat: 9.5100, lng: 44.0 });
+  const z = await mkCust(w, sz, { lat: 9.5250, lng: 44.0 });
+  await db.query(`INSERT INTO collector_locations (employee_id, lat, lng, recorded_at) VALUES ($1, 9.50, 44.0, CURRENT_TIMESTAMP - INTERVAL '2 hours')
+    ON CONFLICT (employee_id) DO UPDATE SET lat = 9.50, lng = 44.0, recorded_at = CURRENT_TIMESTAMP - INTERVAL '2 hours'`, [sz.col.emp]);
+  await run(w, t);
+  const b = await batchFor(sz.route.id, t);
+  // Stale -> lowest-id start (x), not the collector point near y.
+  assert.deepEqual(await orderOf(b.id), [x.id, z.id, y.id]);
+});

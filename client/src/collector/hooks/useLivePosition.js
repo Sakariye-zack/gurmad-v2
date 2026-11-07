@@ -3,21 +3,32 @@
 // mounted; cleared on unmount so GPS is not kept on in the background.
 import { useEffect, useState } from 'react';
 
+// A fix older than this is treated as missing (the phone may have moved).
+export const MAX_FIX_AGE_MS = 30 * 1000;
+
 export function useLivePosition(enabled = true) {
-  const [pos, setPos] = useState(null); // { lat, lng, accuracy } | null
-  const [error, setError] = useState(null); // 'unsupported' | 'denied' | 'unavailable' | null
+  const [fix, setFix] = useState(null); // { lat, lng, accuracy, at } | null
+  const [error, setError] = useState(null); // 'unsupported' | 'denied' | 'unavailable' | 'timeout' | null
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (!enabled) return undefined;
     if (!navigator.geolocation) { setError('unsupported'); return undefined; }
     const id = navigator.geolocation.watchPosition(
-      (p) => { setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); setError(null); },
-      (e) => setError(e.code === 1 ? 'denied' : 'unavailable'),
+      (p) => {
+        setFix({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Number.isFinite(p.coords.accuracy) ? p.coords.accuracy : null, at: Date.now() });
+        setError(null);
+      },
+      // 1 = denied, 3 = timeout (still searching), 2 = unavailable.
+      (e) => setError(e.code === 1 ? 'denied' : e.code === 3 ? 'timeout' : 'unavailable'),
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
     );
-    return () => navigator.geolocation.clearWatch(id);
+    // Re-evaluate the fix age even when no new fix arrives.
+    const tick = setInterval(() => setNow(Date.now()), 5000);
+    return () => { navigator.geolocation.clearWatch(id); clearInterval(tick); };
   }, [enabled]);
 
+  const pos = fix && now - fix.at <= MAX_FIX_AGE_MS ? fix : null;
   return { pos, error };
 }
 

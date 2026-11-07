@@ -57,7 +57,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
   // when a photo is present, null when it isn't — trySync() below uploads
   // it only once the matching status-change action has itself been
   // accepted server-side (POST /collection-sync/photo requires that).
-  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng, photoBase64, photoMime }) => {
+  const captureAction = useCallback(async ({ batchId, customerId, taskId, status, reason, note, lat, lng, accuracy, photoBase64, photoMime }) => {
     const action_uuid = makeUuid();
     const entry = {
       action_uuid,
@@ -71,6 +71,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
       note: note || null,
       lat: lat ?? null,
       lng: lng ?? null,
+      accuracy: accuracy ?? null,
       sync_state: 'captured',
       last_outcome: null,
       photo_base64: photoBase64 || null,
@@ -140,6 +141,7 @@ export function useSyncQueue({ onRequiresReauth, onStaleOrInvalid } = {}) {
         note: e.note,
         lat: e.lat,
         lng: e.lng,
+        accuracy: e.accuracy ?? null,
         captured_at: e.captured_at,
       }));
       const res = await apiClient.post('/v2/collection-sync/replay', { actions });

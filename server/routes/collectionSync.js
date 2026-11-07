@@ -64,7 +64,8 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
   try {
     const employeeId = await resolveEmployeeIdForUser(req.user);
     if (employeeId === null) {
-      return res.json({ data: { batches: [], proof: await getProofSettings() } }); // not a collector-linked account — an empty, valid result, not an error
+      const { radius_m, require_photo } = await getProofSettings();
+      return res.json({ data: { batches: [], proof: { radius_m, require_photo } } }); // not a collector-linked account — an empty, valid result, not an error
     }
     const result = await pool.query(
       `SELECT
@@ -85,7 +86,7 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
        WHERE tr.resource_type = 'collector' AND tr.resource_id = $1
          AND b.status IN ('assigned', 'in_progress')
          AND NOT (b.auto_generated AND COALESCE(b.end_date, b.start_date) < $2::date)
-       ORDER BY b.id, bc.visit_order NULLS LAST, c.id`,
+       ORDER BY b.id, bc.visit_order NULLS LAST, bc.id`,
       [employeeId, localParts(new Date(), await getTimezone()).date]
     );
 
@@ -121,7 +122,8 @@ router.get('/my-assignments', requireRole('collector', 'admin'), async (req, res
     }
     // proof: the company geofence settings the collector app enforces
     // client-side (Serviced disabled outside the radius, photo requirement).
-    res.json({ data: { batches: Array.from(batches.values()), proof: await getProofSettings() } });
+    const { radius_m, require_photo } = await getProofSettings();
+    res.json({ data: { batches: Array.from(batches.values()), proof: { radius_m, require_photo } } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load assignments.', code: 'INTERNAL' } });
   }
@@ -290,7 +292,7 @@ async function processOneAction(action, user, employeeId) {
     const result = await applyBatchCustomerStatusChange(client, {
       batchId, customerId,
       status: action.status, reason: action.reason, note: action.note,
-      lat: action.lat, lng: action.lng, capturedAt: action.captured_at,
+      lat: action.lat, lng: action.lng, accuracy: action.accuracy, capturedAt: action.captured_at,
     });
 
     if (!result.ok) {

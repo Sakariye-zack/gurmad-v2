@@ -2230,6 +2230,19 @@ async function runFleetUpgradeMigrations() {
   await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS visit_order INTEGER;`);
   await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lat NUMERIC(10,6);`);
   await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS start_lng NUMERIC(10,6);`);
+  // Geofence rollout time: the existing settings row gets the moment this
+  // column is first added (later boots leave it alone); Serviced marks with
+  // no phone GPS captured before it are accepted as 'legacy_no_gps'.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_enforced_from TIMESTAMPTZ DEFAULT NOW();`);
+  // GPS accuracy (m) the phone reported with a Serviced mark.
+  await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_accuracy_m INTEGER;`);
+  // Open auto lists for today or later generated before visit_order existed
+  // get a visit order now (lazy require: lib/dailyLists requires this module).
+  try {
+    await require('./lib/dailyLists').backfillVisitOrder();
+  } catch (e) {
+    console.warn('WARNING: visit order backfill failed:', e.message);
+  }
 }
 
 // Allowed auth_events.event values. Adding one here is picked up on the

@@ -77,33 +77,88 @@ async function ensureAutoCycle(client, zoneId, date, createdBy) {
   return ins.rows[0].id;
 }
 
-// Route order ("next house"): nearest-neighbour over the list's customers,
-// starting from the Sub Zone's start point (routes.start_lat/lng), else the
-// list collector's last known location, else the first located customer by
-// id. Customers without a location go last, by id. Writes
-// batch_customers.visit_order 1..n. Used at generation time and by the
-// supervisor "Re-order" action — one implementation.
-async function computeVisitOrder(client, batchId) {
+// Route order ("next house"). Writes batch_customers.visit_order 1..n; ties
+// and customers without a location are ordered by batch_customers.id.
+//  - Finished rows (anything not pending) keep their existing relative order
+//    and come first.
+//  - Pending rows are ordered nearest-neighbour from a start point:
+//      mode 'generate' (new list): Sub Zone start (routes.start_lat/lng), else
+//        the collector's location if fresh, else the lowest-id located customer;
+//      mode 'reorder' (supervisor Re-order, backfill): the collector's location
+//        if fresh, else the last finished visit's house, else the Sub Zone
+//        start, else the lowest-id located customer.
+//    "Fresh" = collector_locations updated within FRESH_LOCATION_MINUTES.
+//    Pending customers without a location go last.
+const FRESH_LOCATION_MINUTES = 30;
+async function computeVisitOrder(client, batchId, { mode = 'generate' } = {}) {
   const rows = (await client.query(
-    `SELECT bc.id, c.lat, c.lng FROM batch_customers bc JOIN customers c ON c.id = bc.customer_id WHERE bc.batch_id = $1 ORDER BY bc.id`,
+    `SELECT bc.id, bc.status, bc.status_at, c.lat, c.lng FROM batch_customers bc JOIN customers c ON c.id = bc.customer_id
+     WHERE bc.batch_id = $1 ORDER BY bc.visit_order NULLS LAST, bc.id`,
     [batchId])).rows;
   if (rows.length === 0) return [];
-  const startRow = (await client.query(
+  const finished = rows.filter((r) => r.status !== 'pending');
+  const pending = rows.filter((r) => r.status === 'pending');
+  const info = (await client.query(
     `SELECT r.start_lat, r.start_lng, cl.lat AS col_lat, cl.lng AS col_lng
      FROM batches b
      LEFT JOIN routes r ON r.id = b.route_id
      LEFT JOIN LATERAL (
        SELECT l.lat, l.lng FROM tasks t JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'collector'
        JOIN collector_locations l ON l.employee_id = tr.resource_id
-       WHERE t.batch_id = b.id ORDER BY tr.id LIMIT 1
+       WHERE t.batch_id = b.id AND l.recorded_at >= CURRENT_TIMESTAMP::timestamp - make_interval(mins => $2)
+       ORDER BY tr.id LIMIT 1
      ) cl ON TRUE
-     WHERE b.id = $1`, [batchId])).rows[0] || {};
-  const start = toPoint(startRow.start_lat, startRow.start_lng) || toPoint(startRow.col_lat, startRow.col_lng);
-  const order = nearestNeighbourOrder(rows, start);
+     WHERE b.id = $1`, [batchId, FRESH_LOCATION_MINUTES])).rows[0] || {};
+  const routeStart = toPoint(info.start_lat, info.start_lng);
+  const collector = toPoint(info.col_lat, info.col_lng);
+  let start;
+  if (mode === 'reorder') {
+    const lastDone = finished
+      .filter((r) => r.status_at && toPoint(r.lat, r.lng))
+      .sort((a, b) => new Date(b.status_at) - new Date(a.status_at) || b.id - a.id)[0];
+    start = collector || (lastDone ? toPoint(lastDone.lat, lastDone.lng) : null) || routeStart;
+  } else {
+    start = routeStart || collector;
+  }
+  const order = [...finished.map((r) => r.id), ...nearestNeighbourOrder(pending, start)];
   await client.query(
     `UPDATE batch_customers bc SET visit_order = o.ord FROM unnest($1::int[]) WITH ORDINALITY AS o(id, ord) WHERE bc.id = o.id`,
     [order]);
   return order;
+}
+
+// A list whose rows have no visit order at all (generated before the column
+// existed) gets one before anything relies on the order.
+async function ensureVisitOrder(client, batchId) {
+  const r = (await client.query(
+    `SELECT COUNT(*)::int AS total, COUNT(visit_order)::int AS ordered FROM batch_customers WHERE batch_id = $1`, [batchId])).rows[0];
+  if (r.total > 0 && r.ordered === 0) await computeVisitOrder(client, batchId, { mode: 'reorder' });
+}
+
+// Boot-time backfill: open auto lists dated today or later (company time).
+async function backfillVisitOrder() {
+  const { date } = await todayLocal();
+  const ids = (await pool.query(
+    `SELECT b.id FROM batches b
+     WHERE b.auto_generated AND COALESCE(b.end_date, b.start_date) >= $1::date AND b.status = ANY($2::text[])
+       AND EXISTS (SELECT 1 FROM batch_customers x WHERE x.batch_id = b.id)
+       AND NOT EXISTS (SELECT 1 FROM batch_customers x WHERE x.batch_id = b.id AND x.visit_order IS NOT NULL)
+     ORDER BY b.id`, [date, OPEN_STATUSES])).rows.map((r) => r.id);
+  for (const id of ids) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [id]);
+      await ensureVisitOrder(client, id);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  return ids.length;
 }
 
 async function generate(client, date, triggeredBy) {
@@ -300,4 +355,4 @@ function startScheduler() {
   return { first, timer };
 }
 
-module.exports = { computeVisitOrder, runForDate, schedulerTick, startScheduler, weekdayOf, todayLocal, shiftDate, RUN_FROM_HOUR };
+module.exports = { computeVisitOrder, ensureVisitOrder, backfillVisitOrder, FRESH_LOCATION_MINUTES, runForDate, schedulerTick, startScheduler, weekdayOf, todayLocal, shiftDate, RUN_FROM_HOUR };

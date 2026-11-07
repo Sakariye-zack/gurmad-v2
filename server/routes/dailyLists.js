@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { runForDate, todayLocal, computeVisitOrder } = require('../lib/dailyLists');
+const { runForDate, todayLocal, computeVisitOrder, ensureVisitOrder } = require('../lib/dailyLists');
 const { validateDr7ForCollector, validateResourceEligibility, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
 const { resolveRecipientForEmployee, createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
 
@@ -223,6 +223,7 @@ router.post('/:batchId/customers', requireRole(...WRITE_ROLES), async (req, res)
            AND (bc.status = 'pending' OR (b.start_date <= $2::date AND COALESCE(b.end_date, b.start_date) >= $2::date)) LIMIT 1`,
         [customerId, b.start_date]);
       if (dup.rows[0]) { await client.query('ROLLBACK'); return err(res, 409, 'CONFLICT', 'This customer is already on a list for that day (or pending in another batch).'); }
+      await ensureVisitOrder(client, b.id);
       // Added by hand: goes to the end of the visit order.
       const ins = await client.query(
         `INSERT INTO batch_customers (batch_id, customer_id, status, visit_order)
@@ -363,8 +364,9 @@ router.put('/:batchId/assignment', requireRole(...WRITE_ROLES), async (req, res)
   }
 });
 
-// POST /api/v2/daily-lists/:batchId/reorder — recompute the nearest-neighbour
-// visit order (Sub Zone start point, else the collector's last location).
+// POST /api/v2/daily-lists/:batchId/reorder — finished rows stay first in their
+// order; pending rows are re-ordered nearest-neighbour from the collector's
+// fresh location, else the last finished house, else the Sub Zone start.
 router.post('/:batchId/reorder', requireRole(...WRITE_ROLES), async (req, res) => {
   try {
     const b = await loadEditableBatch(req, res);
@@ -376,7 +378,7 @@ router.post('/:batchId/reorder', requireRole(...WRITE_ROLES), async (req, res) =
       await client.query('BEGIN');
       await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [b.id]);
       before = (await client.query('SELECT customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order NULLS LAST, id', [b.id])).rows;
-      await computeVisitOrder(client, b.id);
+      await computeVisitOrder(client, b.id, { mode: 'reorder' });
       after = (await client.query('SELECT customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order, id', [b.id])).rows;
       await client.query('COMMIT');
     } catch (e) {
@@ -407,6 +409,7 @@ router.put('/:batchId/customers/:customerId/order', requireRole(...WRITE_ROLES),
     try {
       await client.query('BEGIN');
       await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [b.id]);
+      await ensureVisitOrder(client, b.id);
       const list = (await client.query(
         'SELECT id, customer_id, visit_order FROM batch_customers WHERE batch_id = $1 ORDER BY visit_order NULLS LAST, id FOR UPDATE', [b.id])).rows;
       const idx = list.findIndex((r) => r.customer_id === customerId);
@@ -447,6 +450,9 @@ router.post('/:batchId/customers/:customerId/override', requireRole(...WRITE_ROL
     if (!b) return;
     const customerId = parseStrictId(req.params.customerId);
     if (customerId === null) return err(res, 400, 'VALIDATION', 'Invalid customer id.');
+    // Only on the list of the current company-local day (not a future list).
+    const local = await todayLocal();
+    if (b.start_date !== local.date) return err(res, 409, 'CONFLICT', 'Override is only allowed on today\'s list.');
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
     if (!reason) return err(res, 400, 'VALIDATION', 'A reason is required to mark Serviced without proof.');
     const client = await pool.connect();
