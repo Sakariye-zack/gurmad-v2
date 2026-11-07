@@ -2065,6 +2065,10 @@ async function runMigrations() {
       finished_at TIMESTAMP
     );
   `);
+  await pool.query(`ALTER TABLE portal_zaad_attempts ADD COLUMN IF NOT EXISTS reference VARCHAR(80);`);
+  await pool.query(`ALTER TABLE portal_zaad_attempts DROP CONSTRAINT IF EXISTS portal_zaad_attempts_status_check;`);
+  await pool.query(`ALTER TABLE portal_zaad_attempts ADD CONSTRAINT portal_zaad_attempts_status_check CHECK (status IN ('pending','ok','failed','reconciliation_required','unknown','stale'));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_phone_created ON portal_zaad_attempts(phone, created_at DESC);`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_zaad_one_pending_per_invoice ON portal_zaad_attempts(invoice_id) WHERE status = 'pending';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_customer_created ON portal_zaad_attempts(customer_id, created_at DESC);`);
 }

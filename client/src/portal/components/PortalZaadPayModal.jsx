@@ -12,8 +12,13 @@ const ZAAD_CLIENT_TIMEOUT_MS = 120 * 1000;
 
 const ERROR_KEYS = {
   ZAAD_DECLINED: 'portal.zaad.err.declined',
-  TIMEOUT: 'portal.zaad.err.timeout',
+  TIMEOUT: 'portal.zaad.err.unknown',
+  PAYMENT_UNKNOWN: 'portal.zaad.err.unknown',
+  PAYMENT_UNCONFIRMED: 'portal.zaad.err.unconfirmed',
+  PHONE_NOT_REGISTERED: 'portal.zaad.err.phoneNotRegistered',
+  ACCOUNT_ARCHIVED: 'portal.zaad.err.archived',
   TOO_MANY_ATTEMPTS: 'portal.zaad.err.tooMany',
+  TOO_MANY_ATTEMPTS_PHONE: 'portal.zaad.err.tooMany',
   IN_PROGRESS: 'portal.zaad.err.inProgress',
   OVERPAYMENT: 'portal.zaad.err.overpay',
   NOT_CONFIGURED: 'portal.zaad.err.notConfigured',
@@ -26,34 +31,40 @@ const ERROR_KEYS = {
 export default function PortalZaadPayModal({ invoice, outstanding, defaultPhone, onClose, onPaid }) {
   const { t } = useI18n();
   const currency = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
-  const maxAmount = Math.round(Number(outstanding) * 100) / 100;
+  // floor (never above what is owed); SLSH is whole shillings
+  const maxAmount = currency === 'SLSH' ? Math.floor(Number(outstanding) + 1e-6) : Math.floor(Number(outstanding) * 100 + 1e-6) / 100;
   const [amount, setAmount] = useState(String(maxAmount));
   const [phone, setPhone] = useState(defaultPhone || '');
+  const [phones, setPhones] = useState(defaultPhone ? [defaultPhone] : []);
   const [phase, setPhase] = useState('form'); // form | waiting | success
   const [error, setError] = useState('');
   const [receipt, setReceipt] = useState(null);
 
-  // Prefill with the customer's own phone (the server falls back to it too).
+  // Payments can only go to the customer's own registered numbers.
   useEffect(() => {
-    if (defaultPhone) return;
     let alive = true;
-    portalApiClient.get('/me').then((r) => { if (alive && r.data?.phone) setPhone((p) => p || r.data.phone); }).catch(() => {});
+    portalApiClient.get('/me').then((r) => {
+      if (!alive || !r.data) return;
+      const list = [...new Set([r.data.phone, r.data.alternate_phone, r.data.whatsapp].filter((p) => p && String(p).replace(/\D/g, '').length >= 7))];
+      setPhones(list);
+      setPhone((p) => p || list[0] || '');
+    }).catch(() => {});
     return () => { alive = false; };
-  }, [defaultPhone]);
+  }, []);
 
   function errorText(err) {
     if (err.code === 'RECONCILIATION_REQUIRED') return t('portal.zaad.err.reconcile', undefined, { tx: err.details?.transaction_id || '' });
     const key = ERROR_KEYS[err.code];
     if (key) return t(key);
-    if (err.status === 504 || err.status === 408) return t('portal.zaad.err.timeout');
-    return err.message || t('portal.zaad.err.generic');
+    if (err.status === 504 || err.status === 408) return t('portal.zaad.err.unknown');
+    return t('portal.zaad.err.generic');
   }
 
   async function submit(e) {
     e.preventDefault();
     setError('');
     const amt = parseFloat(amount);
-    if (!Number.isFinite(amt) || amt <= 0 || amt > maxAmount + 0.001) { setError(t('portal.zaad.err.amount')); return; }
+    if (!Number.isFinite(amt) || amt <= 0 || amt > maxAmount + 0.001 || (currency === 'SLSH' && !Number.isInteger(amt))) { setError(t('portal.zaad.err.amount')); return; }
     if (phone.replace(/\D/g, '').length < 7) { setError(t('portal.zaad.err.phone')); return; }
     setPhase('waiting');
     try {
@@ -65,7 +76,7 @@ export default function PortalZaadPayModal({ invoice, outstanding, defaultPhone,
       setError(errorText(err));
       setPhase('form');
       // a reconciliation case did take money; refresh so the customer sees current state
-      if (err.code === 'RECONCILIATION_REQUIRED') onPaid?.(null);
+      if (err.code === 'RECONCILIATION_REQUIRED' || err.code === 'PAYMENT_UNKNOWN' || err.code === 'TIMEOUT') onPaid?.(null);
     }
   }
 
@@ -101,11 +112,13 @@ export default function PortalZaadPayModal({ invoice, outstanding, defaultPhone,
           <p style={{ margin: 0, fontSize: '13px', fontWeight: 700 }}>{t('portal.zaad.outstanding', undefined, { amount: fmtMoney(maxAmount, currency) })}</p>
           <label style={fieldStyle}>
             <span style={labelStyle}>{t('portal.zaad.amount', undefined, { currency })}</span>
-            <input type="number" min="0.01" step="0.01" max={maxAmount} value={amount} onChange={(e) => setAmount(e.target.value)} style={inputStyle} disabled={waiting} />
+            <input type="number" min={currency === 'SLSH' ? 1 : 0.01} step={currency === 'SLSH' ? 1 : 0.01} max={maxAmount} value={amount} onChange={(e) => setAmount(e.target.value)} style={inputStyle} disabled={waiting} />
           </label>
           <label style={fieldStyle}>
             <span style={labelStyle}>{t('portal.zaad.phone')}</span>
-            <input type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} placeholder="063XXXXXXX" disabled={waiting} />
+            <select value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} disabled={waiting || phones.length === 0}>
+              {phones.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
           </label>
           {waiting && (
             <div role="status" style={{ display: 'flex', gap: '10px', alignItems: 'center', fontSize: '13px' }}>

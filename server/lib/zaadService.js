@@ -24,6 +24,10 @@ const WAAFI_ENDPOINT = 'https://api.waafipay.net/asm';
 // success code observed against the live gateway.
 const SUCCESS_RESPONSE_CODE = '2001';
 
+// WAAFI waits for the customer's PIN; give up after 90 s. A timeout is an
+// UNKNOWN outcome (the customer may still have approved), never a decline.
+const GATEWAY_TIMEOUT_MS = 90 * 1000;
+
 // Somaliland local numbers are commonly entered as 06XXXXXXXX or
 // 63XXXXXXX; WAAFI's accountNo requires the full 252-prefixed
 // international form. Ported verbatim from the previous system's own
@@ -82,12 +86,25 @@ async function requestZaadPayment({ phone, amount, currency, reference }) {
     },
   };
 
-  const response = await fetch(WAAFI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
+  let data;
+  try {
+    const response = await fetch(WAAFI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    data = await response.json();
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      return { ok: false, timedOut: true, message: 'ZAAD did not answer in time; the outcome is unknown.', reference: refId };
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (data.responseCode === SUCCESS_RESPONSE_CODE) {
     return { ok: true, raw: data, transactionId: data.params?.transactionId || data.params?.referenceId || refId };
@@ -95,4 +112,4 @@ async function requestZaadPayment({ phone, amount, currency, reference }) {
   return { ok: false, message: data.responseMsg || 'ZAAD payment was not approved.', raw: data };
 }
 
-module.exports = { requestZaadPayment, formatZaadPhone };
+module.exports = { requestZaadPayment, formatZaadPhone, GATEWAY_TIMEOUT_MS };

@@ -157,6 +157,10 @@ export const PORTAL = {
   'portal.zaad.err.reconcile': { en: 'Your payment was received (transaction {tx}) but could not be applied automatically. Our team has been notified and will apply it — please keep this transaction number.', so: 'Lacagtaada waa la helay (dhaqdhaqaaq {tx}) laakiin si toos ah looguma dabaqi karin. Kooxdayada waa la ogeysiiyay waana ay dabaqi doonaan — fadlan hay lambarkan dhaqdhaqaaqa.' },
   'portal.zaad.err.gateway': { en: 'Could not reach ZAAD right now. No money was taken. Please try again later.', so: 'Hadda ZAAD lama gaari karo. Lacag lagaama qaadin. Fadlan mar dambe isku day.' },
   'portal.zaad.err.generic': { en: 'The payment could not be completed. Please try again.', so: 'Lacag-bixinta lama dhammaystiri karin. Fadlan mar kale isku day.' },
+  'portal.zaad.err.unknown': { en: 'We could not confirm your payment. If money left your wallet, it will be reconciled — do not pay again for now.', so: 'Ma xaqiijin karno lacag-bixintaada. Haddii lacagi ka baxday boorsadaada, waa la hagaajin doonaa — hadda mar kale ha bixin.' },
+  'portal.zaad.err.unconfirmed': { en: 'A recent payment on this invoice could not be confirmed. Please wait 15 minutes, or contact customer service, before paying again.', so: 'Lacag-bixin dhowaan lagu sameeyay qaansheeggan lama xaqiijin. Fadlan sug 15 daqiiqo, ama la xiriir adeegga macaamiisha, intaadan mar kale bixin.' },
+  'portal.zaad.err.phoneNotRegistered': { en: 'Payments can only be sent to one of the phone numbers registered on your account.', so: 'Lacag-bixinta waxaa loo diri karaa oo keliya lambarrada telefoonka ee akoonkaaga ku diiwaangashan.' },
+  'portal.zaad.err.archived': { en: 'Online payment is not available for this account. Please contact customer service.', so: 'Lacag-bixinta onlaynka ah looma heli karo akoonkan. Fadlan la xiriir adeegga macaamiisha.' },
   'portal.zaad.viaPortal': { en: 'Customer portal (ZAAD)', so: 'Bogga macaamiisha (ZAAD)' },
   'portal.col.outstanding': { en: 'Outstanding', so: 'Haraaga' },
 };

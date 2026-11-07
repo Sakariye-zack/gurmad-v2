@@ -205,8 +205,10 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
 //   { kind: 'ok', payment, recalculated, zaadResult }
 //   { kind: 'reconciliation', zaadResult, error }  (WAAFI approved, record failed)
 // Throws only on a gateway transport error.
-async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel = null }) {
-  const zaadResult = await zaadService.requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: invoice.invoice_number });
+async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel = null, reference = null, auditExtra = {} }) {
+  const zaadResult = await zaadService.requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: reference || invoice.invoice_number });
+  // A gateway timeout is an UNKNOWN outcome, not a decline.
+  if (!zaadResult.ok && zaadResult.timedOut) return { kind: 'unknown', zaadResult };
   if (!zaadResult.ok) return { kind: 'declined', zaadResult };
 
   let recorded;
@@ -225,7 +227,7 @@ async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel =
       actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.zaad_reconciliation_required',
       entityType: 'invoice', entityId: invoice.id,
       before: null,
-      after: { invoice_id: invoice.id, amount: amt, currency: cur, channel, zaad_transaction_id: zaadResult.transactionId, zaad_raw: zaadResult.raw, reason: err.message },
+      after: { ...auditExtra, invoice_id: invoice.id, amount: amt, currency: cur, channel, zaad_transaction_id: zaadResult.transactionId, zaad_raw: zaadResult.raw, reason: err.message },
     }).catch(() => {});
     return { kind: 'reconciliation', zaadResult, error: err };
   } finally {
@@ -233,7 +235,7 @@ async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel =
   }
   const { payment, recalculated } = recorded;
   await debtSuspension.afterPayment(invoice.customer_id);
-  await logAudit({ actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, zaad_raw: zaadResult.raw } })
+  await logAudit({ actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, ...auditExtra, zaad_raw: zaadResult.raw } })
     .catch((e) => console.error('payment.create audit failed:', e && e.message));
   return { kind: 'ok', payment, recalculated, zaadResult };
 }
@@ -344,6 +346,11 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     if (blocked) return res.status(blocked.status).json({ error: { message: blocked.message, code: blocked.code } });
 
     const r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user });
+    if (r.kind === 'unknown') {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.zaad_reconciliation_required', entityType: 'invoice', entityId: invoice.id, before: null,
+        after: { invoice_id: invoice.id, amount: amt, currency: cur, target_phone: phoneDigits, reference: invoice.invoice_number, reason: 'gateway timeout - outcome unknown' } }).catch(() => {});
+      return res.status(504).json({ error: { message: 'ZAAD did not answer in time, so the outcome is unknown. Check the merchant account before requesting again.', code: 'ZAAD_UNKNOWN' } });
+    }
     if (r.kind === 'declined') {
       return res.status(402).json({
         error: { message: r.zaadResult.message, code: r.zaadResult.notConfigured ? 'NOT_CONFIGURED' : 'ZAAD_DECLINED' },
