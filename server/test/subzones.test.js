@@ -68,7 +68,7 @@ test('sub zone: collector from another zone rejected', async () => {
   const cid = await insertUser('t_collector_b', 'collector', w.zoneB.name);
   const put = await api('PUT', '/routes/' + route.id, { token: w.tokens.admin, body: { collector_user_id: cid } });
   assert.equal(put.status, 400, JSON.stringify(put.body));
-  const post = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: route.group_id, code: 'SZY' + (++seq), collector_user_id: cid } });
+  const post = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: route.group_id, code: 'SZY' + (++seq), collector_user_id: cid, work_days: ['sat'] } });
   assert.equal(post.status, 400, JSON.stringify(post.body));
 });
 
@@ -112,10 +112,10 @@ test('collector: 11th sub zone rejected', async () => {
   const g = await api('POST', '/groups', { token: w.tokens.admin, body: { zone_id: w.zoneA.id, code: 'CAPG' + (++seq) } });
   assert.equal(g.status, 201);
   for (let i = 1; i <= 10; i++) {
-    const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAP' + i, collector_user_id: cid } });
+    const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAP' + i, collector_user_id: cid, work_days: ['sat'] } });
     assert.equal(r.status, 201, 'route ' + i + ' ' + JSON.stringify(r.body));
   }
-  const eleventh = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAP11', collector_user_id: cid } });
+  const eleventh = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAP11', collector_user_id: cid, work_days: ['sat'] } });
   assert.equal(eleventh.status, 400, JSON.stringify(eleventh.body));
   assert.match(eleventh.body.error.message, /at most 10/);
   const free = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CAPFREE' } });
@@ -143,7 +143,7 @@ test('collector at cap: editing other fields with same collector still OK', asyn
   const g = await api('POST', '/groups', { token: w.tokens.admin, body: { zone_id: w.zoneA.id, code: 'CAPH' + (++seq) } });
   const ids = [];
   for (let i = 1; i <= 10; i++) {
-    const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CH' + i, collector_user_id: cid } });
+    const r = await api('POST', '/routes', { token: w.tokens.admin, body: { group_id: g.data.id, code: 'CH' + i, collector_user_id: cid, work_days: ['sat'] } });
     assert.equal(r.status, 201, JSON.stringify(r.body));
     ids.push(r.data.id);
   }

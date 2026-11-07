@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
+const { generateBatchCode, validateResourceAssignment, computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment, applyBatchCustomerStatusChange } = require('../lib/collectionValidation');
 // Staff Notifications — Implementation Spec §21. Exactly 3 additive call
 // sites in this file (task_resource.assign, task_resource.remove,
 // batch.cancel), each a one-line, non-blocking side effect immediately
@@ -56,11 +56,6 @@ async function assertBatchZoneAccess(user, zoneId) {
   return myZoneId !== null && myZoneId === zoneId;
 }
 
-async function generateBatchCode(client, zoneId, cycleId) {
-  const numRow = await client.query(`SELECT COALESCE(MAX(batch_number), 0) + 1 AS n FROM batches WHERE zone_id = $1 AND cycle_id = $2`, [zoneId, cycleId]);
-  const batchNumber = numRow.rows[0].n;
-  return { batchNumber, batchCode: `Z${zoneId}-C${cycleId}-B${batchNumber}` };
-}
 
 // ---------- Batches: list / create / detail ----------
 

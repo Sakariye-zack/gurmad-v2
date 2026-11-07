@@ -11,7 +11,7 @@ async function hierarchy(w) {
   const gz = await api('POST', '/group-zones', { token, body: { group_id: g.data.id, code: 'MPZ' + n, name: 'MapZone ' + n } });
   assert.equal(gz.status, 201, JSON.stringify(gz.body));
   const cid = (await db.query(`SELECT id FROM v2_users WHERE username='t_collector'`)).rows[0].id;
-  const r = await api('POST', '/routes', { token, body: { group_id: g.data.id, code: 'MPR' + n, group_zone_id: gz.data.id, collector_user_id: cid } });
+  const r = await api('POST', '/routes', { token, body: { group_id: g.data.id, code: 'MPR' + n, group_zone_id: gz.data.id, collector_user_id: cid, work_days: ['sat', 'mon'] } });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return { group: g.data, gz: gz.data, route: r.data };
 }

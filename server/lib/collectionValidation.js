@@ -246,7 +246,16 @@ async function applyBatchCustomerStatusChange(client, { batchId, customerId, sta
   return { ok: true, code: 'ACCEPTED', before: bc, after: updated.rows[0] };
 }
 
+// Next batch number/code within (zone, cycle). Shared by manual batch
+// creation/reschedule (routes/batches.js) and the daily-list generator.
+async function generateBatchCode(client, zoneId, cycleId) {
+  const numRow = await client.query(`SELECT COALESCE(MAX(batch_number), 0) + 1 AS n FROM batches WHERE zone_id = $1 AND cycle_id = $2`, [zoneId, cycleId]);
+  const batchNumber = numRow.rows[0].n;
+  return { batchNumber, batchCode: `Z${zoneId}-C${cycleId}-B${batchNumber}` };
+}
+
 module.exports = {
+  generateBatchCode,
   validateResourceAssignment, validateDr7ForCollector, validateResourceEligibility,
   computeBatchCapacity, assertCapacityForAddition, assertCapacityForTruckAssignment,
   applyBatchCustomerStatusChange,
