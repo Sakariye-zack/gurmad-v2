@@ -292,6 +292,9 @@ async function computeServicedProof(client, { batchId, customerId, lat, lng, acc
   }
   const radius = settings.radius_m;
   if (distance > radius) {
+    // Old-app offline queue: a visit captured before the rollout is kept
+    // (flagged) rather than lost, even when its GPS was outside the radius.
+    if (await isLegacyNoGps(client, batchId, capturedAt, settings)) return ok('legacy_far');
     return { ok: false, code: 'VALIDATION', geofence: true, error: `You are ${distance} m from this house (limit ${radius} m).`, distance_m: distance, radius_m: radius };
   }
   if (haversineMeters(house, phone) < 1 && acc === null) return ok('suspect_exact');

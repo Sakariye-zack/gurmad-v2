@@ -77,7 +77,7 @@ export const DAILY_LISTS = {
   'daily.proofMeters': { en: '{m} m', so: '{m} m' },
   'daily.proofOverride': { en: 'Override', so: 'Fasax kormeere' },
   'daily.proofNoLocation': { en: 'No location', so: 'Goob ma leh' },
-  'daily.proofLegacy': { en: 'No GPS (old app)', so: 'GPS ma jiro (app hore)' },
+  'daily.proofLegacy': { en: 'Old app', so: 'App hore' },
   'daily.proofLegacyHint': { en: 'Captured offline before proof of service was switched on.', so: 'Waxa la qabtay offline ka hor inta aan caddaynta adeegga la shidin.' },
   'daily.proofSuspect': { en: 'Check', so: 'Hubi' },
   'daily.proofSuspectHint': { en: "The phone's point is exactly the house point and no GPS accuracy was sent. It may not be a real GPS fix.", so: 'Barta telefoonku waa isla barta guriga, saxnaanta GPS-na lama soo dirin. Waxa laga yaabaa inaysan ahayn GPS dhab ah.' },

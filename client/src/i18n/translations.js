@@ -22,6 +22,7 @@ import { ACCOUNT_SECURITY } from './accountSecurity.js';
 import { FLEET } from './fleet.js';
 import { DAILY_LISTS } from './dailyLists.js';
 import { COLLECTORS_OPS } from './collectorsOps.js';
+import { DEBT_SUSPENSION } from './debtSuspension.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -36,6 +37,7 @@ export const TRANSLATIONS = {
   ...FLEET,
   ...DAILY_LISTS,
   ...COLLECTORS_OPS,
+  ...DEBT_SUSPENSION,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

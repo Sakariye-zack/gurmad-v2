@@ -5,10 +5,10 @@ const { Pool } = require('pg');
 
 const BASE = process.env.TEST_BASE;
 if (!BASE) throw new Error('Run the suite with `npm test` (TEST_BASE is set by test/run.js).');
-if (process.env.DB_NAME !== 'gurmad_v2_test') throw new Error('Tests must run against gurmad_v2_test only.');
+if (!/^gurmad_v2_test\w*$/.test(process.env.DB_NAME || '')) throw new Error('Tests must run against gurmad_v2_test only.');
 
 const PASSWORD = 'TestPass123!';
-const db = new Pool({ host: process.env.DB_HOST, port: process.env.DB_PORT, database: 'gurmad_v2_test', user: process.env.DB_USER, password: process.env.DB_PASSWORD });
+const db = new Pool({ host: process.env.DB_HOST, port: process.env.DB_PORT, database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD });
 
 async function api(method, url, { token, body, headers } = {}) {
   const res = await fetch(BASE + '/api/v2' + url, {

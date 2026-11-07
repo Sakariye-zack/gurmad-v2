@@ -338,7 +338,7 @@ function ProofBadge({ row }) {
   const { t } = useI18n();
   if (row.proof_flag === 'override') return <span style={chipStyle('var(--warning)')} title={row.proof_override_reason || ''}>{t('daily.proofOverride')}</span>;
   if (row.proof_flag === 'no_customer_location') return <span style={chipStyle('var(--text-muted)')}>{t('daily.proofNoLocation')}</span>;
-  if (row.proof_flag === 'legacy_no_gps') return <span style={chipStyle('var(--text-muted)')} title={t('daily.proofLegacyHint')}>{t('daily.proofLegacy')}</span>;
+  if (row.proof_flag === 'legacy_no_gps' || row.proof_flag === 'legacy_far') return <span style={chipStyle('var(--text-muted)')} title={t('daily.proofLegacyHint')}>{t('daily.proofLegacy')}</span>;
   if (row.proof_flag === 'suspect_exact') return <span style={chipStyle('var(--danger)')} title={t('daily.proofSuspectHint')}>⚠ {t('daily.proofSuspect')}</span>;
   if (row.proof_distance_m != null) return <span style={chipStyle('var(--success)')}>✓ {t('daily.proofMeters', undefined, { m: row.proof_distance_m })}</span>;
   return null;

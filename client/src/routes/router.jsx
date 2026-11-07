@@ -11,6 +11,7 @@ const GroupDetailPage = lazy(() => import('../pages/groups/GroupDetailPage.jsx')
 // Audit & Security Center.
 const AuditCenterListPage = lazy(() => import('../pages/audit/AuditCenterListPage.jsx'));
 const BackupsPage = lazy(() => import('../pages/admin/BackupsPage.jsx'));
+const DebtSuspensionsPage = lazy(() => import('../pages/admin/DebtSuspensionsPage.jsx'));
 // System Settings.
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage.jsx'));
 // Staff Notifications — additive route, in-app only.
@@ -165,6 +166,7 @@ export const router = createBrowserRouter([
       { path: 'roles', element: <RolesPermissionsPage /> },
       { path: 'audit', element: <AuditCenterListPage /> },
       { path: 'backups', element: <BackupsPage /> },
+      { path: 'admin/debt-suspensions', element: <DebtSuspensionsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'account/security', element: <AccountSecurity /> },
       { path: 'account/my-hr', element: <MyHrPage /> },
