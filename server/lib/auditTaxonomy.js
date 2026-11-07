@@ -90,6 +90,7 @@ const TAXONOMY = {
   'invoice.auto_billing_run':    { category: 'Financial', severity: 'INFO' },
   'payment.create':               { category: 'Financial', severity: 'INFO' },
   'payment.reverse':             { category: 'Financial', severity: 'WARNING' },
+  'payment.zaad_reconciliation_required': { category: 'Financial', severity: 'CRITICAL' },
   'debt.create':                   { category: 'Financial', severity: 'INFO' },
   'debt.settle':                   { category: 'Financial', severity: 'INFO' },
   'debt.integrity_warning':      { category: 'Financial', severity: 'WARNING' },

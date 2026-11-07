@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Download, Eye, X } from 'lucide-react';
+import { ArrowLeft, Download, Eye, Smartphone, X } from 'lucide-react';
 import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState } from '../../components/ui/index.js';
 import { portalApiClient } from '../apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { fmtMoney } from '../../lib/money.js';
+import PortalZaadPayModal from '../components/PortalZaadPayModal.jsx';
 
 // Rebuild — Implementation Spec §11/§23 (OD-5/Invoice Preview): adds an
 // inline HTML preview alongside the existing, UNCHANGED .docx download —
@@ -19,9 +20,10 @@ export default function PortalInvoiceDetail() {
   const [previewHtml, setPreviewHtml] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
+  const [payOpen, setPayOpen] = useState(false);
 
-  function load() {
-    setLoading(true);
+  function load({ quiet = false } = {}) {
+    if (!quiet) setLoading(true);
     setError(null);
     // A cross-customer id here comes back 404 from the server (OD-7) —
     // rendered identically to "doesn't exist", never leaking that another
@@ -32,7 +34,7 @@ export default function PortalInvoiceDetail() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(load, [id]);
+  useEffect(() => { load(); }, [id]);
 
   function openPreview() {
     setPreviewHtml('');
@@ -45,8 +47,9 @@ export default function PortalInvoiceDetail() {
   }
 
   if (loading) return <LoadingState label={t('portal.invoice.loading')} />;
-  if (error) return <ErrorState message={error.status === 404 ? t('portal.invoice.notFound') : error.message} onRetry={load} />;
+  if (error) return <ErrorState message={error.status === 404 ? t('portal.invoice.notFound') : error.message} onRetry={() => load()} />;
   if (!invoice) return null;
+  const canPay = invoice.status !== 'voided' && Number(invoice.balance?.outstanding) > 0.004;
 
   return (
     <div>
@@ -57,7 +60,8 @@ export default function PortalInvoiceDetail() {
         title={invoice.invoice_number}
         subtitle={new Date(invoice.created_at).toLocaleString()}
         actions={
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {canPay && <Button icon={Smartphone} onClick={() => setPayOpen(true)}>{t('portal.zaad.pay')}</Button>}
             <Button variant="secondary" icon={Eye} onClick={openPreview}>{t('portal.invoice.preview')}</Button>
             <Button variant="secondary" icon={Download} onClick={() => portalApiClient.downloadAuthorizedFile(`/invoices/${invoice.id}/document.docx`, `${invoice.invoice_number}.docx`)}>
               {t('portal.invoice.download')}
@@ -104,7 +108,7 @@ export default function PortalInvoiceDetail() {
               {invoice.payments.map((p, i) => (
                 <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 0' }}>{p.currency} {parseFloat(p.amount).toFixed(2)}</td>
-                  <td style={{ padding: '8px 0', textTransform: 'uppercase' }}>{t('method.' + p.method, p.method)}</td>
+                  <td style={{ padding: '8px 0', textTransform: p.channel === 'portal_zaad' ? 'none' : 'uppercase' }}>{p.channel === 'portal_zaad' ? t('portal.zaad.viaPortal') : t('method.' + p.method, p.method)}</td>
                   <td style={{ padding: '8px 0' }}>{new Date(p.created_at).toLocaleDateString()}</td>
                 </tr>
               ))}
@@ -112,6 +116,15 @@ export default function PortalInvoiceDetail() {
           </table>
         )}
       </Card>
+
+      {payOpen && (
+        <PortalZaadPayModal
+          invoice={invoice}
+          outstanding={invoice.balance.outstanding}
+          onClose={() => setPayOpen(false)}
+          onPaid={() => load({ quiet: true })}
+        />
+      )}
     </div>
   );
 }

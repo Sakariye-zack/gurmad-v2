@@ -2034,6 +2034,39 @@ async function runMigrations() {
     );
   `);
   // ============================================================ end F3
+
+  // ============================================================
+  // Customer portal ZAAD self-payment. Additive + idempotent.
+  // A portal payment has no staff user behind it: cashier_id / debts.created_by
+  // become nullable (NULL = no staff actor), and payments.channel records where
+  // a payment came from (NULL = staff-recorded, 'portal_zaad' = customer portal).
+  // Cashier cashout math filters on cashier_id = <user>, so these rows never
+  // land in any cashier's cashout.
+  // ============================================================
+  await pool.query(`ALTER TABLE payments ALTER COLUMN cashier_id DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE debts ALTER COLUMN created_by DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS channel VARCHAR(20);`);
+  // One row per portal attempt: drives the in-flight guard (one 'pending' row
+  // per invoice, enforced by the partial unique index) and the per-customer
+  // rate limit.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS portal_zaad_attempts (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      amount NUMERIC NOT NULL,
+      currency VARCHAR(10) NOT NULL,
+      phone VARCHAR(20),
+      status VARCHAR(30) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','ok','failed','reconciliation_required','stale')),
+      transaction_id VARCHAR(100),
+      payment_id INTEGER,
+      error_code VARCHAR(50),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_zaad_one_pending_per_invoice ON portal_zaad_attempts(invoice_id) WHERE status = 'pending';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_customer_created ON portal_zaad_attempts(customer_id, created_at DESC);`);
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance

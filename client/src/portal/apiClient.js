@@ -12,14 +12,36 @@ function getToken() {
 
 async function request(path, options = {}) {
   const token = getToken();
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
+  // Optional client-side timeout (e.g. the synchronous ZAAD payment, which
+  // waits for the customer to approve on their phone). err.code 'TIMEOUT'.
+  const { timeoutMs, ...fetchOptions } = options;
+  let controller = null;
+  let timer = null;
+  if (timeoutMs) {
+    controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), timeoutMs);
+  }
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+    ...fetchOptions,
+    ...(controller ? { signal: controller.signal } : {}),
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      const err = new Error('Request timed out');
+      err.code = 'TIMEOUT';
+      throw err;
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   let body = null;
   try { body = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
@@ -28,6 +50,7 @@ async function request(path, options = {}) {
     const err = new Error(message);
     err.status = res.status;
     err.code = errBody && typeof errBody === 'object' ? errBody.code : undefined;
+    err.details = errBody && typeof errBody === 'object' ? errBody : null;
     throw err;
   }
   return body;
@@ -77,7 +100,7 @@ async function downloadAuthorizedFile(path, filename) {
 
 export const portalApiClient = {
   get: (path) => request(path),
-  post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
+  post: (path, data, opts = {}) => request(path, { method: 'POST', body: JSON.stringify(data), ...opts }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
   postForm,
   downloadAuthorizedFile,
