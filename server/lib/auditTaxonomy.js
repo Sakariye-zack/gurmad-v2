@@ -39,6 +39,8 @@ const TAXONOMY = {
 
   // Customer
   'customer.create':           { category: 'Customer', severity: 'INFO' },
+  'customer_signup.approve':   { category: 'Customer', severity: 'INFO' },
+  'customer_signup.reject':    { category: 'Customer', severity: 'INFO' },
   'customer.update':           { category: 'Customer', severity: 'INFO' },
   'customer.status_change':    { category: 'Customer', severity: 'INFO' },
   'customer.number_change':    { category: 'Customer', severity: 'INFO' },

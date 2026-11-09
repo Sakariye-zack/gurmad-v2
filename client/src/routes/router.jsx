@@ -60,6 +60,7 @@ const MasterDataImportPage = lazy(() => import('../pages/masterData/MasterDataIm
 const MasterDataExportPage = lazy(() => import('../pages/masterData/MasterDataExportPage.jsx'));
 const CustomersListPage = lazy(() => import('../pages/customers/CustomersListPage.jsx'));
 const CustomerDetailPage = lazy(() => import('../pages/customers/CustomerDetailPage.jsx'));
+const SignupRequestsPage = lazy(() => import('../pages/customers/SignupRequestsPage.jsx'));
 const EmployeesListPage = lazy(() => import('../pages/employees/EmployeesListPage.jsx'));
 const EmployeeDetailPage = lazy(() => import('../pages/employees/EmployeeDetailPage.jsx'));
 const TrucksListPage = lazy(() => import('../pages/trucks/TrucksListPage.jsx'));
@@ -87,6 +88,7 @@ import RequireAuth from './RequireAuth.jsx';
 const RequirePortalAuth = lazy(() => import('../portal/RequirePortalAuth.jsx'));
 const PortalShell = lazy(() => import('../portal/PortalShell.jsx'));
 const PortalLogin = lazy(() => import('../portal/pages/PortalLogin.jsx'));
+const PortalSignup = lazy(() => import('../portal/pages/PortalSignup.jsx'));
 const PortalForgotPassword = lazy(() => import('../portal/pages/PortalForgotPassword.jsx'));
 const PortalResetPassword = lazy(() => import('../portal/pages/PortalResetPassword.jsx'));
 const PortalDashboard = lazy(() => import('../portal/pages/PortalDashboard.jsx'));
@@ -134,6 +136,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },
       { path: 'customers', element: <CustomersListPage /> },
+      { path: 'customers/signup-requests', element: <SignupRequestsPage /> },
       { path: 'customers/:id', element: <CustomerDetailPage /> },
       { path: 'zones', element: <ZonesListPage /> },
       { path: 'zones/:id', element: <ZoneDetailPage /> },
@@ -216,6 +219,7 @@ export const router = createBrowserRouter([
   // staff AppShell — its own shell, its own auth guard (RequirePortalAuth,
   // backed by PortalAuthContext, never the staff RequireAuth/AuthContext).
   { path: '/portal/login', element: <PortalLogin /> },
+  { path: '/portal/signup', element: <PortalSignup /> },
   { path: '/portal/forgot-password', element: <PortalForgotPassword /> },
   { path: '/portal/reset-password', element: <PortalResetPassword /> },
   {
