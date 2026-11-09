@@ -2077,7 +2077,7 @@ async function runMigrations() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS customer_signup_requests (
       id SERIAL PRIMARY KEY,
-      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired')),
       full_name VARCHAR(100) NOT NULL,
       phone VARCHAR(20) NOT NULL,
       phone_canonical VARCHAR(20) NOT NULL,
@@ -2102,6 +2102,8 @@ async function runMigrations() {
       customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL
     );
   `);
+  await pool.query(`ALTER TABLE customer_signup_requests DROP CONSTRAINT IF EXISTS customer_signup_requests_status_check;`);
+  await pool.query(`ALTER TABLE customer_signup_requests ADD CONSTRAINT customer_signup_requests_status_check CHECK (status IN ('pending','approved','rejected','expired'));`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_signup_one_pending_per_phone ON customer_signup_requests(phone_canonical) WHERE status = 'pending';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_status_zone ON customer_signup_requests(status, zone_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_ip_created ON customer_signup_requests(ip, created_at DESC);`);

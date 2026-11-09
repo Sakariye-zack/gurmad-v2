@@ -229,4 +229,7 @@ export const PORTAL = {
   'sreq.rejectedOk': { en: 'Request rejected.', so: 'Codsiga waa la diiday.' },
   'sreq.cancel': { en: 'Cancel', so: 'Jooji' },
   'sreq.customer': { en: 'Customer', so: 'Macmiilka' },
+  'sreq.expired': { en: 'Expired', so: 'Dhacay' },
+  'sreq.verifiedByCall': { en: 'I called this number and confirmed the request', so: 'Waan wacay lambarkan waxaanan xaqiijiyay codsiga' },
+  'sreq.verifiedRequired': { en: 'Call the applicant and tick the confirmation box first.', so: 'Marka hore wac codsadaha oo calaamadee sanduuqa xaqiijinta.' },
 };

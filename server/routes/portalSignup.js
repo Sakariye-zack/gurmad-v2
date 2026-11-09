@@ -59,17 +59,27 @@ function parseStrictId(raw) {
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
 const vErr = (res, message, extra = {}) => res.status(400).json({ error: { message, code: 'VALIDATION', ...extra } });
 
-async function activeAccountForPhone(canonical, db = pool) {
+// Any customer (any status) whose phone, alternate_phone or whatsapp is this
+// number. Returns the customer_number of the first match, or null.
+async function customerWithPhone(canonical, db = pool) {
   const r = await db.query(
-    `SELECT 1 FROM customer_portal_accounts cpa JOIN customers c ON c.id = cpa.customer_id
-     WHERE c.status = 'active' AND cpa.status = 'active' AND ${SQL_CANON('c.phone')} = $1 LIMIT 1`,
+    `SELECT customer_number FROM customers
+     WHERE ${SQL_CANON('phone')} = $1 OR ${SQL_CANON('alternate_phone')} = $1 OR ${SQL_CANON('whatsapp')} = $1
+     ORDER BY id LIMIT 1`,
     [canonical]
   );
-  return r.rows.length > 0;
+  return r.rows[0]?.customer_number ?? null;
 }
 
-const EXISTING_ACCOUNT = { error: { message: 'You already have an account — log in or reset your password.', code: 'ACCOUNT_EXISTS' } };
-const PENDING_EXISTS = { error: { message: 'A signup request for this phone number is already waiting for review. Our office will call you.', code: 'PENDING_EXISTS' } };
+// Pending requests older than 30 days expire (applied lazily on submit/list).
+const EXPIRE_DAYS = 30;
+function expireStale(db = pool) {
+  return db.query(`UPDATE customer_signup_requests SET status = 'expired' WHERE status = 'pending' AND created_at < NOW() - INTERVAL '${EXPIRE_DAYS} days'`);
+}
+
+// One message for "has an account" and "has a pending request" — says that
+// something exists, never which, and never any customer data.
+const ALREADY = { error: { message: 'This number already has an account or a request in progress. Log in, reset your password, or contact our office.', code: 'ALREADY_REGISTERED_OR_PENDING' } };
 
 // ------------------------------------------------------------------ public
 
@@ -138,9 +148,10 @@ router.post('/signup', signupLimiter, async (req, res) => {
     if (phoneCount.rows[0].n >= PHONE_MAX_PER_DAY) {
       return res.status(429).json({ error: { message: 'Too many signup requests for this phone number today. Please call our office.', code: 'RATE_LIMITED' } });
     }
-    if (await activeAccountForPhone(phone.canonical)) return res.status(409).json(EXISTING_ACCOUNT);
+    if (await customerWithPhone(phone.canonical)) return res.status(409).json(ALREADY);
+    await expireStale();
     const pending = await pool.query(`SELECT 1 FROM customer_signup_requests WHERE phone_canonical = $1 AND status = 'pending'`, [phone.canonical]);
-    if (pending.rows.length) return res.status(409).json(PENDING_EXISTS);
+    if (pending.rows.length) return res.status(409).json(ALREADY);
 
     const hash = await bcrypt.hash(b.password, BCRYPT_ROUNDS);
     let row;
@@ -155,10 +166,12 @@ router.post('/signup', signupLimiter, async (req, res) => {
       );
       row = ins.rows[0];
     } catch (e) {
-      if (e.code === '23505') return res.status(409).json(PENDING_EXISTS);
+      if (e.code === '23505') return res.status(409).json(ALREADY);
       throw e;
     }
-    await logPortalAudit({ action: 'signup_requested', ipAddress: ip, details: { request_id: row.id, zone_id: zoneId } });
+    try {
+      await logPortalAudit({ action: 'signup_requested', ipAddress: ip, details: { request_id: row.id, zone_id: zoneId } });
+    } catch (e) { /* best-effort: the request is already stored */ }
 
     // Staff notification: every active admin + the gudoomiye of that district.
     try {
@@ -199,7 +212,8 @@ const LIST_COLS = `r.id, r.status, r.full_name, r.phone, r.alternate_phone, r.cu
 
 router.get('/signup-requests', authenticateToken, requireRole(...STAFF_ROLES), async (req, res) => {
   try {
-    const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : 'pending';
+    await expireStale();
+    const status = ['pending', 'approved', 'rejected', 'expired'].includes(req.query.status) ? req.query.status : 'pending';
     const scope = await scopeZoneId(req.user);
     const params = [status];
     let where = 'r.status = $1';
@@ -215,6 +229,7 @@ router.get('/signup-requests/count', authenticateToken, requireRole(...STAFF_ROL
   try {
     const scope = await scopeZoneId(req.user);
     const params = [];
+    await expireStale();
     let where = `status = 'pending'`;
     if (scope !== null) { params.push(scope); where += ' AND zone_id = $1'; }
     const r = await pool.query(`SELECT COUNT(*)::int AS n FROM customer_signup_requests WHERE ${where}`, params);
@@ -231,6 +246,10 @@ router.post('/signup-requests/:id/approve', authenticateToken, requireRole(...ST
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(404).json(NOT_FOUND);
   const b = req.body || {};
+  if (b.verified_by_call !== true) {
+    return vErr(res, 'Call the applicant to confirm the request, then tick "I called this number and confirmed the request".', { field: 'verified_by_call' });
+  }
+  await expireStale();
   const scope = await scopeZoneId(req.user);
   const client = await pool.connect();
   try {
@@ -239,7 +258,11 @@ router.post('/signup-requests/:id/approve', authenticateToken, requireRole(...ST
     const r = rq.rows[0];
     if (!r || (scope !== null && r.zone_id !== scope)) { await client.query('ROLLBACK'); return res.status(404).json(NOT_FOUND); }
     if (r.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json(NOT_PENDING); }
-    if (await activeAccountForPhone(r.phone_canonical, client)) { await client.query('ROLLBACK'); return res.status(409).json(EXISTING_ACCOUNT); }
+    const existing = await customerWithPhone(r.phone_canonical, client);
+    if (existing) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: `This phone number already belongs to customer ${existing}. Do not create a duplicate — update that customer instead.`, code: 'PHONE_IN_USE', customer_number: existing } });
+    }
 
     const address = [r.area, r.address_line].filter(Boolean).join(', ') || null;
     const body = {
@@ -264,8 +287,12 @@ router.post('/signup-requests/:id/approve', authenticateToken, requireRole(...ST
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.create', entityType: 'customer', entityId: customer.id, before: null, after: customer });
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer_signup.approve', entityType: 'customer_signup_request', entityId: id,
-      before: { status: 'pending' }, after: { status: 'approved', customer_id: customer.id, customer_number: customer.customer_number, portal_account_id: acct.rows[0].id } });
-    await logPortalAudit({ portalAccountId: acct.rows[0].id, customerId: customer.id, action: 'account_activated', details: { via: 'signup_request', request_id: id } });
+      before: { status: 'pending', requested_zone_id: r.zone_id },
+      after: { status: 'approved', customer_id: customer.id, customer_number: customer.customer_number, portal_account_id: acct.rows[0].id,
+        requested_zone_id: r.zone_id, final_zone_id: customer.zone_id, verified_by_call: true } });
+    try {
+      await logPortalAudit({ portalAccountId: acct.rows[0].id, customerId: customer.id, action: 'account_activated', details: { via: 'signup_request', request_id: id } });
+    } catch (e) { /* best-effort */ }
     return res.json({ data: { request_id: id, customer } });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

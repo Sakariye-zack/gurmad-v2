@@ -24,7 +24,8 @@ function form(w, over = {}) {
 }
 const submit = (body, ip = ipFor()) => api('POST', '/customer-portal/signup', { body, headers: { 'X-Forwarded-For': ip } });
 const reqByPhone = async (phone) => (await db.query(`SELECT * FROM customer_signup_requests WHERE phone = $1 ORDER BY id DESC`, [phone])).rows[0];
-const approve = (token, id, body) => api('POST', `/customer-portal/signup-requests/${id}/approve`, { token, body });
+const approve = (token, id, body) => api('POST', `/customer-portal/signup-requests/${id}/approve`, { token, body: { verified_by_call: true, ...body } });
+const ALREADY = 'ALREADY_REGISTERED_OR_PENDING';
 
 test('signup: public districts list returns only id + name of active zones', async () => {
   const w = await setupWorld();
@@ -70,6 +71,10 @@ test('signup: happy path -> staff notified -> approve -> portal login with appli
   const after = await reqByPhone(local);
   assert.equal(after.status, 'approved');
   assert.equal(after.customer_id, a.data.customer.id);
+  const apAud = await db.query(`SELECT after_data FROM v2_audit_log WHERE action = 'customer_signup.approve' AND entity_id = $1`, [row.id]);
+  assert.equal(apAud.rows[0].after_data.verified_by_call, true);
+  assert.equal(apAud.rows[0].after_data.requested_zone_id, w.zoneA.id);
+  assert.equal(apAud.rows[0].after_data.final_zone_id, w.zoneA.id);
   const audits = await db.query(`SELECT action FROM v2_audit_log WHERE (action = 'customer_signup.approve' AND entity_id = $1) OR (action = 'customer.create' AND entity_id = $2)`, [row.id, a.data.customer.id]);
   assert.equal(audits.rows.length, 2);
 
@@ -80,7 +85,7 @@ test('signup: happy path -> staff notified -> approve -> portal login with appli
   // a new signup for the same phone now hits the existing-account rule
   const again = await submit(form(w, { phone: local }));
   assert.equal(again.status, 409);
-  assert.equal(again.body.error.code, 'ACCOUNT_EXISTS');
+  assert.equal(again.body.error.code, ALREADY);
   // and re-approving is refused
   assert.equal((await approve(w.tokens.admin, row.id, { door_number: door() })).status, 409);
 });
@@ -136,7 +141,7 @@ test('signup: duplicate pending request for the same phone -> 409 (any number fo
   assert.equal((await submit(form(w, { phone }))).status, 201);
   const dup = await submit(form(w, { phone: '252' + phone.slice(1) }));
   assert.equal(dup.status, 409);
-  assert.equal(dup.body.error.code, 'PENDING_EXISTS');
+  assert.equal(dup.body.error.code, ALREADY);
 });
 
 test('signup: existing customer with portal account -> 409, no other customer data revealed', async () => {
@@ -147,8 +152,9 @@ test('signup: existing customer with portal account -> 409, no other customer da
   await db.query(`INSERT INTO customer_portal_accounts (customer_id, password_hash, status) VALUES ($1,$2,'active')`, [c.data.id, await bcrypt.hash(PASSWORD, 4)]);
   const r = await submit(form(w, { phone }));
   assert.equal(r.status, 409);
-  assert.equal(r.body.error.code, 'ACCOUNT_EXISTS');
+  assert.equal(r.body.error.code, ALREADY);
   assert.ok(!JSON.stringify(r.body).includes('Existing Portal Cust'));
+  assert.ok(!JSON.stringify(r.body).includes(c.data.customer_number));
   assert.equal(r.body.data, undefined);
 });
 
@@ -223,4 +229,65 @@ test('signup: approve with a taken door number / missing door fails cleanly, req
   // and it can still be approved with a free door number
   const ok = await approve(w.tokens.admin, row.id, { door_number: door(), fee: 5 });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
+});
+
+test('signup: any existing customer with the number (any status, alt/whatsapp) blocks submit', async () => {
+  const w = await setupWorld();
+  const phone = uniqPhone();
+  const c = await api('POST', '/customers', { token: w.tokens.admin, body: { customer_type: 'residential', name: 'Alt Holder ' + phone, phone: uniqPhone(), alternate_phone: '+252' + phone.slice(1), zone_id: w.zoneA.id, door_number: door() } });
+  assert.equal(c.status, 201);
+  await db.query(`UPDATE customers SET status = 'archived' WHERE id = $1`, [c.data.id]);
+  const r = await submit(form(w, { phone }));
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error.code, ALREADY);
+  const wa = uniqPhone();
+  await db.query(`UPDATE customers SET whatsapp = $2 WHERE id = $1`, [c.data.id, wa]);
+  assert.equal((await submit(form(w, { phone: wa }))).body.error.code, ALREADY);
+});
+
+test('signup: approve refuses when the phone was registered meanwhile (PHONE_IN_USE) and requires verified_by_call', async () => {
+  const w = await setupWorld();
+  const f = form(w);
+  await submit(f);
+  const row = await reqByPhone(f.phone);
+  const noCall = await api('POST', `/customer-portal/signup-requests/${row.id}/approve`, { token: w.tokens.admin, body: { door_number: door() } });
+  assert.equal(noCall.status, 400);
+  const notTrue = await api('POST', `/customer-portal/signup-requests/${row.id}/approve`, { token: w.tokens.admin, body: { door_number: door(), verified_by_call: 'yes' } });
+  assert.equal(notTrue.status, 400);
+  const c = await api('POST', '/customers', { token: w.tokens.admin, body: { customer_type: 'residential', name: 'Walk-in ' + f.phone, phone: f.phone, zone_id: w.zoneA.id, door_number: door() } });
+  assert.equal(c.status, 201);
+  const r = await approve(w.tokens.admin, row.id, { door_number: door() });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error.code, 'PHONE_IN_USE');
+  assert.equal(r.body.error.customer_number, c.data.customer_number);
+  assert.equal((await reqByPhone(f.phone)).status, 'pending');
+  assert.equal((await db.query('SELECT COUNT(*)::int n FROM customers WHERE phone = $1', [f.phone])).rows[0].n, 1);
+});
+
+test('signup: pending requests older than 30 days expire lazily and free the phone', async () => {
+  const w = await setupWorld();
+  const f = form(w);
+  await submit(f);
+  const row = await reqByPhone(f.phone);
+  await db.query(`UPDATE customer_signup_requests SET created_at = NOW() - INTERVAL '31 days' WHERE id = $1`, [row.id]);
+  const list = await api('GET', '/customer-portal/signup-requests', { token: w.tokens.admin });
+  assert.ok(!list.data.some((x) => x.id === row.id));
+  assert.equal((await reqByPhone(f.phone)).status, 'expired');
+  assert.equal((await approve(w.tokens.admin, row.id, { door_number: door() })).status, 409);
+  const again = await submit(form(w, { phone: f.phone }));
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+});
+
+test('portal login is deterministic when several customers share a phone: active account wins', async () => {
+  const w = await setupWorld();
+  const phone = uniqPhone();
+  const mk = async (n) => (await api('POST', '/customers', { token: w.tokens.admin, body: { customer_type: 'residential', name: `Shared ${n} ${phone}`, phone, zone_id: w.zoneA.id, door_number: door() } })).data;
+  const a = await mk(1); const b = await mk(2);
+  await db.query(`INSERT INTO customer_portal_accounts (customer_id, password_hash, status) VALUES ($1,$2,'disabled')`, [a.id, await bcrypt.hash('other-pass-1', 4)]);
+  await db.query(`INSERT INTO customer_portal_accounts (customer_id, password_hash, status) VALUES ($1,$2,'active')`, [b.id, await bcrypt.hash(PASSWORD, 4)]);
+  for (let i = 0; i < 3; i++) {
+    const r = await api('POST', '/customer-portal/auth/login', { body: { phone, password: PASSWORD } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.data.customer.id, b.id);
+  }
 });

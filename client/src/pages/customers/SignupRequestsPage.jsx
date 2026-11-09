@@ -11,7 +11,7 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 // Customer self-signup requests (portal /portal/signup). Admin sees every
 // district; gudoomiye only their own (enforced server-side).
 const BASE = '/v2/customer-portal/signup-requests';
-const STATUSES = ['pending', 'approved', 'rejected'];
+const STATUSES = ['pending', 'approved', 'rejected', 'expired'];
 
 export default function SignupRequestsPage() {
   const { t } = useI18n();
@@ -95,7 +95,7 @@ function ApproveModal({ r, onClose, onDone }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
     zone_id: String(r.zone_id), group_id: '', gz_filter: '', route_id: '', door_number: r.door_number || '',
-    billing_type: r.preferred_billing || '', fee_currency: 'USD', fee: '',
+    billing_type: r.preferred_billing || '', fee_currency: 'USD', fee: '', verified: false,
   });
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -114,13 +114,14 @@ function ApproveModal({ r, onClose, onDone }) {
 
   async function submit() {
     setErr(null);
+    if (!form.verified) { setErr(t('sreq.verifiedRequired')); return; }
     if (!/^\d+$/.test(form.door_number)) { setErr(t('sreq.door')); return; }
     setBusy(true);
     try {
       await apiClient.post(`${BASE}/${r.id}/approve`, {
         zone_id: Number(form.zone_id), group_id: form.group_id ? Number(form.group_id) : null, route_id: form.route_id ? Number(form.route_id) : null,
         door_number: form.door_number, billing_type: form.billing_type || undefined, fee_currency: form.fee_currency,
-        fee: form.fee === '' ? null : Number(form.fee),
+        fee: form.fee === '' ? null : Number(form.fee), verified_by_call: true,
       });
       qc.invalidateQueries({ queryKey: ['v2', 'customers'] });
       onDone();
@@ -133,7 +134,7 @@ function ApproveModal({ r, onClose, onDone }) {
 
   return (
     <Modal open onClose={onClose} title={t('sreq.approveTitle')} maxWidth="560px"
-      footer={<><Button variant="secondary" onClick={onClose}>{t('sreq.cancel')}</Button><Button onClick={submit} disabled={busy}>{t('sreq.approve')}</Button></>}>
+      footer={<><Button variant="secondary" onClick={onClose}>{t('sreq.cancel')}</Button><Button onClick={submit} disabled={busy || !form.verified}>{t('sreq.approve')}</Button></>}>
       <div style={{ display: 'grid', gap: '12px' }}>
         <div style={{ fontWeight: 700 }}>{r.full_name} · {r.phone}</div>
         {err && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{err}</div>}
@@ -181,6 +182,10 @@ function ApproveModal({ r, onClose, onDone }) {
             <input value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} type="number" min="0" step="any" />
           </Field>
         </div>
+        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', fontWeight: 700 }}>
+          <input type="checkbox" checked={form.verified} onChange={(e) => set('verified', e.target.checked)} />
+          {t('sreq.verifiedByCall')}
+        </label>
       </div>
     </Modal>
   );

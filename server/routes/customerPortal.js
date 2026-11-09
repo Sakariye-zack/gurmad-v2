@@ -88,9 +88,14 @@ router.post('/auth/login', authLimiter, async (req, res) => {
       `SELECT cpa.*, c.id AS customer_id, c.name AS customer_name
        FROM customer_portal_accounts cpa
        JOIN customers c ON c.id = cpa.customer_id
-       WHERE c.phone = $1`,
+       WHERE c.phone = $1
+       ORDER BY (cpa.status = 'active') DESC, cpa.id
+       LIMIT 1`,
       [phone.trim()]
     );
+    // Deterministic: if several customers share the phone, an active
+    // account always wins (lowest account id); a non-active one is only
+    // ever picked when no active one exists, and then fails below.
     if (custRes.rows.length === 0) {
       return res.status(401).json(GENERIC_LOGIN_FAIL);
     }
