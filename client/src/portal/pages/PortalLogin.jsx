@@ -140,6 +140,12 @@ export default function PortalLogin() {
               >
                 {t('portal.login.forgot')}
               </Link>
+              <Link
+                to="/portal/signup"
+                style={{ display: 'block', textAlign: 'center', fontFamily: MONO_FONT, fontSize: '12px', fontWeight: 700, color: 'var(--accent, var(--brand))' }}
+              >
+                {t('portal.login.signupLink')}
+              </Link>
             </div>
           </form>
 

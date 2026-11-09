@@ -541,35 +541,41 @@ router.get('/:id/collection-history', authenticateToken, requireRole(...COLLECTI
 });
 
 // POST /api/v2/customers — admin, gudoomiye (own zone only).
-router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (req, res) => {
-  const { errors, data } = validateCustomerInput(req.body, { partial: false });
-  if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
+// Reusable create — the ONE customer-creation path (staff form + portal
+// signup approval). Runs every create rule (validation, door/number
+// uniqueness, zone scope, group/route hierarchy, billing defaults). Uses
+// `db` for the INSERT so a caller can run it inside its own transaction
+// (the caller owns BEGIN/COMMIT and the audit write in that case).
+// Returns { customer } or { status, body }.
+async function createCustomer(user, body, db = null) {
+  const { errors, data } = validateCustomerInput(body || {}, { partial: false });
+  if (errors.length) return { status: 400, body: { error: { message: errors.join(' '), code: 'VALIDATION' } } };
 
-  const door = normaliseDoor(req.body?.door_number);
-  if (door.error) return res.status(400).json({ error: { message: door.error, code: 'VALIDATION' } });
-
+  const door = normaliseDoor(body?.door_number);
+  if (door.error) return { status: 400, body: { error: { message: door.error, code: 'VALIDATION' } } };
   if (door.value === null || !/^\d+$/.test(door.value)) {
-    return res.status(400).json({ error: { message: 'door_number is required and must contain digits only.', code: 'VALIDATION' } });
+    return { status: 400, body: { error: { message: 'door_number is required and must contain digits only.', code: 'VALIDATION' } } };
   }
 
-  const writable = await assertZoneWritable(req.user, data.zone_id);
+  const writable = await assertZoneWritable(user, data.zone_id);
   if (!writable) {
-    return res.status(403).json({ error: { message: 'You cannot create a customer outside your assigned zone.', code: 'FORBIDDEN' } });
+    return { status: 403, body: { error: { message: 'You cannot create a customer outside your assigned zone.', code: 'FORBIDDEN' } } };
   }
 
-  // Group & Group-Based Collection — Change Request, Implementation Spec
-  // §6: Group must belong to the selected Zone; Route (if given) must
-  // belong to the selected Group. Both are optional (§26-1).
+  // Group must belong to the selected Zone; Route (if given) must belong to
+  // the selected Group. Both are optional (§26-1).
   const groupRouteError = await validateGroupRoute(data, data.zone_id, data.group_id);
-  if (groupRouteError) return res.status(400).json({ error: { message: groupRouteError, code: 'VALIDATION' } });
+  if (groupRouteError) return { status: 400, body: { error: { message: groupRouteError, code: 'VALIDATION' } } };
 
   const customerNumber = customerNumberFromDoor(door.value); // leading zeros ignored: 09301 == 9301
   const dup = await pool.query('SELECT id FROM customers WHERE customer_number = $1', [customerNumber]);
-  if (dup.rows.length) return res.status(409).json({ error: { message: `Customer Number ${customerNumber} is already assigned to another customer — use a different door number.`, code: 'DUPLICATE' } });
+  if (dup.rows.length) return { status: 409, body: { error: { message: `Customer Number ${customerNumber} is already assigned to another customer — use a different door number.`, code: 'DUPLICATE' } } };
 
-  const client = await pool.connect();
+  const ownTx = !db;
+  const client = db || await pool.connect();
   try {
-    await client.query('BEGIN');
+    if (ownTx) await client.query('BEGIN');
+    else await client.query('SAVEPOINT create_customer');
     const result = await client.query(
       `INSERT INTO customers
         (customer_number, customer_type, name, business_name, phone, alternate_phone, whatsapp, email,
@@ -581,31 +587,38 @@ router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (re
        data.alternate_phone ?? null, data.whatsapp ?? null, data.email ?? null, data.address_line ?? null,
        data.zone_id, data.sub_zone ?? null, data.lat ?? null, data.lng ?? null, data.commercial_shift ?? null,
        data.collection_frequency ?? null, data.collection_mode ?? null, data.fee ?? null, data.notes ?? null,
-       req.user.id, data.group_id ?? null, data.route_id ?? null, door.value,
+       user.id, data.group_id ?? null, data.route_id ?? null, door.value,
        // Houses are billed once a month; businesses per working day.
        data.billing_type ?? (data.customer_type === 'commercial' ? 'daily' : 'monthly'),
        data.fee_currency ?? 'USD', data.work_days ?? null]
     );
-    await client.query('COMMIT');
+    if (ownTx) await client.query('COMMIT');
+    else await client.query('RELEASE SAVEPOINT create_customer');
     const customer = result.rows[0];
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'customer.create', entityType: 'customer', entityId: customer.id, before: null, after: customer });
-    res.status(201).json({ data: customer });
+    if (ownTx) await logAudit({ actorId: user.id, actorUsername: user.username, action: 'customer.create', entityType: 'customer', entityId: customer.id, before: null, after: customer });
+    return { customer };
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (ownTx) await client.query('ROLLBACK');
+    else await client.query('ROLLBACK TO SAVEPOINT create_customer');
     if (err.code === '23505') {
-      if (err.constraint === 'idx_customers_door_number') return res.status(409).json(DOOR_DUP);
-      return res.status(409).json({ error: { message: 'That Customer Number is already assigned to another customer.', code: 'DUPLICATE' } });
+      if (err.constraint === 'idx_customers_door_number') return { status: 409, body: DOOR_DUP };
+      return { status: 409, body: { error: { message: 'That Customer Number is already assigned to another customer.', code: 'DUPLICATE' } } };
     }
     // 23503 = FK violation — a zone_id that passed the strict-id format
-    // check but doesn't reference a real zone. A client error, not a server
-    // failure. Found during Phase 3 Module 2 QA (was surfacing as 500).
+    // check but doesn't reference a real zone (client error, not 500).
     if (err.code === '23503') {
-      return res.status(400).json({ error: { message: 'zone_id does not reference an existing zone.', code: 'VALIDATION' } });
+      return { status: 400, body: { error: { message: 'zone_id does not reference an existing zone.', code: 'VALIDATION' } } };
     }
-    res.status(500).json({ error: { message: 'Failed to create customer.', code: 'INTERNAL' } });
+    return { status: 500, body: { error: { message: 'Failed to create customer.', code: 'INTERNAL' } } };
   } finally {
-    client.release();
+    if (ownTx) client.release();
   }
+}
+
+router.post('/', authenticateToken, requireRole('admin', 'gudoomiye'), async (req, res) => {
+  const r = await createCustomer(req.user, req.body);
+  if (r.customer) return res.status(201).json({ data: r.customer });
+  return res.status(r.status).json(r.body);
 });
 
 // PUT /api/v2/customers/:id — general field edits. Does NOT allow
@@ -822,3 +835,5 @@ router.put('/:id/status', authenticateToken, requireRole('admin', 'gudoomiye'), 
 // unsafe for any customer with real history).
 
 module.exports = router;
+module.exports.createCustomer = createCustomer;
+module.exports.resolveUserZoneId = resolveUserZoneId;

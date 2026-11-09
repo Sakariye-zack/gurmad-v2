@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Database, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
-  ListChecks, Gauge,
+  ListChecks, Gauge, UserPlus,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
@@ -18,7 +18,7 @@ import { useI18n } from '../i18n/I18nContext.jsx';
 // MobileNavDrawer.jsx, which renders it unmodified) needs zero changes.
 // A label with no entry here just renders in English, same as today.
 export const NAV_LABEL_KEYS = {
-  Dashboard: 'nav.dashboard', "Today's list": 'nav.today', Customers: 'nav.customers', Zones: 'nav.zones', Groups: 'nav.groups',
+  Dashboard: 'nav.dashboard', "Today's list": 'nav.today', Customers: 'nav.customers', 'Signup requests': 'nav.signupRequests', Zones: 'nav.zones', Groups: 'nav.groups',
   'Collection Cycles': 'nav.collectionCycles', Batches: 'nav.batches', Calendar: 'nav.calendar', Map: 'nav.map',
   Billing: 'nav.billing', Invoices: 'nav.invoices', Debts: 'nav.debts', 'Debt suspensions': 'nav.debtSuspensions', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
   Employees: 'nav.employees', Attendance: 'nav.attendance', 'Leave Requests': 'nav.leaveRequests', 'Leave Types': 'nav.leaveTypes',
@@ -60,7 +60,8 @@ export const NAV = [
 
   // ---- Operations ----
   { to: '/operations/today', label: "Today's list", icon: ListChecks, roles: ['admin', 'gudoomiye', 'zone_accountant'], group: 'Operations' },
-  { to: '/customers', label: 'Customers', icon: Users, group: 'Operations' },
+  { to: '/customers', end: true, label: 'Customers', icon: Users, group: 'Operations' },
+  { to: '/customers/signup-requests', label: 'Signup requests', icon: UserPlus, roles: ['admin', 'gudoomiye'], group: 'Operations' },
   { to: '/zones', label: 'Zones', icon: MapPinned, group: 'Operations' },
   { to: '/groups', label: 'Groups', icon: Boxes, group: 'Operations' },
   { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, permission: 'collection_cycles.view', group: 'Operations' },

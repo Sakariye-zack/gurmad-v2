@@ -39,6 +39,9 @@ const uploadComplaintPhoto = multer({
 
 const router = express.Router();
 
+// Customer self-signup requests (public submit + staff review).
+router.use(require('./portalSignup'));
+
 const BCRYPT_ROUNDS = 12;
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const LOCK_WINDOW_MS = 15 * 60 * 1000; // 15 minutes

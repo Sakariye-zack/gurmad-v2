@@ -2071,6 +2071,41 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_phone_created ON portal_zaad_attempts(phone, created_at DESC);`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_zaad_one_pending_per_invoice ON portal_zaad_attempts(invoice_id) WHERE status = 'pending';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_customer_created ON portal_zaad_attempts(customer_id, created_at DESC);`);
+
+  // Customer self-signup requests (portal /portal/signup). No OTP (no SMS):
+  // an admin/gudoomiye approval is the gate. Additive table only.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_signup_requests (
+      id SERIAL PRIMARY KEY,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      full_name VARCHAR(100) NOT NULL,
+      phone VARCHAR(20) NOT NULL,
+      phone_canonical VARCHAR(20) NOT NULL,
+      alternate_phone VARCHAR(20),
+      customer_type VARCHAR(20) NOT NULL CHECK (customer_type IN ('residential','commercial')),
+      business_name VARCHAR(150),
+      zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
+      area VARCHAR(100),
+      door_number VARCHAR(20),
+      address_line VARCHAR(200),
+      lat NUMERIC,
+      lng NUMERIC,
+      preferred_billing VARCHAR(10) CHECK (preferred_billing IN ('monthly','daily')),
+      password_hash VARCHAR(255) NOT NULL,
+      notes TEXT,
+      ip VARCHAR(64),
+      user_agent VARCHAR(300),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reviewed_by INTEGER,
+      reviewed_at TIMESTAMP,
+      reject_reason TEXT,
+      customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_signup_one_pending_per_phone ON customer_signup_requests(phone_canonical) WHERE status = 'pending';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_status_zone ON customer_signup_requests(status, zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_ip_created ON customer_signup_requests(ip, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_phone_created ON customer_signup_requests(phone_canonical, created_at DESC);`);
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance
