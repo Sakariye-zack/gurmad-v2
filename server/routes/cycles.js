@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { getTimezone, localParts } = require('../lib/autoBilling');
 
 const router = express.Router();
 
@@ -33,6 +34,24 @@ async function resolveUserZoneId(user) {
   if (!user.zone) return null;
   const r = await pool.query('SELECT id FROM zones WHERE name = $1', [user.zone]);
   return r.rows[0]?.id ?? null;
+}
+
+// Span rules for NEW cycles only (existing rows are never re-validated).
+// Span is inclusive: a weekly cycle 2026-11-02..2026-11-08 is 7 days.
+function dayNumber(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso) return null;
+  return Math.round(d.getTime() / 86400000);
+}
+function validateCycleSpan(cycleType, startDate, endDate) {
+  const s = dayNumber(startDate);
+  const e = dayNumber(endDate);
+  if (s === null || e === null) return 'start_date and end_date must be real calendar dates.';
+  if (e < s) return 'end_date must be on or after start_date.';
+  const span = e - s + 1;
+  if (cycleType === 'weekly' && span !== 7) return `A weekly cycle must span exactly 7 days (start to end inclusive); this one spans ${span}.`;
+  if (cycleType === 'monthly' && (span < 28 || span > 31)) return `A monthly cycle must span 28 to 31 days (start to end inclusive); this one spans ${span}.`;
+  return null;
 }
 
 router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
@@ -96,6 +115,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end_date || '')) {
     return res.status(400).json({ error: { message: 'start_date and end_date are required (YYYY-MM-DD).', code: 'VALIDATION' } });
   }
+  const spanError = validateCycleSpan(cycle_type, start_date, end_date);
+  if (spanError) return res.status(400).json({ error: { message: spanError, code: 'VALIDATION' } });
   const myZoneId = await resolveUserZoneId(req.user);
   if (myZoneId !== null && zid !== myZoneId) {
     return res.status(403).json({ error: { message: 'You cannot create a cycle outside your assigned zone.', code: 'FORBIDDEN' } });
@@ -113,6 +134,48 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     res.status(500).json({ error: { message: 'Failed to create cycle.', code: 'INTERNAL' } });
   }
 });
+
+// PUT|POST /close-ended — bulk-close every ACTIVE manual cycle (auto=false)
+// whose end_date is before today in the company timezone. Auto cycles are
+// never touched (they are owned by the daily-list generator), nor is any
+// cycle that ends today or later. Each cycle goes through exactly the same
+// UPDATE + 'cycle.close' audit as PUT /:id/close (closeCycleRow), which has
+// no batch/open-work side effects or refusals — so nothing is skipped.
+// Zone-scoped roles only ever close cycles in their own zone; a scoped user
+// with no resolvable zone closes nothing.
+async function closeEnded(req, res) {
+  try {
+    const role = (req.user.role || '').toLowerCase();
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (ZONE_SCOPED_ROLES.includes(role) && myZoneId === null) {
+      return res.json({ data: { closed: 0, ids: [], skipped: [], today: null } });
+    }
+    const today = localParts(new Date(), await getTimezone()).date;
+    const params = [today];
+    let sql = `SELECT * FROM collection_cycles WHERE is_active AND NOT auto AND end_date < $1::date`;
+    if (myZoneId !== null) { params.push(myZoneId); sql += ` AND zone_id = $2`; }
+    const candidates = (await pool.query(sql + ' ORDER BY id', params)).rows;
+    const ids = [];
+    for (const row of candidates) {
+      const after = await closeCycleRow(req.user, row);
+      if (after) ids.push(row.id);
+    }
+    res.json({ data: { closed: ids.length, ids, skipped: [], today } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to close ended cycles.', code: 'INTERNAL' } });
+  }
+}
+router.put('/close-ended', authenticateToken, requireRole(...WRITE_ROLES), closeEnded);
+router.post('/close-ended', authenticateToken, requireRole(...WRITE_ROLES), closeEnded);
+
+// Shared close path (single + bulk): flip is_active and audit 'cycle.close'.
+// The WHERE is_active guard makes a concurrent double-close a no-op (null).
+async function closeCycleRow(user, before) {
+  const result = await pool.query(`UPDATE collection_cycles SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active RETURNING *`, [before.id]);
+  if (result.rows.length === 0) return null;
+  await logAudit({ actorId: user.id, actorUsername: user.username, action: 'cycle.close', entityType: 'collection_cycle', entityId: before.id, before, after: result.rows[0] });
+  return result.rows[0];
+}
 
 // PUT /:id/close — cycle lifecycle is a plain boolean (is_active), matching
 // the current system's own proven two-state model (see db.js comment) —
