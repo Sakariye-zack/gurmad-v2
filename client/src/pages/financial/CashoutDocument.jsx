@@ -56,7 +56,7 @@ export default function CashoutDocument({ cashout }) {
                   const l = b.currencies[cur][m];
                   return (
                     <tr key={m}>
-                      <td>{t(`co2.m.${m}`)}{m !== 'cash' ? ' ✓' : ''}</td>
+                      <td>{t(`co2.m.${m}`)}{m !== 'cash' && l.count > 0 && l.auto_verified ? ' ✓' : ''}</td>
                       <td>{fmtMoney(l.expected, cur)}</td>
                       <td>{l.actual === null ? '—' : fmtMoney(l.actual, cur)}</td>
                       <td className={cls(l.diff)}>{fmtDiff(l.diff, cur)}</td>
@@ -98,10 +98,10 @@ export default function CashoutDocument({ cashout }) {
       {(cashout.electronic || []).length > 0 && (<>
         <h2>{t('co2.electronic')}</h2>
         <table>
-          <thead><tr><th>{t('co2.txnCode')}</th><th>{t('co2.method')}</th><th>{t('fin.invoice')}</th><th>{t('common.amount', 'Amount')}</th></tr></thead>
+          <thead><tr><th>{t('co2.txnCode')}</th><th>{t('co2.method')}</th><th>{t('co2.verifiedBy')}</th><th>{t('common.amount', 'Amount')}</th></tr></thead>
           <tbody>
             {cashout.electronic.map((p) => (
-              <tr key={p.id}><td>{p.reference_code || '—'}</td><td>{t(`co2.m.${p.method}`)}</td><td>{p.invoice_number}</td><td>{fmtMoney(p.amount, p.currency)}</td></tr>
+              <tr key={p.id}><td>{p.reference_code || '—'}</td><td>{t(`co2.m.${p.method}`)}</td><td>{p.gateway_verified ? t('co2.viaGateway') : t('co2.viaStatement')}</td><td>{fmtMoney(p.amount, p.currency)}</td></tr>
             ))}
           </tbody>
         </table>

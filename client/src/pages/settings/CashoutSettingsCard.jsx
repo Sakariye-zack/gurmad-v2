@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Plus, Pencil } from 'lucide-react';
 import { Card, Button, Modal, useToast } from '../../components/ui/index.js';
 import { useCompanySettings, useUpdateCompanySettings } from '../../hooks/useSettings.js';
-import { useDepositAccounts, useSaveDepositAccount } from '../../hooks/useCashouts.js';
+import { useDepositAccounts, useSaveDepositAccount, useCashoutMeta } from '../../hooks/useCashouts.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import '../financial/cashout.css';
 
@@ -22,6 +22,7 @@ export default function CashoutSettingsCard() {
     <Card style={{ padding: '20px', marginTop: '16px' }}>
       <span className="co-section-label">{t('co2.set.title')}</span>
       <ControlsForm key={`${tol}-${thr}`} tol={tol} thr={thr} />
+      <CutoffForm />
       <DepositAccounts />
     </Card>
   );
@@ -58,6 +59,52 @@ function ControlsForm({ tol, thr }) {
         <Button type="submit" disabled={update.isPending}>{t('common.save', 'Save')}</Button>
       </div>
       <span className={error ? 'co-err' : 'co-note'}>{error || t('co2.set.hint')}</span>
+    </form>
+  );
+}
+
+const pad = (n) => String(n).padStart(2, '0');
+function toLocalInput(d) {
+  const x = new Date(d);
+  if (isNaN(x.getTime())) return '';
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}T${pad(x.getHours())}:${pad(x.getMinutes())}`;
+}
+
+// Cut-off: payments recorded before it are never listed as "not yet cashed
+// out" nor alerted on (history from before Cashout V2 went live).
+function CutoffForm() {
+  const { data } = useCashoutMeta();
+  const since = data?.data?.cashout_v2_since;
+  if (!since) return null;
+  return <CutoffInner key={since} since={since} />;
+}
+function CutoffInner({ since }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const update = useUpdateCompanySettings();
+  const [value, setValue] = useState(toLocalInput(since));
+  const [error, setError] = useState('');
+  async function save(e) {
+    e.preventDefault();
+    const d = new Date(value);
+    if (!value || isNaN(d.getTime())) { setError(t('co2.set.cutoffInvalid')); return; }
+    if (d.getTime() > Date.now()) { setError(t('co2.set.cutoffFuture')); return; }
+    setError('');
+    try {
+      await update.mutateAsync({ cashout_v2_since: d.toISOString() });
+      toast.success(t('co2.set.saved'));
+    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
+  }
+  return (
+    <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '14px' }}>
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label className="co-field" style={{ flex: '0 1 260px' }}>
+          <span>{t('co2.set.cutoff')}</span>
+          <input type="datetime-local" className="co-input" value={value} onChange={(e) => setValue(e.target.value)} />
+        </label>
+        <Button type="submit" variant="secondary" disabled={update.isPending}>{t('common.save', 'Save')}</Button>
+      </div>
+      <span className={error ? 'co-err' : 'co-note'}>{error || t('co2.set.cutoffHint')}</span>
     </form>
   );
 }

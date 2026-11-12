@@ -252,7 +252,11 @@ function BreakdownCard({ cashout, onViewTransactions }) {
                         const l = b.currencies[cur][m];
                         return (
                           <tr key={m}>
-                            <td>{t(`co2.m.${m}`)}{m !== 'cash' && <> <ShieldCheck size={12} color="var(--success)" aria-label={t('co2.autoVerified')} /></>}<div className="co-note">{l.count} {t('fin.transactions').toLowerCase()}</div></td>
+                            <td>
+                              {t(`co2.m.${m}`)}{m !== 'cash' && l.count > 0 && l.auto_verified && <> <ShieldCheck size={12} color="var(--success)" aria-label={t('co2.autoVerified')} /></>}
+                              <div className="co-note">{l.count} {t('fin.transactions').toLowerCase()}</div>
+                              {m !== 'cash' && l.manual_expected > 0 && <div className="co-note">{t('co2.statementLine', undefined, { recorded: fmtMoney(l.manual_expected, cur), confirmed: l.statement_total !== undefined ? fmtMoney(l.statement_total, cur) : '—' })}</div>}
+                            </td>
                             <td className="co-money">{fmtMoney(l.expected, cur)}</td>
                             <td className="co-money">{l.actual === null ? '—' : fmtMoney(l.actual, cur)}</td>
                             <td className={`co-money ${l.diff === null ? '' : l.diff === 0 ? 'co-zero' : l.diff < 0 ? 'co-neg' : 'co-pos'}`}>{fmtDiff(l.diff, cur)}</td>
@@ -302,7 +306,10 @@ function ElectronicCard({ cashout }) {
         {rows.map((p) => (
           <div key={p.id}>
             <div style={{ minWidth: 0 }}>
-              <div><span className="co-code">{p.reference_code || '—'}</span> <Chip tone="success" flat>{t(`co2.m.${p.method}`)}</Chip></div>
+              <div>
+                <span className="co-code">{p.reference_code || '—'}</span> <Chip tone="info" flat>{t(`co2.m.${p.method}`)}</Chip>{' '}
+                {p.gateway_verified ? <Chip tone="success">{t('co2.viaGateway')}</Chip> : <Chip tone="warning">{t('co2.viaStatement')}</Chip>}
+              </div>
               <div className="ref">{p.invoice_number} · {p.customer_name} · {fmtDateTime(p.created_at)}</div>
             </div>
             <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(p.amount, p.currency)}</span>

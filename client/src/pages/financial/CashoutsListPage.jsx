@@ -71,7 +71,7 @@ export default function CashoutsListPage() {
         <button type="button" className="co-stat" style={{ '--accent-c': 'var(--info)' }} aria-pressed={active({ status: 'approved', deposit_status: 'not_deposited' })} onClick={() => toggle({ status: 'approved', deposit_status: 'not_deposited' })}>
           <span className="k"><Landmark size={14} /> {t('co2.list.notDeposited')}</span>
           <span className="v">{s ? s.not_deposited : '—'}</span>
-          <span className="s">{t('co2.list.notDepositedHint')}</span>
+          <span className="s">{s && s.unverified_deposits > 0 ? t('co2.list.unverifiedN', undefined, { n: s.unverified_deposits }) : t('co2.list.notDepositedHint')}</span>
         </button>
       </div>
 

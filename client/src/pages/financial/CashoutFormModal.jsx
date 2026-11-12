@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, Calculator, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, Calculator, AlertTriangle, FileCheck2 } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
 import { useCreateCashout, useReconciliationPreview, useCashiers, useCashoutMeta } from '../../hooks/useCashouts.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
@@ -9,10 +9,13 @@ import { CURRENCIES, METHODS, fmtMoney, fmtDiff, toLocalInput, localInputToIso, 
 import './cashout.css';
 
 const emptyCount = () => ({ mode: 'notes', notes: {}, total: '', remark: '' });
+const ELECTRONIC = ['zaad', 'edahab'];
 
-// New Cashout. Only physical CASH is counted (per currency, by notes or a
-// remarked manual total); ZAAD / eDahab are auto-verified from the matched
-// payments. The figures shown here are a preview — the server recomputes
+// New Cashout. Physical CASH is counted (per currency, by notes or a
+// remarked manual total). Only ZAAD payments confirmed by the gateway are
+// auto-verified; manually recorded ZAAD and every eDahab payment must be
+// checked against the merchant statement and its total explicitly
+// confirmed. The figures shown here are a preview — the server recomputes
 // every expected / actual / difference figure and applies the tolerance.
 export default function CashoutFormModal({ open, onClose, prefill }) {
   if (!open) return null;
@@ -28,6 +31,7 @@ function CashoutForm({ onClose, prefill }) {
   const [periodStart, setPeriodStart] = useState(prefill.periodStart ? toLocalInput(prefill.periodStart) : '');
   const [periodEnd, setPeriodEnd] = useState(toLocalInput(prefill.periodEnd || new Date()));
   const [counts, setCounts] = useState({ USD: emptyCount(), SLSH: emptyCount() });
+  const [elec, setElec] = useState({}); // 'USD.zaad' -> { total, confirmed }
   const [shortageReason, setShortageReason] = useState('');
   const [remarks, setRemarks] = useState('');
   const [error, setError] = useState('');
@@ -57,22 +61,35 @@ function CashoutForm({ onClose, prefill }) {
     const e = counts[cur];
     counted[cur] = e.mode === 'manual' ? (e.total === '' ? 0 : Number(e.total)) : notesTotal(denoms[cur], e.notes);
   }
+  // Electronic lines that need the head's statement confirmation.
+  const toConfirm = [];
+  if (p?.breakdown) {
+    for (const cur of CURRENCIES) for (const m of ELECTRONIC) {
+      const l = p.breakdown.currencies[cur][m];
+      if (l.manual_expected > 0) toConfirm.push({ key: `${cur}.${m}`, cur, m, line: l });
+    }
+  }
+  const statementOf = (key, line) => (elec[key]?.total !== undefined ? elec[key].total : String(line.manual_expected));
+  const elecDiff = (cur) => toConfirm.filter((x) => x.cur === cur).reduce((s, x) => s + ((Number(statementOf(x.key, x.line)) || 0) - x.line.manual_expected), 0);
+  const elecShort = (cur) => toConfirm.filter((x) => x.cur === cur).reduce((s, x) => s + Math.max(0, x.line.manual_expected - (Number(statementOf(x.key, x.line)) || 0)), 0);
 
   // Display-only estimate of the result (the server decides).
-  const estimate = useMemo(() => {
+  const estimate = (() => {
     if (!p?.breakdown) return null;
     const b = p.breakdown.currencies;
-    const diffs = { USD: counted.USD - b.USD.cash.expected, SLSH: counted.SLSH - b.SLSH.cash.expected };
+    const cashD = { USD: counted.USD - b.USD.cash.expected, SLSH: counted.SLSH - b.SLSH.cash.expected };
+    const diffs = { USD: cashD.USD + elecDiff('USD'), SLSH: cashD.SLSH + elecDiff('SLSH') };
     const rate = Number(p.rate) || null;
     const slshUsd = Math.abs(diffs.SLSH) < 0.5 ? 0 : rate ? diffs.SLSH / rate : null;
     if (slshUsd === null) return { diffs, noRate: true };
     const net = diffs.USD + slshUsd;
-    const gross = Math.max(0, -diffs.USD) + Math.max(0, -slshUsd);
+    const slshShort = Math.max(0, -cashD.SLSH) + elecShort('SLSH');
+    const gross = Math.max(0, -cashD.USD) + elecShort('USD') + (slshShort > 0.4 ? (rate ? slshShort / rate : 0) : 0);
     const control = Math.max(net < -0.005 ? -net : 0, gross);
     const surplus = net > 0.005 ? net : 0;
     const status = control > controls.tolerance_usd + 1e-9 ? 'shortage' : surplus > controls.tolerance_usd + 1e-9 ? 'surplus' : 'balanced';
     return { diffs, control, surplus, status, reasonRequired: status === 'shortage', needsAdmin: control > controls.admin_threshold_usd + 1e-9 };
-  }, [p, counted.USD, counted.SLSH, controls.tolerance_usd, controls.admin_threshold_usd]);
+  })();
 
   function setCount(cur, patch) {
     setCounts((prev) => ({ ...prev, [cur]: { ...prev[cur], ...patch } }));
@@ -95,11 +112,19 @@ function CashoutForm({ onClose, prefill }) {
         cash_count[cur] = { mode: 'notes', notes };
       }
     }
+    const electronic_confirm = {};
+    for (const x of toConfirm) {
+      const v = statementOf(x.key, x.line);
+      if (v === '' || !(Number(v) >= 0)) { setError(t('co2.form.statementInvalid', undefined, { what: `${t(`co2.m.${x.m}`)} ${x.cur}` })); return; }
+      if (!elec[x.key]?.confirmed) { setError(t('co2.form.statementConfirm', undefined, { what: `${t(`co2.m.${x.m}`)} ${x.cur}` })); return; }
+      electronic_confirm[x.cur] = electronic_confirm[x.cur] || {};
+      electronic_confirm[x.cur][x.m] = { total: Number(v), confirmed: true };
+    }
     if (estimate?.reasonRequired && !shortageReason.trim()) { setError(t('co2.form.reasonRequired')); return; }
     try {
       const result = await create.mutateAsync({
         zone_id: parseInt(zoneId, 10), cashier_id: parseInt(cashierId, 10), period_start: startIso, period_end: endIso,
-        cash_count, shortage_reason: shortageReason.trim() || undefined, remarks: remarks.trim() || undefined,
+        cash_count, electronic_confirm, shortage_reason: shortageReason.trim() || undefined, remarks: remarks.trim() || undefined,
       });
       toast.success(t('fin.m.created', undefined, { number: result.data.cashout_number }));
       onClose();
@@ -162,7 +187,9 @@ function CashoutForm({ onClose, prefill }) {
                   <tr key={m}>
                     <td>
                       {t(`co2.m.${m}`)}{' '}
-                      {m !== 'cash' && <span className="co-auto"><ShieldCheck size={11} />{t('co2.autoVerified')}</span>}
+                      {m !== 'cash' && CURRENCIES.every((c) => p.breakdown.currencies[c][m].manual_expected <= 0) && p.breakdown.currencies.USD[m].count + p.breakdown.currencies.SLSH[m].count > 0 && (
+                        <span className="co-auto"><ShieldCheck size={11} />{t('co2.autoVerified')}</span>
+                      )}
                     </td>
                     <td>{fmtMoney(p.breakdown.currencies.USD[m].expected, 'USD')} <span className="co-muted">({p.breakdown.currencies.USD[m].count})</span></td>
                     <td>{fmtMoney(p.breakdown.currencies.SLSH[m].expected, 'SLSH')} <span className="co-muted">({p.breakdown.currencies.SLSH[m].count})</span></td>
@@ -178,7 +205,40 @@ function CashoutForm({ onClose, prefill }) {
             </div>
           )}
 
-          <div className="co-step"><b>3</b>{t('co2.form.countCash')}</div>
+          {toConfirm.length > 0 && (<>
+            <div className="co-step"><b>3</b>{t('co2.form.confirmElectronic')}</div>
+            <div className="co-note">{t('co2.form.confirmElectronicHint')}</div>
+            {toConfirm.map((x) => {
+              const v = statementOf(x.key, x.line);
+              const d = (Number(v) || 0) - x.line.manual_expected;
+              return (
+                <div key={x.key} className="co-count">
+                  <div className="co-count-head">
+                    <strong><FileCheck2 size={14} style={{ verticalAlign: '-2px' }} /> {t(`co2.m.${x.m}`)} {x.cur}</strong>
+                    <span className="co-note">{t('co2.form.manualRecorded', undefined, { n: x.line.manual_count, amount: fmtMoney(x.line.manual_expected, x.cur) })}{x.line.gateway_count > 0 ? ` · ${t('co2.form.gatewayPart', undefined, { amount: fmtMoney(x.line.gateway_expected, x.cur) })}` : ''}</span>
+                  </div>
+                  <div className="co-grid2">
+                    <label className="co-field">
+                      <span>{t('co2.form.statementTotal')}</span>
+                      <input className="co-input" inputMode="decimal" value={v}
+                        onChange={(e) => setElec((prev) => ({ ...prev, [x.key]: { ...prev[x.key], total: e.target.value.replace(/[^\d.]/g, ''), confirmed: false } }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600 }}>
+                      <input type="checkbox" checked={!!elec[x.key]?.confirmed}
+                        onChange={(e) => setElec((prev) => ({ ...prev, [x.key]: { total: statementOf(x.key, x.line), confirmed: e.target.checked } }))} />
+                      {t('co2.form.statementChecked')}
+                    </label>
+                  </div>
+                  <div className="co-count-total">
+                    <span className="co-muted">{t('co2.form.recordedManual')} {fmtMoney(x.line.manual_expected, x.cur)}</span>
+                    <span className={Math.abs(d) < (x.cur === 'SLSH' ? 0.5 : 0.005) ? 'co-zero' : d < 0 ? 'co-neg' : 'co-pos'}>{fmtDiff(d, x.cur)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </>)}
+
+          <div className="co-step"><b>{toConfirm.length > 0 ? 4 : 3}</b>{t('co2.form.countCash')}</div>
           {CURRENCIES.map((cur) => (
             <CountBox key={cur} cur={cur} denoms={denoms[cur]} entry={counts[cur]} expected={p.breakdown.currencies[cur].cash.expected}
               total={counted[cur]} onChange={(patch) => setCount(cur, patch)} />
