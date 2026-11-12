@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ListChecks, Play, ChevronDown, ChevronUp, UserPlus, Repeat, Trash2, AlertTriangle, Truck, User, ArrowUp, ArrowDown, Route as RouteIcon, ShieldCheck } from 'lucide-react';
 import { PageHeader, Button, Card, StatusBadge, LoadingState, ErrorState, EmptyState, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
@@ -15,11 +15,20 @@ import {
 
 const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
 
+function validDateParam(raw) {
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return '';
+  const d = new Date(raw + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === raw ? raw : '';
+}
+
 // Operations → Today: the automatically generated daily lists (one per Sub
 // Zone, split by customer type), ordered Group › District › Zone › Sub Zone.
 export default function TodayListsPage() {
   const { t } = useI18n();
-  const [date, setDate] = useState('');
+  // ?date=YYYY-MM-DD (e.g. from a Calendar auto-batch click) preselects that
+  // day; anything malformed falls back to the server's today.
+  const [searchParams] = useSearchParams();
+  const [date, setDate] = useState(() => validDateParam(searchParams.get('date')));
   const { data, isLoading, error, refetch } = useDailyLists(date || undefined);
   const info = data?.data;
   const effectiveDate = date || info?.today || '';

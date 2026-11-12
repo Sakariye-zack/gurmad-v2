@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { eachDay, isToday, toISODate } from './dateUtils.js';
 import { isOverdue, eventsForDay } from './WeekGrid.jsx';
+import { eventTarget, eventTooltip, isSoftEvent, progressLabel } from './calendarEvent.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const DOW_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -16,14 +17,14 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '5px', marginBottom: '5px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '5px', marginBottom: '5px' }}>
         {DOW_KEYS.map((k) => t('cal.dow.' + k)).map((l) => (
           <div key={l} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '1px 0' }}>{l}</div>
         ))}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
         {weeks.map((week, wi) => (
-          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '5px' }}>
+          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '5px' }}>
             {week.map((day) => {
               const inMonth = day.getMonth() === focusMonth.getMonth();
               const dayEvents = eventsForDay(batches, day);
@@ -37,28 +38,33 @@ export default function MonthGrid({ from, to, batches, focusMonth }) {
                     border: `1px solid ${today ? 'var(--brand)' : 'var(--border)'}`,
                     borderRadius: 'var(--radius-sm)', minHeight: '74px', padding: '4px',
                     background: inMonth ? 'var(--surface)' : 'var(--bg)', opacity: inMonth ? 1 : 0.55,
-                    display: 'flex', flexDirection: 'column', gap: '2px',
+                    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, overflow: 'hidden',
                   }}
                 >
                   <span style={{ fontSize: '10px', fontWeight: 700, color: today ? 'var(--brand)' : 'var(--text-muted)' }}>{day.getDate()}</span>
-                  {visible.map((b) => (
-                    <button
-                      key={b.id}
-                      onClick={() => navigate(`/collection-cycles/batches/${b.id}`)}
-                      title={`${b.batch_code} — ${b.zone_name}`}
-                      style={{
-                        textAlign: 'left', border: 'none', borderLeft: `3px solid ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
-                        borderRadius: '3px', background: 'var(--bg)', padding: '1px 4px', cursor: 'pointer',
-                        fontSize: '9.5px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        fontFamily: 'inherit', color: 'var(--text)',
-                        /* Explicit color required: a <button>'s UA default text
-                           color (black) does not inherit var(--text) from <body>
-                           — same dark-theme readability defect as WeekGrid. */
-                      }}
-                    >
-                      {b.batch_code}
-                    </button>
-                  ))}
+                  {visible.map((b) => {
+                    const soft = isSoftEvent(b);
+                    return (
+                      <button
+                        key={b.id}
+                        onClick={() => navigate(eventTarget(b, toISODate(day)))}
+                        title={eventTooltip(b)}
+                        style={{
+                          textAlign: 'left', border: 'none', borderLeft: `3px ${soft ? 'dashed' : 'solid'} ${isOverdue(b) ? 'var(--danger)' : 'var(--brand)'}`,
+                          borderRadius: '3px', background: soft ? 'transparent' : 'var(--bg)', padding: '1px 4px', cursor: 'pointer',
+                          fontSize: '9.5px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          fontFamily: 'inherit', color: soft ? 'var(--text-muted)' : 'var(--text)', minWidth: 0, maxWidth: '100%',
+                          /* Explicit color required: a <button>'s UA default text
+                             color (black) does not inherit var(--text) from <body>
+                             — same dark-theme readability defect as WeekGrid. */
+                        }}
+                      >
+                        {b.auto_generated && <span style={{ color: 'var(--info)' }}>● </span>}
+                        {b.route_code || b.batch_code}{' '}
+                        <span className="tabular-nums" style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{progressLabel(b)}</span>
+                      </button>
+                    );
+                  })}
                   {overflow > 0 && (
                     <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 700 }}>{t('cal.m.more', undefined, { n: overflow })}</span>
                   )}

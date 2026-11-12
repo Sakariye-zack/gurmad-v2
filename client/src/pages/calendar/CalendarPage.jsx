@@ -13,6 +13,7 @@ import {
   startOfWeek, toISODate,
 } from './dateUtils.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { eventTarget, eventTooltip, isMultiDay, isSoftEvent, primaryLabel, progressLabel, rangeLabel } from './calendarEvent.js';
 
 const STATUS_OPTIONS = ['draft', 'assigned', 'in_progress', 'partially_completed', 'completed', 'cancelled'];
 const CUSTOMER_TYPE_OPTIONS = ['residential', 'commercial'];
@@ -30,6 +31,7 @@ export default function CalendarPage() {
   const [zoneId, setZoneId] = useState('');
   const [status, setStatus] = useState('');
   const [customerType, setCustomerType] = useState('');
+  const [source, setSource] = useState(''); // '' (all) | 'auto' | 'manual'
 
   const isZoneScoped = ZONE_SCOPED_ROLES.includes((user?.role || '').toLowerCase());
   const { data: zonesData } = useZonesList();
@@ -46,6 +48,7 @@ export default function CalendarPage() {
     zoneId: isZoneScoped ? undefined : (zoneId || undefined), // server forces zone for scoped roles anyway; withheld client-side too, never trusted either way
     status: status || undefined,
     customerType: customerType || undefined,
+    source: source || undefined,
   });
   const batches = data?.data || [];
 
@@ -111,6 +114,28 @@ export default function CalendarPage() {
           <option value="">{t('cal.all_customer_types')}</option>
           {CUSTOMER_TYPE_OPTIONS.map((c) => <option key={c} value={c}>{t('cust.' + c, c)}</option>)}
         </select>
+        <select value={source} onChange={(e) => setSource(e.target.value)} style={selectStyle} aria-label={t('opsp.col.source')}>
+          <option value="">{t('opsp.allSources')}</option>
+          <option value="auto">{t('opsp.sourceAuto')}</option>
+          <option value="manual">{t('opsp.sourceManual')}</option>
+        </select>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span style={legendSwatch('solid', 'var(--brand)', 'var(--bg)')} />
+          <span style={legendChip}>{t('opsp.sourceAuto')}</span>
+          {t('calc.legendAuto')}
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span style={legendSwatch('dashed', 'var(--brand)', 'transparent')} />
+          {t('calc.legendManual')}
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span style={legendSwatch('solid', 'var(--danger)', 'var(--bg)')} />
+          {t('calc.legendOverdue')}
+        </span>
+        <span>{t('calc.legendProgress')}</span>
       </div>
 
       {isLoading && <LoadingState label={t('cal.loading_calendar')} />}
@@ -158,26 +183,43 @@ function CalendarListFallback({ batches }) {
 function ListRow({ batch }) {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const soft = isSoftEvent(batch);
   return (
     <button
-      onClick={() => navigate(`/collection-cycles/batches/${batch.id}`)}
+      onClick={() => navigate(eventTarget(batch))}
+      title={eventTooltip(batch)}
       style={{
         textAlign: 'left', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
         background: 'var(--surface)', padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', color: 'var(--text)',
+        borderStyle: soft ? 'dashed' : 'solid', opacity: soft ? 0.8 : 1,
         /* Explicit color required: a <button>'s UA default text color (black)
            does not inherit var(--text) from <body> — same dark-theme
            readability defect as the WeekGrid/MonthGrid event buttons. */
       }}
     >
       <div>
-        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>{batch.batch_code}</div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{batch.zone_name} · {batch.start_date}{batch.end_date ? ` – ${batch.end_date}` : t('cal.ongoing')}</div>
+        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>
+          {primaryLabel(batch)}
+          {batch.auto_generated && <span style={{ ...legendChip, marginLeft: '6px' }}>{t('opsp.sourceAuto')}</span>}
+          <span className="tabular-nums" style={{ marginLeft: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>{progressLabel(batch)}</span>
+        </div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          {batch.batch_code} · {batch.zone_name} · {isMultiDay(batch) ? (batch.end_date ? rangeLabel(batch) : `${rangeLabel(batch)} ${t('cal.ongoing')}`) : batch.start_date}
+        </div>
       </div>
       <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-muted)' }}>{batch.status.replace(/_/g, ' ')}</span>
     </button>
   );
 }
+
+function legendSwatch(style, color, bg) {
+  return {
+    display: 'inline-block', width: '14px', height: '12px', borderRadius: '2px', background: bg,
+    border: style === 'dashed' ? '1px dashed var(--border)' : 'none', borderLeft: `3px ${style} ${color}`,
+  };
+}
+const legendChip = { fontSize: '9px', fontWeight: 700, padding: '0 5px', borderRadius: '999px', color: 'var(--info)', border: '1px solid var(--info)', lineHeight: '14px' };
 
 const selectStyle = {
   padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
