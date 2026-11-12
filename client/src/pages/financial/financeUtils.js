@@ -75,24 +75,42 @@ export { fmtMoney };
 
 // Maps a /payments/zaad-request failure to what the cashier must do.
 // critical = the money MAY have moved: never resend, escalate to an admin.
+// Fail closed: ONLY the explicit codes below are known to be rejected before
+// any gateway call (or a clean gateway decline). Anything else — a 5xx, a
+// missing code, an HTML error page, a network drop after the request left —
+// is treated as critical.
+const SAFE_ZAAD_ERRORS = {
+  VALIDATION: { retry: true, key: 'fr.zaad.err.validation', detail: true },
+  OVERPAYMENT: { retry: true, key: 'fr.zaad.err.overpay', detail: true },
+  NO_EXCHANGE_RATE: { key: 'fr.zaad.err.noRate' },
+  CONFLICT: { key: 'fr.zaad.err.voided' },
+  FORBIDDEN: { key: 'fr.zaad.err.forbidden' },
+  NOT_FOUND: { key: 'fr.zaad.err.notFound' },
+  NOT_CONFIGURED: { key: 'fr.zaad.err.notConfigured' },
+  ZAAD_DECLINED: { retry: true, key: 'fr.zaad.err.declined', detail: true },
+  ZAAD_IN_PROGRESS: { key: 'fr.zaad.err.inProgress' },
+  PAYMENT_UNCONFIRMED: { key: 'fr.zaad.err.unconfirmed' },
+};
 export function zaadErrorInfo(t, err) {
   const code = err?.code;
   const status = err?.status;
+  const safe = status && status < 500 && SAFE_ZAAD_ERRORS[code];
+  if (safe) return { critical: false, retry: !!safe.retry, message: t(safe.key), detail: safe.detail ? err.message : undefined };
   if (!status) return { critical: true, message: t('fr.zaad.err.network'), detail: err?.message };
-  switch (code) {
-    case 'ZAAD_DECLINED': return { critical: false, retry: true, message: t('fr.zaad.err.declined'), detail: err.message };
-    case 'NOT_CONFIGURED': return { critical: false, message: t('fr.zaad.err.notConfigured') };
-    case 'ZAAD_UNKNOWN': return { critical: true, message: t('fr.zaad.err.unknown'), detail: err.message };
-    case 'RECONCILIATION_REQUIRED': return { critical: true, message: t('fr.zaad.err.reconciliation'), detail: err.message };
-    case 'GATEWAY_ERROR': return { critical: true, message: t('fr.zaad.err.gateway'), detail: err.message };
-    case 'OVERPAYMENT': return { critical: false, retry: true, message: t('fr.zaad.err.overpay'), detail: err.message };
-    case 'NO_EXCHANGE_RATE': return { critical: false, message: t('fr.zaad.err.noRate') };
-    case 'CONFLICT': return { critical: false, message: t('fr.zaad.err.voided') };
-    case 'FORBIDDEN': return { critical: false, message: t('fr.zaad.err.forbidden') };
-    case 'VALIDATION': return { critical: false, retry: true, message: t('fr.zaad.err.validation'), detail: err.message };
-    default:
-      if (status === 504) return { critical: true, message: t('fr.zaad.err.unknown'), detail: err.message };
-      if (status === 502) return { critical: true, message: t('fr.zaad.err.gateway'), detail: err.message };
-      return { critical: false, retry: true, message: err.message || t('common.somethingWrong') };
-  }
+  if (code === 'RECONCILIATION_REQUIRED') return { critical: true, message: t('fr.zaad.err.reconciliation'), detail: err.message };
+  if (code === 'ZAAD_UNKNOWN' || status === 504) return { critical: true, message: t('fr.zaad.err.unknown'), detail: err.message };
+  if (code === 'GATEWAY_ERROR' || status === 502) return { critical: true, message: t('fr.zaad.err.gateway'), detail: err.message };
+  return { critical: true, message: t('fr.zaad.err.unexpected'), detail: err?.message };
+}
+
+// Client-side mirror of the server precheck for the Full-amount / push
+// guard: the payment converted to the invoice currency must not exceed what
+// is owed (+ the server's half-cent tolerance). The server still decides.
+export function exceedsOwed(amount, payCur, balance, invCur) {
+  const owed = Number(balance?.outstanding || 0);
+  const inInvCur = convert(amount, payCur, invCur, balance);
+  if (inInvCur === null) return true; // no rate: cannot size it
+  const r = balance?.rate ? Number(balance.rate.rate) : 0;
+  const tol = invCur === 'SLSH' ? (payCur === 'USD' ? r * 0.005 : 0.005) : 0.005;
+  return inInvCur > owed + tol;
 }

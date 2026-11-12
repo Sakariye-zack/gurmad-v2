@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Wallet, Search, Receipt, Smartphone, Banknote, Coins, CheckCircle2, AlertTriangle, X, ExternalLink, Clock,
+  Wallet, Search, Receipt, Smartphone, Banknote, Coins, CheckCircle2, AlertTriangle, X, ExternalLink, Clock, Lock,
 } from 'lucide-react';
 import { PageHeader, Button, StatusBadge, LoadingState, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
@@ -10,16 +10,19 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 import { fmtByCurrency } from '../../lib/money.js';
 import {
   STATUS_MAP, PAYMENT_STATUS_MAP, fmtMoney, invCurrency, otherCurrency, secondaryBlock, rateText, convert,
-  methodLabel, recordedByLabel, ageDays, ageLabel, fmtDateTime, zaadErrorInfo,
+  methodLabel, recordedByLabel, ageDays, ageLabel, fmtDateTime, zaadErrorInfo, exceedsOwed,
 } from './financeUtils.js';
+import { useZaadStore, getZaadEntry, setZaadEntry, anyZaadWaiting } from './zaadPendingStore.js';
 import './finance.css';
 
 // Billing — the cashier's money-collection workspace. Deliberately NOT a
 // duplicate Invoice management page (approved architecture): it only selects
 // an outstanding invoice and records a payment against it. Every balance
-// shown comes from the server (getInvoiceBalance); the server alone sizes,
-// validates and records payments (POST /payments, POST /payments/zaad-request).
-const LIST_CHUNK = 60;
+// shown comes from the server; the server alone sizes, validates and records
+// payments (POST /payments, POST /payments/zaad-request) and owns the ZAAD
+// in-flight / unconfirmed-outcome guard.
+const PAGE_STEP = 100;
+const PAGE_MAX = 500;
 
 export default function BillingView() {
   const { t } = useI18n();
@@ -29,24 +32,38 @@ export default function BillingView() {
   const [debouncedQ, setDebouncedQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [curFilter, setCurFilter] = useState('all');
-  const [limit, setLimit] = useState(LIST_CHUNK);
+  const [pageSize, setPageSize] = useState(PAGE_STEP);
+  useZaadStore();
+  const waiting = anyZaadWaiting();
 
   useEffect(() => {
     const h = setTimeout(() => setDebouncedQ(q.trim().length >= 2 ? q.trim() : ''), 300);
     return () => clearTimeout(h);
   }, [q]);
 
-  const { data, isLoading, error, refetch } = useOpenInvoices(debouncedQ);
-  const all = useMemo(() => (data?.data || []).filter((i) => i.status === 'unpaid' || i.status === 'partial'), [data]);
-  const filtered = all.filter((i) => (statusFilter === 'all' || i.status === statusFilter) && (curFilter === 'all' || invCurrency(i) === curFilter));
-  const counts = { all: all.length, unpaid: all.filter((i) => i.status === 'unpaid').length, partial: all.filter((i) => i.status === 'partial').length };
-  const owedBy = all.reduce((acc, i) => { acc[invCurrency(i)] += Number(i.balance?.outstanding || 0); return acc; }, { USD: 0, SLSH: 0 });
+  // Leaving the page while a push waits would lose its result.
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = t('fr.zaad.leaveWarning'); return e.returnValue; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [waiting, t]);
+
+  const { data, isLoading, error, refetch } = useOpenInvoices({
+    q: debouncedQ, status: statusFilter === 'all' ? undefined : statusFilter, currency: curFilter === 'all' ? undefined : curFilter, pageSize,
+  });
+  const invoices = data?.data || [];
+  const meta = data?.meta || { total: 0 };
+  const summary = meta.summary || { count: 0, unpaid: 0, partial: 0, owed: { USD: 0, SLSH: 0 } };
+  const counts = { all: summary.count, unpaid: summary.unpaid, partial: summary.partial };
 
   const select = (id) => {
+    if (waiting) return; // the waiting push owns the screen until it resolves
     const next = new URLSearchParams(searchParams);
     if (id) next.set('invoice', String(id)); else next.delete('invoice');
     setSearchParams(next, { replace: true });
   };
+  const resetPaging = () => setPageSize(PAGE_STEP);
 
   // Lock page scroll while the mobile bottom sheet is open.
   useEffect(() => {
@@ -66,7 +83,7 @@ export default function BillingView() {
         <StatCard label={t('fr.bill.partial')} value={error ? '—' : counts.partial} icon={Receipt} accent="var(--warning)" />
         <StatCard
           label={t('fr.bill.owedTotal')}
-          value={error || isLoading ? '—' : <span style={{ fontSize: owedBy.USD > 0.004 && owedBy.SLSH > 0.4 ? '17px' : undefined }}>{fmtByCurrency(owedBy)}</span>}
+          value={error || isLoading ? '—' : <span style={{ fontSize: summary.owed.USD > 0.004 && summary.owed.SLSH > 0.4 ? '17px' : undefined }}>{fmtByCurrency(summary.owed)}</span>}
           icon={Coins}
           accent="var(--accent)"
         />
@@ -77,19 +94,19 @@ export default function BillingView() {
           <div className="fin-bill-tools">
             <div className="fin-search">
               <Search size={15} />
-              <input className="fin-input" type="search" value={q} onChange={(e) => { setQ(e.target.value); setLimit(LIST_CHUNK); }} placeholder={t('fr.bill.search')} aria-label={t('fr.bill.search')} />
+              <input className="fin-input" type="search" value={q} onChange={(e) => { setQ(e.target.value); resetPaging(); }} placeholder={t('fr.bill.search')} aria-label={t('fr.bill.search')} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
               <div className="fin-chip-row" role="group" aria-label={t('common.status')}>
                 {['all', 'unpaid', 'partial'].map((k) => (
-                  <button key={k} type="button" className="fin-chip" aria-pressed={statusFilter === k} onClick={() => { setStatusFilter(k); setLimit(LIST_CHUNK); }}>
+                  <button key={k} type="button" className="fin-chip" aria-pressed={statusFilter === k} onClick={() => { setStatusFilter(k); resetPaging(); }}>
                     {t(`fr.bill.${k}`)} <span className="fin-chip-count">{counts[k]}</span>
                   </button>
                 ))}
               </div>
               <div className="fin-chip-row" role="group" aria-label={t('fr.pay.currency')}>
                 {['all', 'USD', 'SLSH'].map((k) => (
-                  <button key={k} type="button" className="fin-chip" aria-pressed={curFilter === k} onClick={() => { setCurFilter(k); setLimit(LIST_CHUNK); }}>
+                  <button key={k} type="button" className="fin-chip" aria-pressed={curFilter === k} onClick={() => { setCurFilter(k); resetPaging(); }}>
                     {k === 'all' ? t('fr.bill.anyCurrency') : k}
                   </button>
                 ))}
@@ -99,18 +116,18 @@ export default function BillingView() {
 
           {isLoading && <LoadingState label={t('common.loading')} />}
           {error && <div className="fin-alert"><p style={{ margin: 0 }}>{error.message}</p><button className="fin-linkbtn" onClick={() => refetch()}>{t('fr.zaad.tryAgain')}</button></div>}
-          {!isLoading && !error && filtered.length === 0 && (
-            <div className="fin-panel-card fin-panel-empty">{all.length === 0 && !debouncedQ ? t('fr.bill.none') : t('fr.bill.noMatch')}</div>
+          {!isLoading && !error && invoices.length === 0 && (
+            <div className="fin-panel-card fin-panel-empty">{summary.count === 0 && !debouncedQ ? t('fr.bill.none') : t('fr.bill.noMatch')}</div>
           )}
           <div className="fin-bill-cards">
-            {filtered.slice(0, limit).map((inv) => (
-              <InvoiceCard key={inv.id} inv={inv} selected={selectedId === inv.id} onSelect={() => select(inv.id)} />
+            {invoices.map((inv) => (
+              <InvoiceCard key={inv.id} inv={inv} selected={selectedId === inv.id} disabled={waiting && selectedId !== inv.id} onSelect={() => select(inv.id)} />
             ))}
           </div>
-          {filtered.length > limit && (
+          {meta.total > invoices.length && (
             <div style={{ textAlign: 'center', marginTop: '12px' }}>
-              <div className="fin-note" style={{ marginBottom: '6px' }}>{t('fr.bill.showing', undefined, { n: limit, total: filtered.length })}</div>
-              <Button variant="secondary" onClick={() => setLimit((l) => l + LIST_CHUNK)}>{t('fr.bill.showMore')}</Button>
+              <div className="fin-note" style={{ marginBottom: '6px' }}>{t('fr.bill.showing', undefined, { n: invoices.length, total: meta.total })}</div>
+              {pageSize < PAGE_MAX && <Button variant="secondary" onClick={() => setPageSize((s) => Math.min(PAGE_MAX, s + PAGE_STEP))}>{t('fr.bill.showMore')}</Button>}
             </div>
           )}
         </section>
@@ -118,7 +135,7 @@ export default function BillingView() {
         <div className="fin-sheet-backdrop" onClick={() => select(null)} aria-hidden="true" />
         <aside className="fin-panel" aria-label={t('fr.pay.title')}>
           {selectedId ? (
-            <PaymentPanel key={selectedId} invoiceId={selectedId} onRecorded={refetch} onClose={() => select(null)} />
+            <PaymentPanel key={selectedId} invoiceId={selectedId} onRecorded={refetch} onClose={() => select(null)} closeDisabled={waiting} />
           ) : (
             <div className="fin-panel-card fin-panel-empty">
               <Search size={22} style={{ display: 'block', margin: '0 auto 8px', opacity: 0.6 }} />
@@ -131,14 +148,16 @@ export default function BillingView() {
   );
 }
 
-function InvoiceCard({ inv, selected, onSelect }) {
+function InvoiceCard({ inv, selected, disabled, onSelect }) {
   const { t } = useI18n();
   const cur = invCurrency(inv);
   const owed = inv.balance ? Number(inv.balance.outstanding) : null;
   const sec = secondaryBlock(inv.balance, cur);
   const days = ageDays(inv.created_at);
+  const zaadFlag = inv.zaad_in_progress || inv.zaad_blocked_until;
   return (
-    <button type="button" className="fin-inv-card" aria-current={selected} onClick={onSelect}>
+    <button type="button" className="fin-inv-card" aria-current={selected} onClick={onSelect} disabled={disabled}
+      style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}>
       <div className="fin-inv-row">
         <div style={{ minWidth: 0 }}>
           <span className="fin-inv-name">{inv.customer_name}</span>
@@ -152,6 +171,7 @@ function InvoiceCard({ inv, selected, onSelect }) {
           <span><Receipt size={12} style={{ verticalAlign: '-2px' }} /> {inv.invoice_number}</span>
           <span className={days > 30 ? 'fin-age-old' : undefined}><Clock size={12} style={{ verticalAlign: '-2px' }} /> {ageLabel(t, days)}</span>
           <span className="fin-pill">{cur}</span>
+          {zaadFlag && <span className="fin-pill" style={{ color: 'var(--danger)' }}><Lock size={10} style={{ verticalAlign: '-1px' }} /> ZAAD</span>}
         </div>
         <div className="fin-inv-amt">
           <div className="fin-note" style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.04em' }}>{t('fr.bill.owed')}</div>
@@ -163,11 +183,6 @@ function InvoiceCard({ inv, selected, onSelect }) {
   );
 }
 
-// Invoices where a ZAAD push ended with an UNKNOWN / reconciliation outcome in
-// this browser session. The ZAAD send button stays disabled for them until the
-// page is reloaded, so a cashier cannot double-charge a customer by retrying.
-const zaadBlocked = new Set();
-
 const METHODS = [
   { key: 'cash', icon: Banknote },
   { key: 'zaad', icon: Smartphone },
@@ -175,13 +190,15 @@ const METHODS = [
   { key: 'slsh', icon: Coins },
 ];
 
-function PaymentPanel({ invoiceId, onRecorded, onClose }) {
+function PaymentPanel({ invoiceId, onRecorded, onClose, closeDisabled }) {
   const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const { data, isLoading, error: loadError, refetch } = useInvoice(invoiceId);
   const recordPayment = useRecordPayment();
   const requestZaad = useRequestZaadPayment();
+  useZaadStore();
+  const zaad = getZaadEntry(invoiceId); // survives remounts (zaadPendingStore.js)
   const invoice = data?.data;
   const cur = invCurrency(invoice);
 
@@ -190,18 +207,14 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
   const [currency, setCurrency] = useState('USD');
   // Two amounts recorded together in one action (unchanged behaviour): the
   // money actually received (Payment method applies to it) and an optional
-  // part recorded as debt (its own payment row, method='debt', which the
-  // server's auto-debt tracking reflects on the Debts page).
+  // part recorded as debt (its own payment row, method='debt').
   const [amountPaid, setAmountPaid] = useState('');
   const [amountDebt, setAmountDebt] = useState('');
   const [phone, setPhone] = useState('');
   const [reference, setReference] = useState('');
   const [formError, setFormError] = useState('');
-  const [phase, setPhase] = useState('form'); // form | waiting | success | failed
-  const [zaadResult, setZaadResult] = useState(null);
-  const [zaadFail, setZaadFail] = useState(null);
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef(null);
+  const [now, setNow] = useState(() => Date.now());
+  const inFlight = useRef(false);
   const initRef = useRef(false);
 
   useEffect(() => {
@@ -210,14 +223,19 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
     setCurrency(invCurrency(invoice));
     setPhone(invoice.customer_phone || invoice.customer_whatsapp || invoice.customer_alternate_phone || '');
   }, [invoice]);
-  useEffect(() => () => clearInterval(timerRef.current), []);
+  // Elapsed-seconds ticker while waiting.
+  useEffect(() => {
+    if (zaad?.phase !== 'waiting') return undefined;
+    const h = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, [zaad?.phase]);
 
   if (isLoading) return <div className="fin-panel-card"><LoadingState label={t('portal.invoice.loading')} /></div>;
   if (loadError || !invoice) {
     return (
       <div className="fin-panel-card fin-panel-body">
         <div className="fin-alert"><p style={{ margin: 0 }}>{loadError?.message || t('common.somethingWrong')}</p></div>
-        <Button variant="secondary" onClick={onClose}>{t('fr.pay.back')}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={closeDisabled}>{t('fr.pay.back')}</Button>
       </div>
     );
   }
@@ -229,18 +247,31 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
   const net = Number(balance.netTotal || 0);
   const grossSec = sec && net > 0 ? sec.netTotal * (parseFloat(invoice.invoice_total) / net) : null;
   const isZaadPush = method === 'zaad' && !zaadManual;
-  const blocked = zaadBlocked.has(invoiceId);
+  const blockedUntil = invoice.zaad_blocked_until && new Date(invoice.zaad_blocked_until) > new Date() ? new Date(invoice.zaad_blocked_until) : null;
+  const serverInProgress = !!invoice.zaad_in_progress;
+  const localCritical = zaad?.phase === 'failed' && zaad.fail?.critical;
+  const pushDisabledReason = blockedUntil ? t('fr.zaad.blocked', undefined, { time: blockedUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+    : serverInProgress ? t('fr.zaad.inProgressFlag')
+      : localCritical ? t('fr.zaad.err.unconfirmed') : null;
   const phones = [...new Set([invoice.customer_phone, invoice.customer_whatsapp, invoice.customer_alternate_phone].filter(Boolean))];
   const paidNum = parseFloat(amountPaid) || 0;
   const debtNum = parseFloat(amountDebt) || 0;
   const equivCur = currency !== cur ? cur : other;
   const equiv = paidNum > 0 ? convert(paidNum, currency, equivCur, balance) : null;
+  const overOwed = paidNum > 0 && exceedsOwed(paidNum, currency, balance, cur);
 
+  function clearAmounts() { setAmountPaid(''); setAmountDebt(''); }
   function chooseMethod(m) {
     setMethod(m);
     setFormError('');
+    clearAmounts();
     if (m !== 'zaad') setZaadManual(false);
     if (m === 'slsh') setCurrency('SLSH');
+  }
+  function chooseCurrency(c) {
+    if (method === 'slsh') return; // SLSH cash is always SLSH
+    setCurrency(c);
+    clearAmounts();
   }
 
   function fullAmount() {
@@ -262,6 +293,7 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
     if (paidNum <= 0 && debtNum <= 0) { setFormError(t('fr.pay.enterAmount')); return; }
     if (paidNum < 0 || debtNum < 0) { setFormError(t('fin.amounts_cannot_be_negative')); return; }
     if (method === 'zaad' && paidNum > 0 && !reference.trim()) { setFormError(t('fr.pay.referenceRequired')); return; }
+    let paidDone = false;
     try {
       // Two rows, one user action — the server still enforces each one
       // individually (row-locked, overpayment-blocked).
@@ -270,46 +302,39 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
           invoice_id: invoiceId, amount: paidNum, currency, method,
           ...(method === 'zaad' ? { reference_code: reference.trim() } : {}),
         });
+        paidDone = true;
+        setAmountPaid('');
+        setReference('');
       }
       if (debtNum > 0) await recordPayment.mutateAsync({ invoice_id: invoiceId, amount: debtNum, currency, method: 'debt' });
       toast.success(paidNum > 0 && debtNum > 0 ? t('fr.pay.recordedWithDebt') : debtNum > 0 ? t('fr.pay.recordedDebt') : t('fr.pay.recorded'));
-      setAmountPaid('');
-      setAmountDebt('');
-      setReference('');
+      clearAmounts();
       afterSuccess();
     } catch (err) {
-      setFormError(err.message || t('common.somethingWrong'));
-      refetch(); // one of the two calls may already have succeeded
+      const msg = err.message || t('common.somethingWrong');
+      // Never let the cashier re-record money that is already in.
+      setFormError(paidDone ? t('fr.pay.paidRecordedDebtFailed', undefined, { amount: fmtMoney(paidNum, currency), error: msg }) : msg);
+      afterSuccess();
     }
   }
 
   async function handleZaad(e) {
     e.preventDefault();
     setFormError('');
-    if (blocked) return;
+    if (inFlight.current || pushDisabledReason || getZaadEntry(invoiceId)?.phase === 'waiting') return;
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 7) { setFormError(t('fr.zaad.phoneRequired')); return; }
     if (paidNum <= 0) { setFormError(t('fr.pay.enterAmount')); return; }
-    setPhase('waiting');
-    setElapsed(0);
-    const started = Date.now();
-    clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
-    try {
-      const res = await requestZaad.mutateAsync({ invoice_id: invoiceId, phone: phone.trim(), amount: paidNum, currency });
-      setZaadResult(res.data);
-      setPhase('success');
-      setAmountPaid('');
-      afterSuccess();
-    } catch (err) {
-      const info = zaadErrorInfo(t, err);
-      if (info.critical) zaadBlocked.add(invoiceId);
-      setZaadFail(info);
-      setPhase('failed');
-      refetch();
-    } finally {
-      clearInterval(timerRef.current);
-    }
+    if (overOwed) { setFormError(t('fr.pay.overOwedBlock')); return; }
+    inFlight.current = true;
+    const req = { amount: paidNum, currency, phone: phone.trim() };
+    setZaadEntry(invoiceId, { phase: 'waiting', startedAt: Date.now(), ...req });
+    // The request runs to completion even if this panel unmounts; the result
+    // lands in the module store, keyed by invoice.
+    requestZaad.mutateAsync({ invoice_id: invoiceId, phone: req.phone, amount: req.amount, currency: req.currency })
+      .then((res) => { setZaadEntry(invoiceId, { phase: 'success', ...req, result: res.data }); setAmountPaid(''); })
+      .catch((err) => { setZaadEntry(invoiceId, { phase: 'failed', ...req, fail: zaadErrorInfo(t, err) }); })
+      .finally(() => { inFlight.current = false; onRecorded?.(); refetch(); });
   }
 
   const header = (
@@ -320,11 +345,11 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
         {invoice.customer_path && <div className="fin-note">{invoice.customer_path}</div>}
       </div>
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
-        <Button variant="secondary" icon={ExternalLink} onClick={() => navigate(`/financial/invoices/${invoiceId}`)} style={{ padding: '7px 10px', fontSize: '12px' }}>
+        <Button variant="secondary" icon={ExternalLink} disabled={closeDisabled} onClick={() => navigate(`/financial/invoices/${invoiceId}`)} style={{ padding: '7px 10px', fontSize: '12px' }}>
           {t('fr.pay.openInvoice')}
         </Button>
-        <button type="button" className="fin-panel-close" onClick={onClose} aria-label={t('fr.pay.back')}
-          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px', cursor: 'pointer', color: 'var(--text-muted)' }}>
+        <button type="button" className="fin-panel-close" onClick={onClose} disabled={closeDisabled} aria-label={t('fr.pay.back')}
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px', cursor: closeDisabled ? 'not-allowed' : 'pointer', color: 'var(--text-muted)', opacity: closeDisabled ? 0.4 : 1 }}>
           <X size={16} />
         </button>
       </div>
@@ -363,42 +388,46 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
   );
 
   let body;
-  if (phase === 'waiting') {
+  if (zaad?.phase === 'waiting') {
+    const elapsed = Math.max(0, Math.floor((now - zaad.startedAt) / 1000));
     body = (
       <div className="fin-wait" role="status" aria-live="polite">
         <div className="fin-spinner" />
         <div className="fin-wait-title">{t('fr.zaad.waiting')}</div>
-        <div className="fin-note">{fmtMoney(paidNum, currency)} → {phone}</div>
+        <div className="fin-note">{fmtMoney(zaad.amount, zaad.currency)} → {zaad.phone}</div>
         <div className="fin-progress"><div style={{ width: `${Math.min(100, (elapsed / 90) * 100)}%` }} /></div>
         <div className="fin-note">{t('fr.zaad.elapsed', undefined, { s: elapsed })}</div>
         <div className="fin-warn">{t('fr.zaad.waitingSub')}</div>
       </div>
     );
-  } else if (phase === 'success' && zaadResult) {
+  } else if (zaad?.phase === 'success' && zaad.result) {
+    const r = zaad.result;
     body = (
       <div className="fin-receipt" role="status">
         <h4><CheckCircle2 size={18} /> {t('fr.zaad.successTitle')}</h4>
         <dl>
-          <dt>{t('fr.zaad.txId')}</dt><dd>{zaadResult.reference_code || '—'}</dd>
-          <dt>{t('fr.zaad.amount')}</dt><dd>{fmtMoney(zaadResult.amount, zaadResult.currency)}</dd>
-          <dt>{t('fr.zaad.newStatus')}</dt><dd><StatusBadge status={zaadResult.invoice_status} map={STATUS_MAP} /></dd>
-          <dt>{t('fr.zaad.remaining')}</dt><dd>{fmtMoney(zaadResult.outstanding, zaadResult.outstanding_currency || cur)}</dd>
+          <dt>{t('fr.zaad.txId')}</dt><dd>{r.reference_code || '—'}</dd>
+          <dt>{t('fr.zaad.amount')}</dt><dd>{fmtMoney(r.amount, r.currency)}</dd>
+          <dt>{t('fr.zaad.newStatus')}</dt><dd><StatusBadge status={r.invoice_status} map={STATUS_MAP} /></dd>
+          <dt>{t('fr.zaad.remaining')}</dt><dd>{fmtMoney(r.outstanding, r.outstanding_currency || cur)}</dd>
         </dl>
         <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
-          <Button onClick={() => { setPhase('form'); setZaadResult(null); }}>{t('fr.zaad.done')}</Button>
+          <Button onClick={() => setZaadEntry(invoiceId, null)}>{t('fr.zaad.done')}</Button>
           <Button variant="secondary" icon={Receipt} onClick={() => navigate(`/financial/invoices/${invoiceId}`)}>{t('fr.zaad.printReceipt')}</Button>
         </div>
       </div>
     );
-  } else if (phase === 'failed' && zaadFail) {
+  } else if (zaad?.phase === 'failed' && zaad.fail && !zaad.dismissed) {
+    const f = zaad.fail;
     body = (
-      <div className={`fin-alert${zaadFail.critical ? '' : ' soft'}`} role="alert">
-        <h4><AlertTriangle size={18} /> {zaadFail.critical ? t('fr.zaad.criticalTitle') : t('fr.zaad.failedTitle')}</h4>
-        <p>{zaadFail.message}</p>
-        {zaadFail.detail && <div className="detail">{zaadFail.detail}</div>}
+      <div className={`fin-alert${f.critical ? '' : ' soft'}`} role="alert">
+        <h4><AlertTriangle size={18} /> {f.critical ? t('fr.zaad.criticalTitle') : t('fr.zaad.failedTitle')}</h4>
+        <p>{f.message}</p>
+        {f.detail && <div className="detail">{f.detail}</div>}
         <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-          {!zaadFail.critical && zaadFail.retry && <Button onClick={() => { setPhase('form'); setZaadFail(null); }}>{t('fr.zaad.tryAgain')}</Button>}
-          <Button variant="secondary" onClick={() => { setPhase('form'); setZaadFail(null); }}>{t('fr.zaad.close')}</Button>
+          {!f.critical && f.retry && <Button onClick={() => setZaadEntry(invoiceId, null)}>{t('fr.zaad.tryAgain')}</Button>}
+          {/* A critical outcome stays recorded (dismissed) so the push stays disabled for this invoice. */}
+          <Button variant="secondary" onClick={() => setZaadEntry(invoiceId, f.critical ? { ...zaad, dismissed: true } : null)}>{t('fr.zaad.close')}</Button>
         </div>
       </div>
     );
@@ -423,7 +452,9 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
             <span>{t('fr.pay.currency')}</span>
             <div className="fin-seg fin-seg-2" role="group" aria-label={t('fr.pay.currency')}>
               {['USD', 'SLSH'].map((c) => (
-                <button key={c} type="button" aria-pressed={currency === c} onClick={() => { setCurrency(c); setAmountPaid(''); }}>{c}</button>
+                <button key={c} type="button" aria-pressed={currency === c} disabled={method === 'slsh' && c !== 'SLSH'}
+                  style={method === 'slsh' && c !== 'SLSH' ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                  onClick={() => chooseCurrency(c)}>{c}</button>
               ))}
             </div>
           </div>
@@ -436,6 +467,7 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
               <Button type="button" variant="secondary" onClick={fullAmount}>{t('fr.pay.full')}</Button>
             </div>
             {equiv !== null && <span className="fin-hint">{t('fr.pay.equiv', undefined, { amount: fmtMoney(equiv, equivCur) })}</span>}
+            {overOwed && <span className="fin-err">{t('fr.pay.overOwedBlock')}</span>}
           </label>
 
           {isZaadPush ? (
@@ -450,10 +482,10 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
                   {phones.map((p) => <button key={p} type="button" onClick={() => setPhone(p)}>{p}</button>)}
                 </div>
               )}
-              {blocked && <div className="fin-warn">{t('fr.zaad.err.unknown')}</div>}
+              {pushDisabledReason && <div className="fin-warn">{pushDisabledReason}</div>}
               {formError && <span className="fin-err" role="alert">{formError}</span>}
-              <Button type="submit" icon={Smartphone} className="fin-primary-btn" disabled={blocked || requestZaad.isPending}>{t('fr.zaad.send')}</Button>
-              <button type="button" className="fin-linkbtn" onClick={() => { setZaadManual(true); setFormError(''); }}>{t('fr.zaad.manualLink')}</button>
+              <Button type="submit" icon={Smartphone} className="fin-primary-btn" disabled={!!pushDisabledReason || overOwed || requestZaad.isPending}>{t('fr.zaad.send')}</Button>
+              <button type="button" className="fin-linkbtn" onClick={() => { setZaadManual(true); setFormError(''); clearAmounts(); }}>{t('fr.zaad.manualLink')}</button>
             </div>
           ) : (
             <>
@@ -464,7 +496,7 @@ function PaymentPanel({ invoiceId, onRecorded, onClose }) {
                     <span>{t('fr.pay.reference')}</span>
                     <input className="fin-input" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={50} required={paidNum > 0} />
                   </label>
-                  <button type="button" className="fin-linkbtn" onClick={() => { setZaadManual(false); setFormError(''); }}>{t('fr.zaad.useRequest')}</button>
+                  <button type="button" className="fin-linkbtn" onClick={() => { setZaadManual(false); setFormError(''); clearAmounts(); }}>{t('fr.zaad.useRequest')}</button>
                 </div>
               )}
               <label className="fin-field">

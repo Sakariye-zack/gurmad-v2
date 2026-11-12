@@ -96,6 +96,16 @@ export const FINANCE_REDESIGN = {
   'fr.zaad.err.noRate': { en: 'No exchange rate is set, so this currency cannot be used for this invoice. Ask an admin to set the rate.', so: 'Sarif lama dhigin, sidaa darteed lacagtan looma isticmaali karo qaansheeggan. Weydii admin-ka inuu dhigo sarifka.' },
   'fr.zaad.err.voided': { en: 'This invoice was voided — it can no longer be paid.', so: 'Qaansheeggan waa la buriyay — mar dambe lama bixin karo.' },
   'fr.zaad.err.forbidden': { en: 'You do not have access to this invoice.', so: 'Ma haysatid oggolaansho qaansheeggan.' },
+  'fr.zaad.err.notFound': { en: 'This invoice no longer exists.', so: 'Qaansheeggan mar dambe ma jiro.' },
+  'fr.zaad.err.inProgress': { en: 'A ZAAD request for this invoice is already in progress (maybe from another cashier or the customer portal). Wait for it to finish — do not send another.', so: 'Codsi ZAAD oo qaansheeggan ah ayaa socda (laga yaabee cashier kale ama bogga macaamiisha). Sug inta uu dhammaanayo — ha dirin mid kale.' },
+  'fr.zaad.err.unconfirmed': { en: 'A recent ZAAD payment on this invoice could not be confirmed. Do NOT send another request — an admin must check the ZAAD merchant account first.', so: 'Lacag ZAAD oo dhowaan qaansheeggan lagu bixiyay lama xaqiijin karin. HA dirin codsi kale — admin-ka ayaa marka hore hubinaya akoonka ZAAD.' },
+  'fr.zaad.err.unexpected': { en: 'Something unexpected went wrong after the request was sent, so it is unclear whether the money was taken. Do NOT resend — check with an admin.', so: 'Wax lama filaan ah ayaa dhacay kadib markii codsiga la diray, lama hubo in lacagta la qaaday. HA dib u dirin — la hubi admin-ka.' },
+  'fr.zaad.blocked': { en: 'ZAAD push is blocked on this invoice until {time}: a recent payment could not be confirmed. Ask an admin to check the merchant account.', so: 'ZAAD waa laga xannibay qaansheeggan ilaa {time}: lacag dhowaan la bixiyay lama xaqiijin. Weydii admin-ka inuu hubiyo akoonka.' },
+  'fr.zaad.inProgressFlag': { en: 'A ZAAD request is in progress on this invoice.', so: 'Codsi ZAAD ayaa ka socda qaansheeggan.' },
+  'fr.zaad.leaveWarning': { en: 'A ZAAD request is waiting for the customer. Leaving now loses its result.', so: 'Codsi ZAAD ayaa sugaya macmiilka. Haddii aad hadda baxdo natiijadiisa waad waayaysaa.' },
+  'fr.pay.overOwedBlock': { en: 'This amount is more than what is still owed on the invoice.', so: 'Lacagtani waxay ka badan tahay inta weli lagu leeyahay qaansheegga.' },
+  'fr.pay.paidRecordedDebtFailed': { en: 'The paid part ({amount}) IS recorded. Only the debt part failed: {error}', so: 'Qaybta la bixiyay ({amount}) WAA la diiwaan geliyay. Qaybta deynta kaliya ayaa fashilantay: {error}' },
+  'fr.tx.receivedNote': { en: '“Received” excludes debt-marked and reversed entries.', so: '“La helay” kuma jiraan lacagaha deynta loo calaamadeeyay iyo kuwa la celiyay.' },
   'fr.zaad.err.validation': { en: 'Please check the phone number and amount.', so: 'Fadlan hubi lambarka telefoonka iyo lacagta.' },
 
   // Transactions page

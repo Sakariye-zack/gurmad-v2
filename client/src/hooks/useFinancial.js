@@ -37,10 +37,18 @@ export function useVoidInvoice(id) {
 
 // Billing workspace: open (unpaid/partial) invoices with the authoritative
 // per-invoice balance attached by the server (?open=1&with_balance=1).
-export function useOpenInvoices(q) {
-  const qs = new URLSearchParams({ open: '1', with_balance: '1' });
+// Server-side filters + pagination; meta.summary covers every open invoice
+// in scope (counts, still owed per currency).
+export function useOpenInvoices({ q, status, currency, pageSize = 100 } = {}) {
+  const qs = new URLSearchParams({ open: '1', with_balance: '1', page_size: String(pageSize) });
   if (q) qs.set('q', q);
-  return useQuery({ queryKey: ['v2', 'invoices', 'open', q || ''], queryFn: () => apiClient.get(`/v2/invoices?${qs.toString()}`) });
+  if (status) qs.set('status', status);
+  if (currency) qs.set('currency', currency);
+  return useQuery({
+    queryKey: ['v2', 'invoices', 'open', q || '', status || '', currency || '', pageSize],
+    queryFn: () => apiClient.get(`/v2/invoices?${qs.toString()}`),
+    placeholderData: (prev) => prev,
+  });
 }
 
 // Transactions page — read-only ledger listing / summary / CSV.

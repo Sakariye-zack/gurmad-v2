@@ -83,6 +83,7 @@ export default function TransactionsPage() {
           )}
         </Card>
       </div>
+      <div className="fin-note" style={{ margin: '-8px 0 14px' }}>{t('fr.tx.receivedNote')}</div>
 
       <Card style={{ padding: '14px', marginBottom: '14px' }}>
         <div className="fin-tx-bar">
