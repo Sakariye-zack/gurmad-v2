@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { CalendarRange, ClipboardList, Plus } from 'lucide-react';
+import { Archive, CalendarRange, ClipboardList, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { PageHeader, Button, DataTable, StatusBadge, Modal, useToast } from '../../components/ui/index.js';
+import { PageHeader, Button, DataTable, StatusBadge, Modal, ConfirmDialog, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import LegacyOpsBanner from '../../components/collection/LegacyOpsBanner.jsx';
-import { useCycles, useCreateCycle, useCloseCycle } from '../../hooks/useCollectionOps.js';
+import { useCycles, useCreateCycle, useCloseCycle, useCloseEndedCycles } from '../../hooks/useCollectionOps.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 
@@ -14,6 +14,20 @@ export default function CyclesListPage() {
   const [formOpen, setFormOpen] = useState(false);
   const cycles = data?.data || [];
   const navigate = useNavigate();
+  const toast = useToast();
+  const closeEnded = useCloseEndedCycles();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const today = localToday();
+  const endedCount = cycles.filter((c) => isEnded(c, today) && !c.auto).length;
+
+  async function handleCloseEnded() {
+    try {
+      const r = await closeEnded.mutateAsync();
+      toast.success(t('calc.closeEndedDone', undefined, { n: r?.data?.closed ?? 0 }));
+      setConfirmOpen(false);
+      refetch();
+    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
+  }
 
   return (
     <div>
@@ -31,6 +45,15 @@ export default function CyclesListPage() {
                 additive, no other behavior on this page changes. */}
             <Button variant="secondary" icon={ClipboardList} onClick={() => navigate('/collection-cycles/batches')}>{t('coll.view_batches')}</Button>
             <RoleGate roles={['admin', 'gudoomiye']}>
+              <Button
+                variant="secondary"
+                icon={Archive}
+                onClick={() => setConfirmOpen(true)}
+                disabled={endedCount === 0 || closeEnded.isPending}
+                title={endedCount === 0 ? t('calc.closeEndedNone') : undefined}
+              >
+                {t('calc.closeEnded')}{endedCount > 0 ? ` (${endedCount})` : ''}
+              </Button>
               <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('coll.create_cycle')}</Button>
             </RoleGate>
           </>
@@ -49,6 +72,15 @@ export default function CyclesListPage() {
         {cycles.map((c) => <CycleRow key={c.id} cycle={c} onClosed={refetch} />)}
       </DataTable>
       <CycleFormModal open={formOpen} onClose={() => setFormOpen(false)} />
+      <ConfirmDialog
+        open={confirmOpen}
+        title={t('calc.closeEndedTitle')}
+        message={t('calc.closeEndedBody', undefined, { n: endedCount })}
+        confirmLabel={t('calc.closeEnded')}
+        isLoading={closeEnded.isPending}
+        onConfirm={handleCloseEnded}
+        onClose={() => { if (!closeEnded.isPending) setConfirmOpen(false); }}
+      />
     </div>
   );
 }
@@ -78,7 +110,10 @@ function CycleRow({ cycle: c, onClosed }) {
       </td>
       <td style={cellStyle} className="tabular-nums">{c.start_date}</td>
       <td style={cellStyle} className="tabular-nums">{c.end_date}</td>
-      <td style={cellStyle}><StatusBadge status={c.is_active ? 'Active' : 'Closed'} map={{ closed: 'info' }} /></td>
+      <td style={cellStyle}>
+        <StatusBadge status={c.is_active ? 'Active' : 'Closed'} map={{ closed: 'info' }} />
+        {isEnded(c, localToday()) && <span style={endedChipStyle} title={t('calc.endedHint')}>{t('calc.ended')}</span>}
+      </td>
       <td style={cellStyle}>
         {c.is_active && (
           <RoleGate roles={['admin', 'gudoomiye']}>
@@ -101,7 +136,16 @@ function CycleFormContent({ onClose }) {
   const [cycleType, setCycleType] = useState('monthly');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [endTouched, setEndTouched] = useState(false);
   const [error, setError] = useState('');
+
+  // End date follows start date + type until the user edits it by hand.
+  function applyAutoEnd(nextStart, nextType) {
+    if (endTouched) return;
+    const auto = suggestEndDate(nextStart, nextType);
+    if (auto) setEndDate(auto);
+  }
+  const endIsAuto = !endTouched && !!endDate && endDate === suggestEndDate(startDate, cycleType);
   const { data: zonesData } = useZonesList();
   const createCycle = useCreateCycle();
   const toast = useToast();
@@ -142,7 +186,7 @@ function CycleFormContent({ onClose }) {
         </label>
         <label style={fieldStyle}>
           <span style={labelStyle}>{t('coll.cycle_type')}</span>
-          <select value={cycleType} onChange={(e) => setCycleType(e.target.value)} style={inputStyle}>
+          <select value={cycleType} onChange={(e) => { setCycleType(e.target.value); applyAutoEnd(startDate, e.target.value); }} style={inputStyle}>
             <option value="monthly">{t('coll.monthly')}</option>
             <option value="weekly">{t('coll.weekly')}</option>
             <option value="custom">{t('coll.custom')}</option>
@@ -151,18 +195,54 @@ function CycleFormContent({ onClose }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
           <label style={fieldStyle}>
             <span style={labelStyle}>{t('coll.start_date')}</span>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} />
+            <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); applyAutoEnd(e.target.value, cycleType); }} style={inputStyle} />
           </label>
           <label style={fieldStyle}>
             <span style={labelStyle}>{t('coll.end_date')}</span>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
+            <input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setEndTouched(true); }} style={inputStyle} />
           </label>
         </div>
+        {(cycleType !== 'custom' || endIsAuto) && (
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {cycleType === 'weekly' && t('calc.spanRuleWeekly')}
+            {cycleType === 'monthly' && t('calc.spanRuleMonthly')}
+            {endIsAuto && <> {t('calc.endAutoFilled')}</>}
+          </span>
+        )}
         {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
       </form>
     </Modal>
   );
 }
+
+// Browser-local today as YYYY-MM-DD. Only used for the Ended chip and the
+// confirm count; the server decides with the company timezone.
+function localToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function isEnded(c, today) {
+  return !!c.is_active && !!c.end_date && String(c.end_date).slice(0, 10) < today;
+}
+
+// Suggested end date: weekly = start + 6 days (7-day span). Monthly = last
+// day of the month when starting on the 1st; otherwise the day before the
+// same date next month, so the span always stays inside the server's 28–31
+// day rule. Custom: no suggestion.
+function suggestEndDate(start, type) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return '';
+  const [y, m, d] = start.split('-').map(Number);
+  const iso = (dt) => dt.toISOString().slice(0, 10);
+  if (type === 'weekly') return iso(new Date(Date.UTC(y, m - 1, d + 6)));
+  if (type === 'monthly') {
+    if (d === 1) return iso(new Date(Date.UTC(y, m, 0)));
+    const daysNext = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    return iso(new Date(Date.UTC(y, m, Math.min(d, daysNext) - 1)));
+  }
+  return '';
+}
+
+const endedChipStyle = { marginLeft: '6px', fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', color: 'var(--warning)', border: '1px solid var(--warning)' };
 
 const cellStyle = { padding: '12px 14px' };
 const fieldStyle = { display: 'flex', flexDirection: 'column', gap: '4px' };

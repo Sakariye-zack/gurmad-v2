@@ -17,6 +17,11 @@ export function useCloseCycle(id) {
   const qc = useQueryClient();
   return useMutation({ mutationFn: () => apiClient.put(`/v2/cycles/${id}/close`, {}), onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'cycles'] }) });
 }
+// Bulk close of every active manual cycle whose end date has passed.
+export function useCloseEndedCycles() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: () => apiClient.put('/v2/cycles/close-ended', {}), onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'cycles'] }) });
+}
 
 export function useBatches(params = {}) {
   const qs = new URLSearchParams();
