@@ -26,6 +26,7 @@ import { DEBT_SUSPENSION } from './debtSuspension.js';
 import { OPS_PAGES } from './opsPages.js';
 import { CALENDAR_CYCLES } from './calendarCycles.js';
 import { FINANCE_REDESIGN } from './financeRedesign.js';
+import { CASHOUT_V2 } from './cashoutV2.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -44,6 +45,7 @@ export const TRANSLATIONS = {
   ...OPS_PAGES,
   ...CALENDAR_CYCLES,
   ...FINANCE_REDESIGN,
+  ...CASHOUT_V2,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },
