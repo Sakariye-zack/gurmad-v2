@@ -293,6 +293,19 @@ function validateSettingsInput(body) {
       out.debt_suspend_days = d;
     }
   }
+  // Cashout V2 controls (USD): a difference within the tolerance is
+  // "balanced"; a shortage above the admin threshold needs an admin's
+  // approval. The tolerance <= threshold rule is checked in PUT against the
+  // saved value of whichever field is not being changed.
+  for (const key of ['cashout_tolerance_usd', 'cashout_admin_threshold_usd']) {
+    if (body[key] === undefined) continue;
+    const v = body[key];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100000 || Math.abs(v * 100 - Math.round(v * 100)) > 1e-6) {
+      errors.push(`${key} must be a number from 0 to 100000 with at most 2 decimals.`);
+    } else {
+      out[key] = v;
+    }
+  }
   return { errors, data: out };
 }
 
@@ -315,6 +328,8 @@ function shapeRow(row) {
     proof_radius_m: row.proof_radius_m,
     proof_require_photo: row.proof_require_photo,
     debt_suspend_days: row.debt_suspend_days ?? 90,
+    cashout_tolerance_usd: row.cashout_tolerance_usd != null ? Number(row.cashout_tolerance_usd) : 1,
+    cashout_admin_threshold_usd: row.cashout_admin_threshold_usd != null ? Number(row.cashout_admin_threshold_usd) : 10,
     updated_at: row.updated_at,
   };
 }
@@ -340,6 +355,14 @@ router.put('/company', async (req, res) => {
   try {
     const existing = await pool.query('SELECT * FROM company_settings WHERE id = $1', [SETTINGS_ROW_ID]);
     const before = existing.rows[0] || null;
+
+    if (data.cashout_tolerance_usd !== undefined || data.cashout_admin_threshold_usd !== undefined) {
+      const tol = data.cashout_tolerance_usd ?? (before ? Number(before.cashout_tolerance_usd) : 1);
+      const thr = data.cashout_admin_threshold_usd ?? (before ? Number(before.cashout_admin_threshold_usd) : 10);
+      if (tol > thr) {
+        return res.status(400).json({ error: { message: 'The cashout tolerance cannot be larger than the admin-approval threshold.', code: 'VALIDATION' } });
+      }
+    }
 
     // Hardening H-S1: the original SELECT-then-branch-to-INSERT-or-UPDATE
     // had a real race window on first-ever save — two truly concurrent

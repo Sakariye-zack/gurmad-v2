@@ -2133,6 +2133,86 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_status_zone ON customer_signup_requests(status, zone_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_ip_created ON customer_signup_requests(ip, created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_phone_created ON customer_signup_requests(phone_canonical, created_at DESC);`);
+
+  await runCashoutV2Migrations();
+}
+
+// ============================================================
+// Cashout V2 — per-currency/per-method breakdown, denomination counts,
+// tolerance + admin escalation, deposits, overdue alerts. Additive and
+// idempotent only: every legacy cashouts column keeps its meaning; existing
+// rows get NULL breakdown/count_detail/variance_status and needs_admin FALSE.
+// ============================================================
+async function runCashoutV2Migrations() {
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS breakdown JSONB;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS count_detail JSONB;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS needs_admin BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // balanced | shortage | surplus, judged against the tolerance at creation.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS variance_status VARCHAR(20);`);
+  await addCheckIfMissing('cashouts', 'cashouts_variance_status_check', `variance_status IS NULL OR variance_status IN ('balanced', 'shortage', 'surplus')`);
+  // The larger of the net shortage and the gross per-currency cash shortage (USD).
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS control_shortage_usd NUMERIC;`);
+  // Settings snapshot at creation, so a later settings change never re-judges an old cashout.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS tolerance_usd NUMERIC;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS admin_threshold_usd NUMERIC;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_needs_admin ON cashouts(needs_admin) WHERE needs_admin;`);
+
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_tolerance_usd NUMERIC NOT NULL DEFAULT 1;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_admin_threshold_usd NUMERIC NOT NULL DEFAULT 10;`);
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_tolerance_check', 'cashout_tolerance_usd >= 0');
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_threshold_check', 'cashout_admin_threshold_usd >= 0');
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_tol_le_thr_check', 'cashout_tolerance_usd <= cashout_admin_threshold_usd');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_deposit_accounts (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      type VARCHAR(10) NOT NULL CHECK (type IN ('safe', 'bank', 'mobile')),
+      account_ref VARCHAR(100),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_cashout_deposit_accounts_name ON cashout_deposit_accounts (LOWER(name));`);
+
+  // One row per deposit of approved cashout cash. Never deleted: a mistaken
+  // (unverified) deposit is voided with a reason.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_deposits (
+      id SERIAL PRIMARY KEY,
+      cashout_id INTEGER NOT NULL REFERENCES cashouts(id) ON DELETE RESTRICT,
+      deposit_account_id INTEGER NOT NULL REFERENCES cashout_deposit_accounts(id) ON DELETE RESTRICT,
+      currency VARCHAR(10) NOT NULL CHECK (currency IN ('USD', 'SLSH')),
+      amount NUMERIC NOT NULL CHECK (amount > 0),
+      attachment_id INTEGER REFERENCES cashout_attachments(id) ON DELETE RESTRICT,
+      note TEXT,
+      deposited_by INTEGER NOT NULL,
+      deposited_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      verified_by INTEGER,
+      verified_at TIMESTAMP,
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT,
+      CONSTRAINT cashout_deposit_verify_fields CHECK ((verified_at IS NULL) = (verified_by IS NULL)),
+      CONSTRAINT cashout_deposit_void_fields CHECK (voided_at IS NULL OR (voided_by IS NOT NULL AND voided_reason IS NOT NULL)),
+      CONSTRAINT cashout_deposit_not_verified_and_void CHECK (voided_at IS NULL OR verified_at IS NULL)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_deposits_cashout ON cashout_deposits(cashout_id);`);
+
+  // Monitor dedupe: one row per alert already sent (kind, item, local day).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_alerts_sent (
+      id SERIAL PRIMARY KEY,
+      kind VARCHAR(40) NOT NULL,
+      ref_id INTEGER NOT NULL,
+      for_date DATE NOT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (kind, ref_id, for_date)
+    );
+  `);
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance

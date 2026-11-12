@@ -170,7 +170,95 @@ async function customerContext(customerId) {
   }
 }
 
-async function buildCashoutDocx(cashout, recon, shortage = null) {
+const GRID_BORDERS = { top: NONE, left: NONE, right: NONE, bottom: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: BORDER }, insideVertical: NONE };
+function gridTable(headers, rows, widths) {
+  const w = (i) => widths[i] ?? Math.floor(100 / headers.length);
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE }, borders: GRID_BORDERS,
+    rows: [
+      new TableRow({ children: headers.map((h, i) => cell(h, { bold: true, shaded: true, color: MUTED, width: w(i), align: i === 0 ? AlignmentType.LEFT : AlignmentType.RIGHT })) }),
+      ...rows.map((r) => new TableRow({ children: r.map((v, i) => (v && typeof v === 'object' && v.text !== undefined
+        ? cell(v.text, { width: w(i), bold: !!v.bold, color: v.color || INK, align: i === 0 ? AlignmentType.LEFT : AlignmentType.RIGHT })
+        : cell(v, { width: w(i), align: i === 0 ? AlignmentType.LEFT : AlignmentType.RIGHT }))) })),
+    ],
+  });
+}
+const METHOD_LABEL = { cash: 'Cash (counted)', zaad: 'ZAAD (auto-verified)', edahab: 'eDahab (auto-verified)' };
+const diffText = (d, cur) => (d === null || d === undefined ? '—' : d === 0 ? 'Exact' : `${d > 0 ? '+' : '−'}${money(Math.abs(d), cur)}`);
+const diffColor = (d) => (d > 0 ? '2563A8' : d < 0 ? 'C0392B' : INK);
+
+// Cashout V2 sections: per-currency / per-method breakdown, cash count,
+// electronic transaction codes, deposits. Each renders only when its data
+// exists, so a legacy cashout's document looks exactly as before plus a
+// short "expected per currency" table.
+function cashoutV2Sections(cashout, extras) {
+  const out = [];
+  const b = cashout.breakdown;
+  if (b && b.currencies) {
+    out.push(sectionTitle('Per-currency reconciliation'));
+    for (const cur of ['USD', 'SLSH']) {
+      const lines = b.currencies[cur];
+      const rows = ['cash', 'zaad', 'edahab'].filter((m) => lines[m].expected || lines[m].actual).map((m) => [
+        METHOD_LABEL[m], money(lines[m].expected, cur), lines[m].actual === null ? '—' : money(lines[m].actual, cur),
+        { text: diffText(lines[m].diff, cur), color: diffColor(lines[m].diff), bold: !!lines[m].diff },
+      ]);
+      if (!rows.length) continue;
+      const tot = b.totals[cur];
+      rows.push([{ text: `Total ${cur}`, bold: true }, { text: money(tot.expected, cur), bold: true }, { text: tot.actual === null ? '—' : money(tot.actual, cur), bold: true }, { text: diffText(tot.diff, cur), bold: true, color: diffColor(tot.diff) }]);
+      out.push(new Paragraph({ children: [new TextRun({ text: cur, bold: true, color: BRAND_GREEN })], spacing: { before: 100, after: 60 } }));
+      out.push(gridTable(['Method', 'Expected', 'Actual', 'Difference'], rows, [40, 20, 20, 20]));
+    }
+    if (b.debt && b.debt.count > 0) {
+      out.push(new Paragraph({ spacing: { before: 80 }, children: [new TextRun({ text: `Debt-marked payments (no money received): ${b.debt.count} · ${[b.debt.USD ? money(b.debt.USD, 'USD') : null, b.debt.SLSH ? money(b.debt.SLSH, 'SLSH') : null].filter(Boolean).join(' + ')}`, size: 17, color: MUTED, italics: true })] }));
+    }
+    if (b.control) {
+      out.push(new Paragraph({ spacing: { before: 80 }, children: [new TextRun({ text: `Result: ${String(b.control.status).toUpperCase()} · tolerance ${money(b.control.tolerance_usd)} · admin threshold ${money(b.control.admin_threshold_usd)}${cashout.needs_admin ? ' · REQUIRES ADMIN APPROVAL' : ''}`, size: 17, bold: true, color: cashout.needs_admin ? 'C0392B' : INK })] }));
+    }
+    if (b.rate) out.push(new Paragraph({ children: [new TextRun({ text: `Exchange rate used for the SLSH difference: 1 USD = ${Number(b.rate).toLocaleString('en-US')} SLSH`, size: 16, color: MUTED, italics: true })] }));
+  }
+  const cd = cashout.count_detail;
+  if (cd) {
+    out.push(sectionTitle('Cash count'));
+    for (const cur of ['USD', 'SLSH']) {
+      const e = cd[cur];
+      if (!e) continue;
+      if (e.mode === 'manual') {
+        out.push(new Paragraph({ children: [new TextRun({ text: `${cur}: ${money(e.total, cur)} entered manually — `, bold: true }), new TextRun({ text: e.remark || '' })] }));
+        continue;
+      }
+      const notes = Object.entries(e.notes || {}).sort((a, b2) => Number(b2[0]) - Number(a[0]));
+      if (!notes.length) { out.push(new Paragraph({ children: [new TextRun({ text: `${cur}: no notes counted`, color: MUTED, italics: true })] })); continue; }
+      out.push(gridTable([`${cur} note`, 'Count', 'Subtotal'],
+        [...notes.map(([d, n]) => [money(Number(d), cur), String(n), money(Number(d) * n, cur)]), [{ text: `Total ${cur}`, bold: true }, '', { text: money(e.total, cur), bold: true }]],
+        [40, 25, 35]));
+    }
+  }
+  const el = extras.electronic || [];
+  if (el.length) {
+    out.push(sectionTitle('Electronic payments (auto-verified)'));
+    out.push(gridTable(['Transaction / reference', 'Method', 'Invoice', 'Amount'],
+      el.map((p) => [p.reference_code || '—', String(p.method).toUpperCase(), p.invoice_number || '—', money(p.amount, p.currency)]), [36, 16, 24, 24]));
+  }
+  if (cashout.status === 'approved') {
+    out.push(sectionTitle('Deposit'));
+    const req = extras.deposit_required || { USD: 0, SLSH: 0 };
+    const dep = extras.deposited || { USD: 0, SLSH: 0 };
+    out.push(kvTable([
+      ['Cash to deposit', [req.USD ? money(req.USD, 'USD') : null, req.SLSH ? money(req.SLSH, 'SLSH') : null].filter(Boolean).join(' + ') || '—'],
+      ['Deposited', [dep.USD ? money(dep.USD, 'USD') : null, dep.SLSH ? money(dep.SLSH, 'SLSH') : null].filter(Boolean).join(' + ') || '—'],
+      ['Deposit status', String(extras.deposit_status || '—').replace(/_/g, ' ').toUpperCase()], ['Deposits', String((extras.deposits || []).filter((d) => !d.voided_at).length)],
+    ]));
+    const live = (extras.deposits || []).filter((d) => !d.voided_at);
+    if (live.length) {
+      out.push(new Paragraph({ spacing: { after: 60 } }));
+      out.push(gridTable(['Account', 'Date', 'Amount', 'Verified'],
+        live.map((d) => [d.account_name, fmtDate(d.deposited_at), money(d.amount, d.currency), d.verified_at ? `${d.verified_by_name || d.verified_by_username || ''} ${fmtDate(d.verified_at)}`.trim() : 'Not yet']), [34, 20, 22, 24]));
+    }
+  }
+  return out;
+}
+
+async function buildCashoutDocx(cashout, recon, shortage = null, extras = {}) {
   const branding = await getCompanyBranding();
   const children = [
     ...letterhead(branding, {
@@ -212,13 +300,14 @@ async function buildCashoutDocx(cashout, recon, shortage = null) {
     ...(shortage ? [
       new Paragraph({ children: [new TextRun({ text: 'Cashier Shortage', bold: true, color: BRAND_GREEN })], spacing: { before: 140, after: 60 } }),
       kvTable([
-        ['Shortage Amount', money(shortage.shortage_amount)], ['Cashier Responsible', `#${shortage.cashier_id}`],
+        ['Shortage Amount', money(shortage.shortage_amount)], ['Cashier Responsible', cashout.cashier_name || `#${shortage.cashier_id}`],
         ['Status', shortage.status.toUpperCase()], ['Resolved Amount', shortage.resolved_amount != null ? money(shortage.resolved_amount) : '—'],
       ]),
       new Paragraph({ children: [new TextRun({ text: 'Shortage reason: ', bold: true }), new TextRun({ text: shortage.reason })], spacing: { before: 80 } }),
       ...(shortage.resolution_notes ? [new Paragraph({ children: [new TextRun({ text: 'Resolution notes: ', bold: true }), new TextRun({ text: shortage.resolution_notes })] })] : []),
     ] : []),
     ...(cashout.remarks ? [new Paragraph({ children: [new TextRun({ text: 'Remarks: ', bold: true }), new TextRun({ text: cashout.remarks })] })] : []),
+    ...cashoutV2Sections(cashout, extras),
     sectionTitle('Accountability'),
     // Names come from the route's joins; fall back to the id only if a
     // user account was since deleted, never silently blank.
