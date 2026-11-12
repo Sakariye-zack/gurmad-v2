@@ -6,6 +6,8 @@ const { recalculateInvoiceStatus, getCurrentExchangeRate, paidInInvoiceCurrency,
 // destructured binding) so the test server's preload can stub the gateway.
 const zaadService = require('../lib/zaadService');
 const debtSuspension = require('../lib/debtSuspension');
+const autoBilling = require('../lib/autoBilling');
+const { toCsv } = require('../lib/csvImportExport');
 
 const router = express.Router();
 
@@ -242,6 +244,190 @@ async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel =
 
 const reconciliationMessage = (txId, reason) =>
   `ZAAD approved this payment (transaction ${txId}) but it could not be recorded against the invoice: ${reason}. The money has already been received into the merchant account — record it manually with reference code ${txId} once resolved.`;
+
+// ---------------------------------------------------------------------
+// Transactions listing (finance redesign) — READ-ONLY views over the
+// payments ledger: GET /transactions (filtered + paginated),
+// GET /transactions/summary (today / this month / filtered aggregates)
+// and GET /transactions.csv. Nothing here writes or recomputes a balance.
+//
+// Scope (same roles as GET / above):
+//  - admin: every payment.
+//  - gudoomiye / zone_accountant: payments on customers in their zone
+//    (resolveUserZoneId — identical rule to GET /).
+//  - cashier: only payments they recorded themselves (cashier_id = me),
+//    additionally zone-bound like every other cashier read. Portal ZAAD
+//    payments (cashier_id NULL) are therefore never in a cashier's list,
+//    matching how cashout math already treats them.
+// "Received" totals exclude method='debt' rows (no money changed hands)
+// and reversed rows.
+// ---------------------------------------------------------------------
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TX_METHODS = ['cash', 'zaad', 'edahab', 'slsh', 'debt'];
+const LOCAL_TS = `(p.created_at AT TIME ZONE 'UTC' AT TIME ZONE $1)`;
+
+async function txScope(user, params, where) {
+  const myZoneId = await resolveUserZoneId(user);
+  if (myZoneId !== null) { params.push(myZoneId); where.push(`c.zone_id = $${params.length}`); }
+  if ((user.role || '').toLowerCase() === 'cashier') {
+    params.push(user.id ?? -1);
+    where.push(`p.cashier_id = $${params.length}`);
+  }
+}
+
+// Builds the WHERE clause for the transactions endpoints. $1 is always the
+// company timezone (used by LOCAL_TS). Returns { error } on bad input.
+async function buildTxQuery(req, { withFilters = true } = {}) {
+  const tz = await autoBilling.getTimezone();
+  const params = [tz];
+  // Always reference $1 (pg rejects a bound parameter the SQL never uses).
+  const where = [`$1::text <> ''`];
+  await txScope(req.user, params, where);
+  if (!withFilters) return { tz, params, where };
+  const q = req.query;
+  if (q.date_from) {
+    if (!DATE_RE.test(q.date_from)) return { error: 'date_from must be YYYY-MM-DD.' };
+    params.push(q.date_from); where.push(`${LOCAL_TS}::date >= $${params.length}::date`);
+  }
+  if (q.date_to) {
+    if (!DATE_RE.test(q.date_to)) return { error: 'date_to must be YYYY-MM-DD.' };
+    params.push(q.date_to); where.push(`${LOCAL_TS}::date <= $${params.length}::date`);
+  }
+  if (q.method) {
+    if (!TX_METHODS.includes(q.method)) return { error: `method must be one of: ${TX_METHODS.join(', ')}.` };
+    params.push(q.method); where.push(`p.method = $${params.length}`);
+  }
+  if (q.currency) {
+    const cur = String(q.currency).toUpperCase();
+    if (!['USD', 'SLSH'].includes(cur)) return { error: 'currency must be USD or SLSH.' };
+    params.push(cur); where.push(`p.currency = $${params.length}`);
+  }
+  if (q.channel) {
+    if (q.channel === 'portal') where.push(`p.channel = 'portal_zaad'`);
+    else if (q.channel === 'staff') where.push(`p.channel IS NULL`);
+    else return { error: 'channel must be staff or portal.' };
+  }
+  if (q.status) {
+    if (!['recorded', 'reversed'].includes(q.status)) return { error: 'status must be recorded or reversed.' };
+    params.push(q.status); where.push(`p.status = $${params.length}`);
+  }
+  if (q.q) {
+    const s = String(q.q).trim();
+    if (s.length >= 2) {
+      params.push(`%${s}%`);
+      const i = params.length;
+      where.push(`(i.invoice_number ILIKE $${i} OR c.name ILIKE $${i} OR c.customer_number ILIKE $${i} OR i.customer_number_snapshot ILIKE $${i} OR p.reference_code ILIKE $${i})`);
+    }
+  }
+  return { tz, params, where };
+}
+
+const TX_FROM = `FROM payments p
+  JOIN invoices i ON i.id = p.invoice_id
+  JOIN customers c ON c.id = i.customer_id
+  LEFT JOIN v2_users u ON u.id = p.cashier_id`;
+const TX_COLS = `p.id, p.invoice_id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.channel,
+  p.cashier_id, p.created_at, p.reversed_at, p.reversed_reason,
+  i.invoice_number, i.currency AS invoice_currency, i.customer_id,
+  c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number,
+  COALESCE(u.full_name, u.username) AS cashier_name`;
+const whereSql = (where) => (where.length ? `WHERE ${where.join(' AND ')}` : '');
+const badTx = (res, message) => res.status(400).json({ error: { message, code: 'VALIDATION' } });
+
+router.get('/transactions', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const built = await buildTxQuery(req);
+    if (built.error) return badTx(res, built.error);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.page_size, 10) || 25));
+    const w = whereSql(built.where);
+    const total = (await pool.query(`SELECT COUNT(*)::int AS n ${TX_FROM} ${w}`, built.params)).rows[0].n;
+    const rows = (await pool.query(
+      `SELECT ${TX_COLS} ${TX_FROM} ${w} ORDER BY p.created_at DESC, p.id DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
+      built.params
+    )).rows;
+    res.json({ data: rows, meta: { page, page_size: pageSize, total } });
+  } catch (err) {
+    console.error('transactions list failed:', err && err.message);
+    res.status(500).json({ error: { message: 'Failed to load transactions.', code: 'INTERNAL' } });
+  }
+});
+
+// One aggregate block: received (recorded, non-debt) split by currency,
+// method and channel; plus debt-marked and reversed totals for context.
+async function aggregate(params, where) {
+  const w = whereSql(where);
+  const rows = (await pool.query(
+    `SELECT p.status, p.method, p.currency, (p.channel = 'portal_zaad') AS portal,
+            COUNT(*)::int AS n, COALESCE(SUM(p.amount), 0) AS amount, COALESCE(SUM(p.amount_usd), 0) AS usd
+     ${TX_FROM} ${w} GROUP BY 1, 2, 3, 4`, params)).rows;
+  const out = {
+    count: 0, total_usd: 0, by_currency: { USD: 0, SLSH: 0 },
+    by_method: { cash: 0, zaad: 0, edahab: 0, slsh: 0 }, by_channel: { staff: 0, portal: 0 },
+    debt_usd: 0, reversed_usd: 0, reversed_count: 0,
+  };
+  for (const r of rows) {
+    const usd = parseFloat(r.usd);
+    if (r.status === 'reversed') { out.reversed_usd += usd; out.reversed_count += r.n; continue; }
+    if (r.method === 'debt') { out.debt_usd += usd; continue; }
+    out.count += r.n;
+    out.total_usd += usd;
+    out.by_currency[r.currency === 'SLSH' ? 'SLSH' : 'USD'] += parseFloat(r.amount);
+    out.by_method[r.method] = (out.by_method[r.method] || 0) + usd;
+    out.by_channel[r.portal ? 'portal' : 'staff'] += usd;
+  }
+  return out;
+}
+
+router.get('/transactions/summary', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const built = await buildTxQuery(req);
+    if (built.error) return badTx(res, built.error);
+    const base = await buildTxQuery(req, { withFilters: false });
+    const today = autoBilling.localParts(new Date(), base.tz);
+    const todayP = [...base.params, today.date];
+    const monthP = [...base.params, today.period];
+    const [t, m, f] = await Promise.all([
+      aggregate(todayP, [...base.where, `${LOCAL_TS}::date = $${todayP.length}::date`]),
+      aggregate(monthP, [...base.where, `to_char(${LOCAL_TS}, 'YYYY-MM') = $${monthP.length}`]),
+      aggregate(built.params, built.where),
+    ]);
+    res.json({ data: { today: t, month: m, filtered: f, date: today.date, period: today.period, timezone: base.tz } });
+  } catch (err) {
+    console.error('transactions summary failed:', err && err.message);
+    res.status(500).json({ error: { message: 'Failed to load transactions summary.', code: 'INTERNAL' } });
+  }
+});
+
+router.get('/transactions.csv', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {
+  try {
+    const built = await buildTxQuery(req);
+    if (built.error) return badTx(res, built.error);
+    const rows = (await pool.query(
+      `SELECT ${TX_COLS}, to_char(${LOCAL_TS}, 'YYYY-MM-DD HH24:MI') AS local_time
+       ${TX_FROM} ${whereSql(built.where)} ORDER BY p.created_at DESC, p.id DESC LIMIT 20000`, built.params)).rows;
+    const columns = [
+      { key: 'local_time', label: 'Date' }, { key: 'invoice_number', label: 'Invoice' },
+      { key: 'customer_number', label: 'Customer #' }, { key: 'customer_name', label: 'Customer' },
+      { key: 'method', label: 'Method' }, { key: 'reference_code', label: 'Reference / ZAAD transaction' },
+      { key: 'channel_label', label: 'Channel' }, { key: 'amount', label: 'Amount' }, { key: 'currency', label: 'Currency' },
+      { key: 'amount_usd_fmt', label: 'USD value' }, { key: 'recorded_by', label: 'Recorded by' }, { key: 'status', label: 'Status' },
+      { key: 'reversed_reason', label: 'Reversal reason' },
+    ];
+    const csv = toCsv(rows.map((r) => ({
+      ...r,
+      channel_label: r.channel === 'portal_zaad' ? 'Customer portal' : 'Staff',
+      amount_usd_fmt: parseFloat(r.amount_usd).toFixed(2),
+      recorded_by: r.channel === 'portal_zaad' ? 'Customer portal (ZAAD)' : (r.cashier_name || (r.cashier_id ? `#${r.cashier_id}` : '')),
+    })), columns);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="transactions-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send('﻿' + csv);
+  } catch (err) {
+    console.error('transactions export failed:', err && err.message);
+    res.status(500).json({ error: { message: 'Failed to export transactions.', code: 'INTERNAL' } });
+  }
+});
 
 // GET /?invoice_id=X — payment history for one invoice.
 router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) => {

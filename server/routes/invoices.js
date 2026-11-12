@@ -32,6 +32,14 @@ function parseStrictId(raw) {
   return parseInt(raw, 10);
 }
 
+// Group › District › Zone › Sub Zone of the invoice's customer (read-only,
+// same path shape as dailyLists.js / documentGenerators.customerContext).
+const CUSTOMER_PATH_JOINS = `LEFT JOIN zones cz ON cz.id = customers.zone_id
+       LEFT JOIN groups cg ON cg.id = customers.group_id
+       LEFT JOIN routes cr ON cr.id = customers.route_id
+       LEFT JOIN group_zones cgz ON cgz.id = cr.group_zone_id`;
+const CUSTOMER_PATH_SQL = `NULLIF(concat_ws(' › ', NULLIF(COALESCE(cg.name, cg.code), ''), NULLIF(cz.name, ''), NULLIF(COALESCE(cgz.name, cgz.code), ''), NULLIF(COALESCE(cr.name, cr.code), '')), '')`;
+
 async function resolveUserZoneId(user) {
   if (!ZONE_SCOPED_ROLES.includes((user.role || '').toLowerCase())) return null;
   if (!user.zone) return null;
@@ -121,13 +129,26 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
         where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR invoices.customer_number_snapshot ILIKE $${i})`);
       }
     }
+    // Billing workspace (finance redesign): ?open=1 limits to unpaid/partial.
+    if (req.query.open === '1') where.push(`invoices.status IN ('unpaid', 'partial')`);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone,
+              customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, ${CUSTOMER_PATH_SQL} AS customer_path
        FROM invoices JOIN customers ON invoices.customer_id = customers.id
+       ${CUSTOMER_PATH_JOINS}
        ${whereSql} ORDER BY invoices.created_at DESC`,
       params
     );
+    // ?with_balance=1 (only together with open=1, to bound the work): the
+    // authoritative read-only balance (getInvoiceBalance) per open invoice,
+    // so the Billing cards can show what is still owed. No figure is derived here.
+    if (req.query.with_balance === '1' && req.query.open === '1') {
+      const rows = result.rows;
+      for (let k = 0; k < rows.length; k += 8) {
+        await Promise.all(rows.slice(k, k + 8).map(async (row) => { row.balance = await getInvoiceBalance(row.id); }));
+      }
+    }
     res.json({ data: result.rows });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to list invoices.', code: 'INTERNAL' } });
@@ -139,8 +160,14 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   if (id === null) return res.status(400).json({ error: { message: 'Invalid invoice id.', code: 'VALIDATION' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone, customers.zone_id
-       FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.id = $1`,
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone, customers.zone_id,
+              customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, customers.address_line AS customer_address,
+              customers.door_number AS customer_door, customers.billing_type AS customer_billing_type, ${CUSTOMER_PATH_SQL} AS customer_path,
+              COALESCE(cu.full_name, cu.username) AS created_by_name
+       FROM invoices JOIN customers ON invoices.customer_id = customers.id
+       ${CUSTOMER_PATH_JOINS}
+       LEFT JOIN v2_users cu ON cu.id = invoices.created_by
+       WHERE invoices.id = $1`,
       [id]
     );
     if (invRes.rows.length === 0) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
@@ -153,13 +180,30 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
 
     const balance = await getInvoiceBalance(id);
     const payments = await pool.query(
-      `SELECT id, amount, currency, method, amount_usd, status, reference_code, cashier_id, channel, created_at, reversed_at, reversed_reason
-       FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
+      `SELECT p.id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.cashier_id, p.channel, p.created_at, p.reversed_at, p.reversed_reason,
+              COALESCE(u.full_name, u.username) AS cashier_name
+       FROM payments p LEFT JOIN v2_users u ON u.id = p.cashier_id WHERE p.invoice_id = $1 ORDER BY p.created_at ASC`,
       [id]
     );
     const debt = await pool.query(`SELECT * FROM debts WHERE invoice_id = $1`, [id]);
+    // Letterhead contact block for the printed invoice (name/address/phone/
+    // email from Settings > Company Information) — the full settings route
+    // is admin-only, but every invoice viewer needs these on the paper copy.
+    const co = (await pool.query('SELECT company_name, address, phone, email FROM company_settings WHERE id = 1').catch(() => ({ rows: [] }))).rows[0] || {};
+    // Collection event (visit) date, when the invoice is linked to one.
+    let visit = null;
+    if (invoice.batch_customer_id) {
+      const v = await pool.query(
+        `SELECT bc.status, bc.status_at, b.batch_code FROM batch_customers bc LEFT JOIN batches b ON b.id = bc.batch_id WHERE bc.id = $1`,
+        [invoice.batch_customer_id]
+      ).catch(() => ({ rows: [] }));
+      visit = v.rows[0] || null;
+    }
 
-    const out = { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null };
+    const out = {
+      ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null, visit,
+      company: { name: co.company_name || 'GURMAD', address: co.address || null, phone: co.phone || null, email: co.email || null },
+    };
     if (invoice.billing_period) out.worked_days = await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone());
     res.json({ data: out });
   } catch (err) {
