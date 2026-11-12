@@ -137,3 +137,14 @@ export function useResolveShortage(cashoutId) {
     onSuccess: () => invalidateCashout(qc, cashoutId),
   });
 }
+// The cashier's assignment panel (his Sub Zones; sent vs collected) —
+// information only, never part of the reconciliation figures.
+export function useAssignmentPreview(cashierId, periodStart, periodEnd) {
+  const enabled = !!cashierId && !!periodStart && !!periodEnd;
+  const qs = new URLSearchParams({ cashier_id: cashierId || '', period_start: periodStart || '', period_end: periodEnd || '' });
+  return useQuery({
+    queryKey: ['v2', 'cashouts', 'assignment-preview', cashierId, periodStart, periodEnd],
+    queryFn: () => apiClient.get(`/v2/cashouts/assignment-preview?${qs.toString()}`),
+    enabled,
+  });
+}

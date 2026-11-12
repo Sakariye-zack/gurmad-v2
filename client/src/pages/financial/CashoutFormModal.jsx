@@ -1,22 +1,30 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, Calculator, AlertTriangle, FileCheck2 } from 'lucide-react';
+import { ShieldCheck, Calculator, AlertTriangle, FileCheck2, Upload, CheckCircle2 } from 'lucide-react';
 import { Modal, Button, useToast } from '../../components/ui/index.js';
-import { useCreateCashout, useReconciliationPreview, useCashiers, useCashoutMeta } from '../../hooks/useCashouts.js';
+import {
+  useCreateCashout, useReconciliationPreview, useCashiers, useCashoutMeta, useAssignmentPreview, useUploadAttachment,
+} from '../../hooks/useCashouts.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtDateTime } from './financeUtils.js';
 import { CURRENCIES, METHODS, fmtMoney, fmtDiff, toLocalInput, localInputToIso, notesTotal } from './cashoutUtils.js';
+import CashoutAssignmentCard from './CashoutAssignmentCard.jsx';
 import './cashout.css';
 
 const emptyCount = () => ({ mode: 'notes', notes: {}, total: '', remark: '' });
 const ELECTRONIC = ['zaad', 'edahab'];
+const curOf = (c) => (c === 'SLSH' ? 'SLSH' : 'USD');
 
-// New Cashout. Physical CASH is counted (per currency, by notes or a
-// remarked manual total). Only ZAAD payments confirmed by the gateway are
-// auto-verified; manually recorded ZAAD and every eDahab payment must be
-// checked against the merchant statement and its total explicitly
-// confirmed. The figures shown here are a preview — the server recomputes
-// every expected / actual / difference figure and applies the tolerance.
+// New Cashout.
+//  1. cashier + period, with the cashier's assignment panel (information only);
+//  2. expected figures from recorded payments;
+//  3. merchant statement: every manually recorded ZAAD/eDahab payment is
+//     ticked when found on the statement (gateway-confirmed ZAAD is
+//     auto-verified); an unticked payment is a shortage unless explained;
+//  4. the cash count (notes or a remarked manual total);
+//  then, after creation, the statement file(s) are attached.
+// Everything shown is a preview — the server recomputes every figure.
 export default function CashoutFormModal({ open, onClose, prefill }) {
   if (!open) return null;
   return <CashoutForm onClose={onClose} prefill={prefill || {}} />;
@@ -31,10 +39,13 @@ function CashoutForm({ onClose, prefill }) {
   const [periodStart, setPeriodStart] = useState(prefill.periodStart ? toLocalInput(prefill.periodStart) : '');
   const [periodEnd, setPeriodEnd] = useState(toLocalInput(prefill.periodEnd || new Date()));
   const [counts, setCounts] = useState({ USD: emptyCount(), SLSH: emptyCount() });
-  const [elec, setElec] = useState({}); // 'USD.zaad' -> { total, confirmed }
+  const [ticked, setTicked] = useState(() => new Set());
+  const [rowNotes, setRowNotes] = useState({});
+  const [lineNotes, setLineNotes] = useState({});
   const [shortageReason, setShortageReason] = useState('');
   const [remarks, setRemarks] = useState('');
   const [error, setError] = useState('');
+  const [created, setCreated] = useState(null); // the new cashout, while attaching statements
   const { data: zonesData } = useZonesList();
   const { data: cashiersData } = useCashiers();
   const { data: metaData } = useCashoutMeta();
@@ -46,6 +57,7 @@ function CashoutForm({ onClose, prefill }) {
   const startIso = localInputToIso(periodStart);
   const endIso = localInputToIso(periodEnd);
   const preview = useReconciliationPreview(cashierId, startIso, endIso);
+  const assignment = useAssignmentPreview(cashierId, startIso, endIso);
   const p = preview.data?.data;
   const controls = p?.controls || meta?.controls || { tolerance_usd: 1, admin_threshold_usd: 10 };
 
@@ -61,39 +73,41 @@ function CashoutForm({ onClose, prefill }) {
     const e = counts[cur];
     counted[cur] = e.mode === 'manual' ? (e.total === '' ? 0 : Number(e.total)) : notesTotal(denoms[cur], e.notes);
   }
-  // Electronic lines that need the head's statement confirmation.
-  const toConfirm = [];
-  if (p?.breakdown) {
-    for (const cur of CURRENCIES) for (const m of ELECTRONIC) {
-      const l = p.breakdown.currencies[cur][m];
-      if (l.manual_expected > 0) toConfirm.push({ key: `${cur}.${m}`, cur, m, line: l });
-    }
+
+  // Manually recorded electronic payments, per currency + method.
+  const groups = [];
+  for (const cur of CURRENCIES) for (const m of ELECTRONIC) {
+    const rows = (p?.electronic || []).filter((x) => !x.gateway_verified && curOf(x.currency) === cur && x.method === m);
+    if (rows.length) groups.push({ key: `${cur}.${m}`, cur, m, rows, recorded: rows.reduce((s, x) => s + x.amount, 0) });
   }
-  const statementOf = (key, line) => (elec[key]?.total !== undefined ? elec[key].total : String(line.manual_expected));
-  const elecDiff = (cur) => toConfirm.filter((x) => x.cur === cur).reduce((s, x) => s + ((Number(statementOf(x.key, x.line)) || 0) - x.line.manual_expected), 0);
-  const elecShort = (cur) => toConfirm.filter((x) => x.cur === cur).reduce((s, x) => s + Math.max(0, x.line.manual_expected - (Number(statementOf(x.key, x.line)) || 0)), 0);
+  const tickedSum = (g) => g.rows.filter((x) => ticked.has(x.id)).reduce((s, x) => s + x.amount, 0);
+  const missSum = (cur) => groups.filter((g) => g.cur === cur).reduce((s, g) => s + (g.recorded - tickedSum(g)), 0);
 
   // Display-only estimate of the result (the server decides).
   const estimate = (() => {
     if (!p?.breakdown) return null;
     const b = p.breakdown.currencies;
     const cashD = { USD: counted.USD - b.USD.cash.expected, SLSH: counted.SLSH - b.SLSH.cash.expected };
-    const diffs = { USD: cashD.USD + elecDiff('USD'), SLSH: cashD.SLSH + elecDiff('SLSH') };
+    const diffs = { USD: cashD.USD - missSum('USD'), SLSH: cashD.SLSH - missSum('SLSH') };
     const rate = Number(p.rate) || null;
     const slshUsd = Math.abs(diffs.SLSH) < 0.5 ? 0 : rate ? diffs.SLSH / rate : null;
     if (slshUsd === null) return { diffs, noRate: true };
     const net = diffs.USD + slshUsd;
-    const slshShort = Math.max(0, -cashD.SLSH) + elecShort('SLSH');
-    const gross = Math.max(0, -cashD.USD) + elecShort('USD') + (slshShort > 0.4 ? (rate ? slshShort / rate : 0) : 0);
+    const slshShort = Math.max(0, -cashD.SLSH) + missSum('SLSH');
+    const gross = Math.max(0, -cashD.USD) + missSum('USD') + (slshShort > 0.4 ? (rate ? slshShort / rate : 0) : 0);
     const control = Math.max(net < -0.005 ? -net : 0, gross);
     const surplus = net > 0.005 ? net : 0;
     const status = control > controls.tolerance_usd + 1e-9 ? 'shortage' : surplus > controls.tolerance_usd + 1e-9 ? 'surplus' : 'balanced';
-    return { diffs, control, surplus, status, reasonRequired: status === 'shortage', needsAdmin: control > controls.admin_threshold_usd + 1e-9 };
+    // Unticked payments, every one explained, and no cash short -> the notes are the reason.
+    const unticked = groups.flatMap((g) => g.rows.filter((x) => !ticked.has(x.id)).map((x) => ({ x, g })));
+    const explained = unticked.length > 0 && unticked.every(({ x, g }) => (rowNotes[x.id] || '').trim() || (lineNotes[g.key] || '').trim());
+    const cashShort = cashD.USD < -0.005 || cashD.SLSH < -0.4;
+    return { diffs, control, surplus, status, reasonRequired: status === 'shortage' && !(explained && !cashShort), needsAdmin: control > controls.admin_threshold_usd + 1e-9 };
   })();
 
-  function setCount(cur, patch) {
-    setCounts((prev) => ({ ...prev, [cur]: { ...prev[cur], ...patch } }));
-  }
+  function setCount(cur, patch) { setCounts((prev) => ({ ...prev, [cur]: { ...prev[cur], ...patch } })); }
+  function toggle(id) { setTicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }); }
+  function tickAll(g, on) { setTicked((prev) => { const n = new Set(prev); for (const x of g.rows) { if (on) n.add(x.id); else n.delete(x.id); } return n; }); }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -113,12 +127,11 @@ function CashoutForm({ onClose, prefill }) {
       }
     }
     const electronic_confirm = {};
-    for (const x of toConfirm) {
-      const v = statementOf(x.key, x.line);
-      if (v === '' || !(Number(v) >= 0)) { setError(t('co2.form.statementInvalid', undefined, { what: `${t(`co2.m.${x.m}`)} ${x.cur}` })); return; }
-      if (!elec[x.key]?.confirmed) { setError(t('co2.form.statementConfirm', undefined, { what: `${t(`co2.m.${x.m}`)} ${x.cur}` })); return; }
-      electronic_confirm[x.cur] = electronic_confirm[x.cur] || {};
-      electronic_confirm[x.cur][x.m] = { total: Number(v), confirmed: true };
+    for (const g of groups) {
+      const notes = {};
+      for (const x of g.rows) if (!ticked.has(x.id) && (rowNotes[x.id] || '').trim()) notes[x.id] = rowNotes[x.id].trim();
+      electronic_confirm[g.cur] = electronic_confirm[g.cur] || {};
+      electronic_confirm[g.cur][g.m] = { confirmed_ids: g.rows.filter((x) => ticked.has(x.id)).map((x) => x.id), notes, note: (lineNotes[g.key] || '').trim() || undefined };
     }
     if (estimate?.reasonRequired && !shortageReason.trim()) { setError(t('co2.form.reasonRequired')); return; }
     try {
@@ -127,6 +140,7 @@ function CashoutForm({ onClose, prefill }) {
         cash_count, electronic_confirm, shortage_reason: shortageReason.trim() || undefined, remarks: remarks.trim() || undefined,
       });
       toast.success(t('fin.m.created', undefined, { number: result.data.cashout_number }));
+      if (groups.length) { setCreated(result.data); return; } // attach the merchant statement next
       onClose();
       navigate(`/financial/cashouts/${result.data.id}`);
     } catch (err) {
@@ -134,10 +148,15 @@ function CashoutForm({ onClose, prefill }) {
     }
   }
 
+  if (created) {
+    return <StatementUploadStep cashout={created} onDone={() => { onClose(); navigate(`/financial/cashouts/${created.id}`); }} />;
+  }
+
+  const step = { assign: 1, expected: 2, statement: 3, cash: groups.length ? 4 : 3 };
   return (
     <Modal
       open
-      maxWidth="720px"
+      maxWidth="760px"
       onClose={create.isPending ? () => {} : onClose}
       title={t('fin.new_cashout')}
       footer={<>
@@ -148,7 +167,7 @@ function CashoutForm({ onClose, prefill }) {
       </>}
     >
       <form id="cashout-v2-form" onSubmit={handleSubmit} className="co-form">
-        <div className="co-step"><b>1</b>{t('co2.form.whoWhen')}</div>
+        <div className="co-step"><b>{step.assign}</b>{t('co2.form.whoWhen')}</div>
         <div className="co-grid2">
           <label className="co-field">
             <span>{t('fin.cashier')}</span>
@@ -176,9 +195,10 @@ function CashoutForm({ onClose, prefill }) {
         {p?.overlapsExistingCashout && <div className="co-danger-box">{t('fin.this_cashier_already_has_a')}</div>}
         {p?.periodInFuture && <div className="co-danger-box">{t('co2.form.future')}</div>}
         {preview.error && <div className="co-err">{preview.error.message}</div>}
+        {assignment.data?.data && <CashoutAssignmentCard data={assignment.data.data} compact />}
 
         {p?.breakdown && (<>
-          <div className="co-step"><b>2</b>{t('co2.form.expected')}</div>
+          <div className="co-step"><b>{step.expected}</b>{t('co2.form.expected')}</div>
           <div className="co-exp">
             <table>
               <thead><tr><th>{t('co2.method')}</th><th>USD</th><th>SLSH</th></tr></thead>
@@ -199,46 +219,16 @@ function CashoutForm({ onClose, prefill }) {
             </table>
           </div>
           {p.breakdown.debt?.count > 0 && <div className="co-note">{t('co2.debtNote', undefined, { n: p.breakdown.debt.count })}</div>}
-          {p.electronic?.length > 0 && (
-            <div className="co-note">
-              {t('co2.form.txnCodes')}: {p.electronic.slice(0, 6).map((x) => x.reference_code || '—').join(', ')}{p.electronic.length > 6 ? ` +${p.electronic.length - 6}` : ''}
-            </div>
-          )}
 
-          {toConfirm.length > 0 && (<>
-            <div className="co-step"><b>3</b>{t('co2.form.confirmElectronic')}</div>
-            <div className="co-note">{t('co2.form.confirmElectronicHint')}</div>
-            {toConfirm.map((x) => {
-              const v = statementOf(x.key, x.line);
-              const d = (Number(v) || 0) - x.line.manual_expected;
-              return (
-                <div key={x.key} className="co-count">
-                  <div className="co-count-head">
-                    <strong><FileCheck2 size={14} style={{ verticalAlign: '-2px' }} /> {t(`co2.m.${x.m}`)} {x.cur}</strong>
-                    <span className="co-note">{t('co2.form.manualRecorded', undefined, { n: x.line.manual_count, amount: fmtMoney(x.line.manual_expected, x.cur) })}{x.line.gateway_count > 0 ? ` · ${t('co2.form.gatewayPart', undefined, { amount: fmtMoney(x.line.gateway_expected, x.cur) })}` : ''}</span>
-                  </div>
-                  <div className="co-grid2">
-                    <label className="co-field">
-                      <span>{t('co2.form.statementTotal')}</span>
-                      <input className="co-input" inputMode="decimal" value={v}
-                        onChange={(e) => setElec((prev) => ({ ...prev, [x.key]: { ...prev[x.key], total: e.target.value.replace(/[^\d.]/g, ''), confirmed: false } }))} />
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600 }}>
-                      <input type="checkbox" checked={!!elec[x.key]?.confirmed}
-                        onChange={(e) => setElec((prev) => ({ ...prev, [x.key]: { total: statementOf(x.key, x.line), confirmed: e.target.checked } }))} />
-                      {t('co2.form.statementChecked')}
-                    </label>
-                  </div>
-                  <div className="co-count-total">
-                    <span className="co-muted">{t('co2.form.recordedManual')} {fmtMoney(x.line.manual_expected, x.cur)}</span>
-                    <span className={Math.abs(d) < (x.cur === 'SLSH' ? 0.5 : 0.005) ? 'co-zero' : d < 0 ? 'co-neg' : 'co-pos'}>{fmtDiff(d, x.cur)}</span>
-                  </div>
-                </div>
-              );
-            })}
+          {groups.length > 0 && (<>
+            <div className="co-step"><b>{step.statement}</b>{t('co2.form.confirmElectronic')}</div>
+            <div className="co-note">{t('co2.stmt.hint')}</div>
+            {groups.map((g) => <StatementGroup key={g.key} g={g} ticked={ticked} onToggle={toggle} onTickAll={tickAll}
+              rowNotes={rowNotes} setRowNote={(id, v) => setRowNotes((prev) => ({ ...prev, [id]: v }))}
+              lineNote={lineNotes[g.key] || ''} setLineNote={(v) => setLineNotes((prev) => ({ ...prev, [g.key]: v }))} sum={tickedSum(g)} />)}
           </>)}
 
-          <div className="co-step"><b>{toConfirm.length > 0 ? 4 : 3}</b>{t('co2.form.countCash')}</div>
+          <div className="co-step"><b>{step.cash}</b>{t('co2.form.countCash')}</div>
           {CURRENCIES.map((cur) => (
             <CountBox key={cur} cur={cur} denoms={denoms[cur]} entry={counts[cur]} expected={p.breakdown.currencies[cur].cash.expected}
               total={counted[cur]} onChange={(patch) => setCount(cur, patch)} />
@@ -269,6 +259,94 @@ function CashoutForm({ onClose, prefill }) {
         </label>
         {error && <span className="co-err">{error}</span>}
       </form>
+    </Modal>
+  );
+}
+
+// One currency + method of manually recorded electronic payments: tick each
+// one found on the merchant statement; explain the ones that are not.
+function StatementGroup({ g, ticked, onToggle, onTickAll, rowNotes, setRowNote, lineNote, setLineNote, sum }) {
+  const { t } = useI18n();
+  const all = g.rows.every((x) => ticked.has(x.id));
+  const missing = g.rows.filter((x) => !ticked.has(x.id));
+  const miss = g.recorded - sum;
+  return (
+    <div className="co-stmt">
+      <div className="co-stmt-head">
+        <strong><FileCheck2 size={14} style={{ verticalAlign: '-2px' }} /> {t(`co2.m.${g.m}`)} {g.cur} <span className="co-muted">({g.rows.length})</span></strong>
+        <button type="button" className="co-linkbtn" onClick={() => onTickAll(g, !all)}>{all ? t('co2.stmt.untickAll') : t('co2.stmt.tickAll')}</button>
+      </div>
+      {g.rows.map((x) => {
+        const on = ticked.has(x.id);
+        return (
+          <div key={x.id} className={`co-stmt-row${on ? '' : ' miss'}`}>
+            <input type="checkbox" checked={on} onChange={() => onToggle(x.id)} aria-label={t('co2.stmt.found', undefined, { code: x.reference_code || x.id })} />
+            <div style={{ minWidth: 0 }}>
+              <div><span className="co-code">{x.reference_code || '—'}</span></div>
+              <div className="who">{x.customer_name} · {x.customer_number} · {x.invoice_number} · {fmtDateTime(x.created_at)}</div>
+            </div>
+            <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(x.amount, x.currency)}</span>
+            {!on && (
+              <input className="co-input note" value={rowNotes[x.id] || ''} onChange={(e) => setRowNote(x.id, e.target.value)} placeholder={t('co2.stmt.rowNote')} maxLength={500} />
+            )}
+          </div>
+        );
+      })}
+      <div className="co-stmt-foot">
+        <span>{t('co2.stmt.total')} <strong className="co-money">{fmtMoney(sum, g.cur)}</strong> <span className="co-muted">/ {fmtMoney(g.recorded, g.cur)}</span></span>
+        {missing.length > 0
+          ? <span className="co-neg">{t('co2.stmt.notFound', undefined, { n: missing.length, amount: fmtMoney(miss, g.cur) })}</span>
+          : <span className="co-zero"><CheckCircle2 size={12} style={{ verticalAlign: '-2px' }} /> {t('co2.stmt.allFound')}</span>}
+      </div>
+      {missing.length > 0 && (
+        <div style={{ padding: '0 12px 10px' }}>
+          <input className="co-input" value={lineNote} onChange={(e) => setLineNote(e.target.value)} placeholder={t('co2.stmt.lineNote')} maxLength={1000} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// After creation: attach one or more merchant statement files (image/PDF).
+// Never blocking — skipping is allowed and the omission is audited server-side.
+function StatementUploadStep({ cashout, onDone }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const upload = useUploadAttachment(cashout.id);
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function send() {
+    setError('');
+    if (!files.length) { setError(t('fin.choose_a_file_first')); return; }
+    setBusy(true);
+    try {
+      for (const f of files) await upload.mutateAsync({ file: f, documentType: 'merchant_statement' });
+      toast.success(t('co2.stmt.uploaded', undefined, { n: files.length }));
+      onDone();
+    } catch (err) {
+      setError(err.message || t('common.somethingWrong'));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal open onClose={busy ? () => {} : onDone} title={t('co2.stmt.uploadTitle', undefined, { number: cashout.cashout_number })}
+      footer={<>
+        <Button variant="secondary" onClick={onDone} disabled={busy}>{t('co2.stmt.skip')}</Button>
+        <Button icon={Upload} onClick={send} disabled={busy}>{busy ? t('topbar.uploading') : t('co2.stmt.uploadOpen')}</Button>
+      </>}>
+      <div className="co-form">
+        <div className="co-result balanced"><span className="t"><CheckCircle2 size={14} style={{ verticalAlign: '-2px' }} /> {t('co2.stmt.created', undefined, { number: cashout.cashout_number })}</span></div>
+        <p className="co-note" style={{ margin: 0 }}>{t('co2.stmt.uploadHint')}</p>
+        <label className="co-field">
+          <span>{t('co2.stmt.files')}</span>
+          <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" capture="environment" className="co-input"
+            onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+          <span className="hint">{t('fin.pdf_jpg_or_png_only')}</span>
+        </label>
+        {error && <span className="co-err">{error}</span>}
+      </div>
     </Modal>
   );
 }

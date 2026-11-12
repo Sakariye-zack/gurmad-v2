@@ -18,11 +18,13 @@ import { fmtDate, fmtDateTime } from './financeUtils.js';
 import { CURRENCIES, METHODS, fmtMoney, fmtDiff, fmtPair, varianceOf } from './cashoutUtils.js';
 import { StatusChip, DepositChip, VarianceChip, NeedsAdminChip, Person, Chip } from './CashoutBits.jsx';
 import CashoutDocument from './CashoutDocument.jsx';
+import CashoutAssignmentCard from './CashoutAssignmentCard.jsx';
 import './cashout.css';
 
 const DOC_TYPE_LABELS = {
   signed_cashout_form: 'Signed Cashout Form', deposit_slip: 'Deposit Slip', cash_handover_evidence: 'Cash Handover Evidence',
   receipt: 'Receipt', shortage_explanation: 'Shortage Explanation', approval_document: 'Approval Document', other: 'Other Supporting Document',
+  merchant_statement: 'Merchant Statement',
 };
 
 export default function CashoutDetailPage() {
@@ -35,7 +37,7 @@ export default function CashoutDetailPage() {
   const approveMut = useApproveCashout(id);
   const rejectMut = useRejectCashout(id);
   const voidMut = useVoidCashout(id);
-  const [modal, setModal] = useState(null); // reject | void | upload | preview | transactions | deposit | resolve
+  const [modal, setModal] = useState(null); // reject | void | upload | statement | preview | transactions | deposit | resolve
   const [reason, setReason] = useState('');
   const [downloading, setDownloading] = useState(false);
   const cashout = data?.data;
@@ -163,11 +165,13 @@ export default function CashoutDetailPage() {
         <div className="co-main">
           <BreakdownCard cashout={cashout} onViewTransactions={() => open('transactions')} />
           <ElectronicCard cashout={cashout} />
+          {cashout.assignment_snapshot && <CashoutAssignmentCard data={cashout.assignment_snapshot} snapshot />}
           <CountCard cashout={cashout} />
           {cashout.status === 'approved' && <DepositsCard cashout={cashout} isAdmin={isAdmin} userId={user?.id} />}
         </div>
         <div className="co-side">
           <ShortageCard cashout={cashout} />
+          <StatementsCard cashout={cashout} canUpload={canPrepare} onUpload={() => open('statement')} />
           <AttachmentsCard cashout={cashout} />
           <TimelineCard cashout={cashout} />
           <PeopleCard cashout={cashout} />
@@ -191,6 +195,7 @@ export default function CashoutDetailPage() {
         confirmLabel={t('fin.void_cashout')} isLoading={voidMut.isPending}
         message={<div><p style={{ margin: '0 0 8px' }}>{t('fin.only_allowed_before_approval_the')}</p><input className="co-input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('fin.reason_for_voiding')} /></div>} />
       {modal === 'upload' && <UploadAttachmentModal onClose={() => setModal(null)} cashoutId={id} />}
+      {modal === 'statement' && <UploadAttachmentModal onClose={() => setModal(null)} cashoutId={id} initialType="merchant_statement" />}
       {modal === 'deposit' && <RecordDepositModal onClose={() => setModal(null)} cashout={cashout} />}
       {modal === 'resolve' && <ResolveShortageModal onClose={() => setModal(null)} cashoutId={id} shortage={cashout.shortage_record} />}
     </div>
@@ -296,6 +301,16 @@ function ElectronicCard({ cashout }) {
   const { t } = useI18n();
   const rows = cashout.electronic || [];
   if (!rows.length) return null;
+  // Statement check stored at creation: ticked / not found (+ note).
+  const ticked = new Set();
+  const missing = new Map();
+  const c = cashout.breakdown?.currencies || {};
+  for (const cur of CURRENCIES) for (const m of ['zaad', 'edahab']) {
+    const l = c[cur]?.[m];
+    if (!l) continue;
+    for (const pid of l.confirmed_ids || []) ticked.add(Number(pid));
+    for (const pid of l.unconfirmed_ids || []) missing.set(Number(pid), (l.notes && l.notes[pid]) || l.note || '');
+  }
   return (
     <div className="co-card">
       <div className="co-card-head">
@@ -308,8 +323,12 @@ function ElectronicCard({ cashout }) {
             <div style={{ minWidth: 0 }}>
               <div>
                 <span className="co-code">{p.reference_code || '—'}</span> <Chip tone="info" flat>{t(`co2.m.${p.method}`)}</Chip>{' '}
-                {p.gateway_verified ? <Chip tone="success">{t('co2.viaGateway')}</Chip> : <Chip tone="warning">{t('co2.viaStatement')}</Chip>}
+                {p.gateway_verified ? <Chip tone="success">{t('co2.viaGateway')}</Chip>
+                  : ticked.has(Number(p.id)) ? <Chip tone="success">{t('co2.stmt.onStatement')}</Chip>
+                    : missing.has(Number(p.id)) ? <Chip tone="danger">{t('co2.stmt.notOnStatement')}</Chip>
+                      : <Chip tone="warning">{t('co2.viaStatement')}</Chip>}
               </div>
+              {missing.get(Number(p.id)) && <div className="ref co-neg">{missing.get(Number(p.id))}</div>}
               <div className="ref">{p.invoice_number} · {p.customer_name} · {fmtDateTime(p.created_at)}</div>
             </div>
             <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(p.amount, p.currency)}</span>
@@ -421,6 +440,26 @@ function DepositsCard({ cashout, isAdmin, userId }) {
       <ConfirmDialog open={!!voidFor} onClose={() => setVoidFor(null)} onConfirm={() => (voidReason.trim() ? act(voidFor.id, 'void', voidReason.trim()) : toast.error(t('fin.a_reason_is_required')))}
         title={t('co2.dep.voidTitle')} danger confirmLabel={t('status.void')} isLoading={change.isPending}
         message={<input className="co-input" value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder={t('common.reason')} />} />
+    </div>
+  );
+}
+
+// Merchant statement files (attachments of kind 'statement').
+function StatementsCard({ cashout, canUpload, onUpload }) {
+  const { t } = useI18n();
+  const list = (cashout.attachments || []).filter((a) => a.kind === 'statement');
+  if (!cashout.statement_required && list.length === 0) return null;
+  return (
+    <div className="co-card">
+      <div className="co-card-head">
+        <h3><FileDown size={16} color="var(--info)" /> {t('co2.stmt.cardTitle')}</h3>
+        {list.length === 0 ? <Chip tone="danger">{t('co2.stmt.none')}</Chip> : <Chip tone="success">{t('co2.stmt.count', undefined, { n: list.length })}</Chip>}
+      </div>
+      <div className="co-card-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {list.length === 0 && <div className="co-note">{t('co2.stmt.noneHint')}</div>}
+        {list.length > 0 && <div className="co-list">{list.map((a) => <AttachmentRow key={a.id} attachment={a} cashoutId={cashout.id} />)}</div>}
+        {canUpload && <div><Button variant="secondary" icon={Upload} onClick={onUpload}>{t('co2.stmt.upload')}</Button></div>}
+      </div>
     </div>
   );
 }
@@ -563,11 +602,11 @@ function AttachmentRow({ attachment, cashoutId }) {
   );
 }
 
-function UploadAttachmentModal({ onClose, cashoutId }) {
+function UploadAttachmentModal({ onClose, cashoutId, initialType = 'signed_cashout_form' }) {
   const { t } = useI18n();
   const toast = useToast();
   const [file, setFile] = useState(null);
-  const [documentType, setDocumentType] = useState('signed_cashout_form');
+  const [documentType, setDocumentType] = useState(initialType);
   const [error, setError] = useState('');
   const uploadMut = useUploadAttachment(cashoutId);
   async function handleSubmit(e) {
