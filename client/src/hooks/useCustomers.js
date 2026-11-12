@@ -21,6 +21,53 @@ export function useCustomers(params = {}) {
   });
 }
 
+// Customers list page: paginated / sorted / filtered list, its summary cards,
+// CSV export and the bulk "Assign Sub Zone" action. `filters` keys map 1:1
+// to the GET /v2/customers query params (empty values are dropped).
+const LIST_PARAM_KEYS = [
+  'q', 'status', 'customer_type', 'group_id', 'zone_id', 'group_zone_id', 'route_id', 'collector_id', 'billing_type',
+  'owes', 'has_location', 'no_subzone', 'suspended_for_debt', 'portal',
+];
+export function customerListQuery(filters = {}, extra = {}) {
+  const qs = new URLSearchParams();
+  for (const k of LIST_PARAM_KEYS) {
+    const v = filters[k];
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  return qs.toString();
+}
+
+export function useCustomersPage(filters, { page, pageSize, sort, dir, withBalance }) {
+  const query = customerListQuery(filters, { page, page_size: pageSize, sort, dir, with_balance: withBalance ? 1 : undefined });
+  return useQuery({
+    queryKey: ['v2', 'customers', 'page', query],
+    queryFn: () => apiClient.get(`/v2/customers?${query}`),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useCustomersSummary(filters) {
+  const query = customerListQuery(filters);
+  return useQuery({
+    queryKey: ['v2', 'customers', 'summary', query],
+    queryFn: () => apiClient.get(`/v2/customers/summary${query ? `?${query}` : ''}`),
+  });
+}
+
+export function exportCustomersCsv(filters, { sort, dir } = {}) {
+  const query = customerListQuery(filters, { sort, dir });
+  return apiClient.downloadAuthorizedFile(`/v2/customers/export.csv${query ? `?${query}` : ''}`, `customers-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+export function useBulkAssignSubzone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ customer_ids, route_id }) => apiClient.post('/v2/customers/bulk/assign-subzone', { customer_ids, route_id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'customers'] }),
+  });
+}
+
 export function useCustomer(id) {
   return useQuery({
     queryKey: ['v2', 'customers', id],
