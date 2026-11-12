@@ -83,13 +83,24 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     const result = await pool.query(
       `SELECT g.*, z.name AS zone_name,
         (SELECT COUNT(*)::int FROM customers c WHERE c.group_id = g.id AND c.status = 'active') AS customer_count,
-        (SELECT COUNT(*)::int FROM routes r WHERE r.group_id = g.id) AS route_count
+        (SELECT COUNT(*)::int FROM routes r WHERE r.group_id = g.id) AS route_count,
+        (SELECT COUNT(*)::int FROM group_zones gz WHERE gz.group_id = g.id) AS group_zone_count,
+        -- Distinct collectors assigned to this group's Sub Zones (read-only display).
+        (SELECT COALESCE(json_agg(json_build_object('user_id', x.id, 'name', x.name) ORDER BY x.name, x.id), '[]'::json)
+           FROM (SELECT DISTINCT u.id, COALESCE(u.full_name, u.username) AS name
+                 FROM routes r JOIN v2_users u ON u.id = r.collector_user_id WHERE r.group_id = g.id) x) AS collectors
        FROM groups g LEFT JOIN zones z ON g.zone_id = z.id
-       ${whereSql} ORDER BY g.zone_id, g.code
+       ${whereSql} ORDER BY z.name NULLS LAST, g.zone_id, COALESCE(NULLIF(g.name, ''), g.code), g.id
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
-    res.json({ data: result.rows, meta: { total: countResult.rows[0].total, limit, offset } });
+    const rows = result.rows.map((g) => ({
+      ...g,
+      collector_count: (g.collectors || []).length,
+      // "Empty" chip: no active customers and no Sub Zones.
+      is_empty: g.customer_count === 0 && g.route_count === 0,
+    }));
+    res.json({ data: rows, meta: { total: countResult.rows[0].total, limit, offset } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to list groups.', code: 'INTERNAL' } });
   }

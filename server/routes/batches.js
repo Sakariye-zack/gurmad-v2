@@ -83,6 +83,17 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(parseStrictId(req.query.cycle_id));
       where.push(`batches.cycle_id = $${params.length}`);
     }
+    // Date filter (single day): batches whose start..end range covers it.
+    if (req.query.date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) return res.status(400).json({ error: { message: 'date must be YYYY-MM-DD.', code: 'VALIDATION' } });
+      params.push(req.query.date);
+      where.push(`batches.start_date <= $${params.length}::date AND COALESCE(batches.end_date, batches.start_date) >= $${params.length}::date`);
+    }
+    // Source filter: auto (Today's list generator) or manual.
+    if (req.query.source) {
+      if (!['auto', 'manual'].includes(req.query.source)) return res.status(400).json({ error: { message: 'source must be auto or manual.', code: 'VALIDATION' } });
+      where.push(req.query.source === 'auto' ? 'batches.auto_generated = TRUE' : 'batches.auto_generated = FALSE');
+    }
     // Search — Implementation Spec §6. Single field (batch_code), zone-scope
     // already applied above. 2-character minimum: shorter q is silently
     // ignored, not rejected. No pagination exists on this endpoint and none
@@ -109,9 +120,27 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT batches.*, zones.name AS zone_name, collection_cycles.cycle_type FROM batches
+      `SELECT batches.*, zones.name AS zone_name, collection_cycles.cycle_type,
+              to_char(batches.start_date, 'YYYY-MM-DD') AS start_day, to_char(batches.end_date, 'YYYY-MM-DD') AS end_day,
+              sz.name AS route_name, sz.code AS route_code,
+              col.employee_id AS collector_employee_id, col.name AS collector_name,
+              trk.truck_id, trk.plate_number AS truck_plate
+       FROM batches
        LEFT JOIN zones ON batches.zone_id = zones.id
        LEFT JOIN collection_cycles ON batches.cycle_id = collection_cycles.id
+       LEFT JOIN routes sz ON sz.id = batches.route_id
+       LEFT JOIN LATERAL (
+         SELECT e.id AS employee_id, e.name FROM tasks t
+         JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'collector'
+         JOIN employees e ON e.id = tr.resource_id
+         WHERE t.batch_id = batches.id ORDER BY tr.id LIMIT 1
+       ) col ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT tk.id AS truck_id, tk.plate_number FROM tasks t
+         JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'truck'
+         JOIN trucks tk ON tk.id = tr.resource_id
+         WHERE t.batch_id = batches.id ORDER BY tr.id LIMIT 1
+       ) trk ON TRUE
        ${whereSql} ORDER BY batches.created_at DESC`,
       params
     );

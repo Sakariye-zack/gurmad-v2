@@ -23,7 +23,7 @@ export default function ZonesListPage() {
       <PageHeader
         icon={MapPinned}
         title={t('nav.zones')}
-        subtitle={t('zone.gurmad_s_two_operational_zones')}
+        subtitle={t('opsp.districtsSubtitle')}
         actions={
           <RoleGate roles={['admin']}>
             <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('zone.create_zone')}</Button>
@@ -41,9 +41,11 @@ export default function ZonesListPage() {
         columns={[
           { label: t('common.zone') },
           { label: t('zone.code') },
-          { label: t('zone.sub_zone') },
-          { label: t('zone.area') },
-          { label: t('zone.collection_days') },
+          { label: t('opsp.col.groups') },
+          { label: t('opsp.col.zones') },
+          { label: t('opsp.col.subZones') },
+          { label: t('opsp.col.customers') },
+          { label: t('opsp.col.collectors') },
           { label: t('common.status') },
         ]}
       >
@@ -55,9 +57,13 @@ export default function ZonesListPage() {
           >
             <td style={cellStyle}><strong>{z.name}</strong></td>
             <td style={cellStyle}>{z.zone_code}</td>
-            <td style={cellStyle}>{z.sub_zone || '—'}</td>
-            <td style={cellStyle}>{z.area || '—'}</td>
-            <td style={cellStyle}>{(z.collection_days || []).join(', ') || '—'}</td>
+            {/* Legacy sub_zone / area / collection_days stay in the form + DB
+                but are no longer shown here: daily lists use the Sub Zones. */}
+            <td style={cellStyle} className="tabular-nums">{count(z.group_count)}</td>
+            <td style={cellStyle} className="tabular-nums">{count(z.group_zone_count)}</td>
+            <td style={cellStyle} className="tabular-nums">{count(z.subzone_count)}</td>
+            <td style={cellStyle} className="tabular-nums">{count(z.customer_count)}</td>
+            <td style={cellStyle} className="tabular-nums">{count(z.collector_count)}</td>
             <td style={cellStyle}><StatusBadge status={z.status} /></td>
           </tr>
         ))}
@@ -69,3 +75,5 @@ export default function ZonesListPage() {
 }
 
 const cellStyle = { padding: '12px 14px' };
+// Counts are null for districts outside the caller's own (server-side scoping).
+const count = (n) => (n === null || n === undefined ? '—' : n);

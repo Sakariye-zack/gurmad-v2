@@ -3,6 +3,7 @@ import { CalendarRange, ClipboardList, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader, Button, DataTable, StatusBadge, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
+import LegacyOpsBanner from '../../components/collection/LegacyOpsBanner.jsx';
 import { useCycles, useCreateCycle, useCloseCycle } from '../../hooks/useCollectionOps.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
@@ -35,6 +36,7 @@ export default function CyclesListPage() {
           </>
         }
       />
+      <LegacyOpsBanner />
       <DataTable
         loading={isLoading}
         error={error?.message}

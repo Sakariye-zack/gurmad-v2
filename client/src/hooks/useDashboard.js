@@ -20,3 +20,13 @@ export function useOperationsToday(enabled = true) {
     refetchInterval: 60 * 1000,
   });
 }
+
+// Setup checklist — what blocks automatic daily lists (admin / gudoomiye only).
+export function useSetupHealth(enabled = true) {
+  return useQuery({
+    queryKey: ['v2', 'dashboard', 'setup-health'],
+    queryFn: () => apiClient.get('/v2/dashboard/setup-health'),
+    enabled,
+    staleTime: 60 * 1000,
+  });
+}

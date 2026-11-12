@@ -23,6 +23,7 @@ import { FLEET } from './fleet.js';
 import { DAILY_LISTS } from './dailyLists.js';
 import { COLLECTORS_OPS } from './collectorsOps.js';
 import { DEBT_SUSPENSION } from './debtSuspension.js';
+import { OPS_PAGES } from './opsPages.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -38,6 +39,7 @@ export const TRANSLATIONS = {
   ...DAILY_LISTS,
   ...COLLECTORS_OPS,
   ...DEBT_SUSPENSION,
+  ...OPS_PAGES,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },
