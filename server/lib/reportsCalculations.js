@@ -468,12 +468,17 @@ async function getDebtsSummary({ zoneId = null, status = null, periodStart, peri
 // ---------- G. Cashout / Reconciliation summary ----------
 
 async function getCashoutSummary({ zoneId = null, cashierId = null, periodStart, periodEnd }, client = pool) {
-  const clauses = [`co.created_at >= $1`, `co.created_at < $2`];
+  // Only live cashouts (pending / approved) count: a rejected or voided
+  // cashout is not money anyone holds. actual_amount (Cashout V2) includes
+  // debt-marked payments as "accounted for, no money"; that part is exposed
+  // separately (debt_marked) so totals are never read as cash received.
+  const clauses = [`co.created_at >= $1`, `co.created_at < $2`, `co.status IN ('pending', 'approved')`];
   const params = [periodStart, periodEnd];
   if (zoneId) { params.push(zoneId); clauses.push(`co.zone_id = $${params.length}`); }
   if (cashierId) { params.push(cashierId); clauses.push(`co.cashier_id = $${params.length}`); }
   const res = await client.query(
     `SELECT co.id, co.cashout_number, co.status, co.expected_amount, co.actual_amount, co.shortage, co.surplus, z.name AS zone_name,
+       CASE WHEN co.breakdown->>'mode' = 'counted' THEN COALESCE((co.breakdown->'debt'->>'usd')::numeric, 0) ELSE 0 END AS debt_marked,
        cs.id AS shortage_record_id, cs.status AS shortage_status
      FROM cashouts co LEFT JOIN zones z ON z.id = co.zone_id LEFT JOIN cashout_shortages cs ON cs.cashout_id = co.id
      WHERE ${clauses.join(' AND ')} ORDER BY co.created_at DESC`,
@@ -482,8 +487,10 @@ async function getCashoutSummary({ zoneId = null, cashierId = null, periodStart,
   const totals = res.rows.reduce((acc, r) => {
     acc.expected += parseFloat(r.expected_amount); acc.actual += parseFloat(r.actual_amount);
     acc.shortage += parseFloat(r.shortage); acc.surplus += parseFloat(r.surplus);
+    acc.debt_marked += parseFloat(r.debt_marked);
     return acc;
-  }, { expected: 0, actual: 0, shortage: 0, surplus: 0 });
+  }, { expected: 0, actual: 0, shortage: 0, surplus: 0, debt_marked: 0 });
+  totals.received = totals.actual - totals.debt_marked;
   return { rows: res.rows, totals };
 }
 

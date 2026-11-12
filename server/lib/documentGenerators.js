@@ -183,7 +183,7 @@ function gridTable(headers, rows, widths) {
     ],
   });
 }
-const METHOD_LABEL = { cash: 'Cash (counted)', zaad: 'ZAAD (auto-verified)', edahab: 'eDahab (auto-verified)' };
+const METHOD_LABEL = { cash: 'Cash (counted)', zaad: 'ZAAD', edahab: 'eDahab' };
 const diffText = (d, cur) => (d === null || d === undefined ? '—' : d === 0 ? 'Exact' : `${d > 0 ? '+' : '−'}${money(Math.abs(d), cur)}`);
 const diffColor = (d) => (d > 0 ? '2563A8' : d < 0 ? 'C0392B' : INK);
 
@@ -235,9 +235,9 @@ function cashoutV2Sections(cashout, extras) {
   }
   const el = extras.electronic || [];
   if (el.length) {
-    out.push(sectionTitle('Electronic payments (auto-verified)'));
-    out.push(gridTable(['Transaction / reference', 'Method', 'Invoice', 'Amount'],
-      el.map((p) => [p.reference_code || '—', String(p.method).toUpperCase(), p.invoice_number || '—', money(p.amount, p.currency)]), [36, 16, 24, 24]));
+    out.push(sectionTitle('Electronic payments'));
+    out.push(gridTable(['Transaction / reference', 'Method', 'Verified by', 'Amount'],
+      el.map((p) => [p.reference_code || '—', String(p.method).toUpperCase(), p.gateway_verified ? 'ZAAD gateway' : 'Statement (head)', money(p.amount, p.currency)]), [36, 16, 24, 24]));
   }
   if (cashout.status === 'approved') {
     out.push(sectionTitle('Deposit'));

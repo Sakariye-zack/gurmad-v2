@@ -306,6 +306,18 @@ function validateSettingsInput(body) {
       out[key] = v;
     }
   }
+  // Cashout V2 cut-off: payments before it are never listed as "not yet
+  // cashed out" nor alerted on. ISO date-time, not in the future.
+  if (body.cashout_v2_since === null) {
+    out.cashout_v2_since = null; // back to the install time
+  } else if (body.cashout_v2_since !== undefined) {
+    const d = typeof body.cashout_v2_since === 'string' ? new Date(body.cashout_v2_since) : null;
+    if (!d || isNaN(d) || d.getFullYear() < 2000 || d.getTime() > Date.now() + 60 * 1000) {
+      errors.push('cashout_v2_since must be a valid date-time that is not in the future.');
+    } else {
+      out.cashout_v2_since = d;
+    }
+  }
   return { errors, data: out };
 }
 
@@ -330,6 +342,7 @@ function shapeRow(row) {
     debt_suspend_days: row.debt_suspend_days ?? 90,
     cashout_tolerance_usd: row.cashout_tolerance_usd != null ? Number(row.cashout_tolerance_usd) : 1,
     cashout_admin_threshold_usd: row.cashout_admin_threshold_usd != null ? Number(row.cashout_admin_threshold_usd) : 10,
+    cashout_v2_since: row.cashout_v2_since || null,
     updated_at: row.updated_at,
   };
 }

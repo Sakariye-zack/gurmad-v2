@@ -8,8 +8,9 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const {
   computeExpectedForPeriod, hasOverlappingCashout, EPSILON, DENOMINATIONS, CURRENCIES,
   getCashoutControls, getCurrentRate, computeBreakdownForPeriod, listElectronicPayments, normalizeCashCount,
-  buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit, listUncoveredPayments,
+  normalizeElectronicConfirm, buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit, listUncoveredPayments,
 } = require('../lib/cashoutCalculations');
+const { getTimezone } = require('../lib/autoBilling');
 const { buildCashoutDocx } = require('../lib/documentGenerators');
 const { rejectIfInfected } = require('../lib/virusScan');
 const { createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
@@ -96,9 +97,22 @@ async function loadDeposits(cashoutIds, client = pool) {
   return byId;
 }
 
+// Exchange rate in force when each legacy cashout (no counted breakdown,
+// legacy slsh_amount present) was created — values its SLSH cash to deposit.
+async function loadLegacyRates(cashouts, client = pool) {
+  const ids = cashouts.filter((c) => !(c.breakdown && c.breakdown.mode === 'counted') && Number(c.slsh_amount) > 0.004).map((c) => c.id);
+  const out = new Map();
+  if (!ids.length) return out;
+  const r = await client.query(
+    `SELECT co.id, (SELECT er.rate FROM exchange_rates er WHERE er.effective_from <= co.created_at ORDER BY er.effective_from DESC LIMIT 1) AS rate
+     FROM cashouts co WHERE co.id = ANY($1::int[])`, [ids]);
+  for (const row of r.rows) if (row.rate !== null) out.set(row.id, Number(row.rate));
+  return out;
+}
+
 // Derived deposit fields. Only an APPROVED cashout has a deposit status.
-function depositInfo(cashout, deposits = []) {
-  const required = requiredDeposit(cashout);
+function depositInfo(cashout, deposits = [], legacyRate = null) {
+  const required = requiredDeposit(cashout, legacyRate);
   const deposited = { USD: 0, SLSH: 0 };
   for (const d of deposits) if (!d.voided_at) deposited[d.currency] += Number(d.amount);
   return {
@@ -197,9 +211,10 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
        ${whereSql} ORDER BY cashouts.created_at DESC`,
       params
     );
-    const approvedIds = result.rows.filter((r) => r.status === 'approved').map((r) => r.id);
-    const deposits = await loadDeposits(approvedIds);
-    let rows = result.rows.map((r) => ({ ...r, ...depositInfo(r, deposits.get(r.id) || []) }));
+    const approved = result.rows.filter((r) => r.status === 'approved');
+    const deposits = await loadDeposits(approved.map((r) => r.id));
+    const rates = await loadLegacyRates(approved);
+    let rows = result.rows.map(({ covered_payment_ids: ids, ...r }) => ({ ...r, covered_payment_count: ids ? ids.length : null, ...depositInfo(r, deposits.get(r.id) || [], rates.get(r.id)) }));
     if (depositFilter) rows = rows.filter((r) => r.deposit_status === depositFilter);
     res.json({ data: rows });
   } catch (err) {
@@ -214,7 +229,8 @@ router.get('/meta', authenticateToken, requireRole(...VIEW_ROLES), async (req, r
   try {
     const controls = await getCashoutControls();
     const accounts = await pool.query(`SELECT id, name, type, account_ref FROM cashout_deposit_accounts WHERE active = TRUE ORDER BY name`);
-    res.json({ data: { denominations: DENOMINATIONS, currencies: CURRENCIES, controls, deposit_accounts: accounts.rows } });
+    const since = await require('../lib/cashoutCalculations').getCashoutV2Since();
+    res.json({ data: { denominations: DENOMINATIONS, currencies: CURRENCIES, controls, deposit_accounts: accounts.rows, cashout_v2_since: since } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load cashout settings.', code: 'INTERNAL' } });
   }
@@ -233,23 +249,35 @@ router.get('/summary', authenticateToken, requireRole(...VIEW_ROLES), async (req
               COUNT(*) FILTER (WHERE status = 'pending' AND needs_admin)::int AS needs_admin,
               COUNT(*) FILTER (WHERE status IN ('pending', 'approved') AND shortage > 0)::int AS with_shortage
        FROM cashouts WHERE TRUE ${zoneSql}`, params);
+    // "This month" in the company's timezone.
+    const tz = await getTimezone();
+    const tzParam = `$${params.length + 1}`;
     const month = await pool.query(
       `SELECT breakdown, actual_amount FROM cashouts
-       WHERE status IN ('pending', 'approved') AND created_at >= date_trunc('month', NOW()) ${zoneSql}`, params);
+       WHERE status IN ('pending', 'approved')
+         AND created_at >= (date_trunc('month', NOW() AT TIME ZONE ${tzParam}) AT TIME ZONE ${tzParam}) ${zoneSql}`, [...params, tz]);
     const received = { USD: 0, SLSH: 0 };
     for (const r of month.rows) {
       const b = r.breakdown;
       if (b && b.mode === 'counted' && b.totals) { received.USD += Number(b.totals.USD.actual || 0); received.SLSH += Number(b.totals.SLSH.actual || 0); }
       else received.USD += Number(r.actual_amount || 0);
     }
-    const approved = await pool.query(`SELECT id, status, breakdown, cash_amount FROM cashouts WHERE status = 'approved' ${zoneSql}`, params);
+    const approved = await pool.query(
+      `SELECT id, status, breakdown, cash_amount, slsh_amount, deposit_exempt FROM cashouts WHERE status = 'approved' ${zoneSql}`, params);
     const deposits = await loadDeposits(approved.rows.map((r) => r.id));
+    const rates = await loadLegacyRates(approved.rows);
     let notDeposited = 0;
+    let unverified = 0;
     for (const r of approved.rows) {
-      const s = depositInfo(r, deposits.get(r.id) || []).deposit_status;
-      if (s === 'not_deposited' || s === 'partial' || s === 'variance') notDeposited += 1;
+      const ds = deposits.get(r.id) || [];
+      const st = depositInfo(r, ds, rates.get(r.id)).deposit_status;
+      if (st === 'not_deposited' || st === 'partial' || st === 'variance') notDeposited += 1;
+      unverified += ds.filter((d) => !d.voided_at && !d.verified_at).length;
     }
-    res.json({ data: { ...counts.rows[0], not_deposited: notDeposited, received_this_month: { USD: Number(received.USD.toFixed(2)), SLSH: Number(received.SLSH.toFixed(2)) } } });
+    res.json({ data: {
+      ...counts.rows[0], not_deposited: notDeposited, unverified_deposits: unverified,
+      received_this_month: { USD: Number(received.USD.toFixed(2)), SLSH: Number(received.SLSH.toFixed(2)) },
+    } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load cashout summary.', code: 'INTERNAL' } });
   }
@@ -419,7 +447,10 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     // asOf = cashout.created_at: a historical document must show the exact
     // figures true when it was created, never drift as later payments land
     // inside the same time window (see cashoutCalculations.js's own comment).
-    const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
+    // V2 rows recompute from their exact covered payment ids (never drift);
+    // older rows from their period up to their creation time.
+    const scope = { paymentIds: cashout.covered_payment_ids || null };
+    const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at, scope);
     // shortage_record (not `shortage`) — cashouts.shortage is the numeric
     // amount column already spread in from ...cashout; naming the record
     // object the same key would silently shadow that number in the
@@ -427,11 +458,14 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     // V2 (additive): deposits + derived status, the auto-verified electronic
     // payments (same asOf snapshot), and the action timeline.
     const deposits = (await loadDeposits([id])).get(id) || [];
-    const electronic = await listElectronicPayments(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
+    const electronic = await listElectronicPayments(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at, scope);
     const timeline = await loadTimeline(id);
+    const rates = await loadLegacyRates([cashout]);
+    const { covered_payment_ids: coveredIds, ...rest } = cashout;
     res.json({ data: {
-      ...cashout, debt: debt.rows[0] || null, shortage_record: shortage.rows[0] || null, attachments: attachments.rows, reconciliation: recon,
-      deposits, ...depositInfo(cashout, deposits), electronic, timeline,
+      ...rest, covered_payment_count: coveredIds ? coveredIds.length : null,
+      debt: debt.rows[0] || null, shortage_record: shortage.rows[0] || null, attachments: attachments.rows, reconciliation: recon,
+      deposits, ...depositInfo(cashout, deposits, rates.get(id)), electronic, timeline,
     } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to load cashout.', code: 'INTERNAL' } });
@@ -455,11 +489,13 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
     if (myZoneId !== null && cashout.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
     }
-    const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
+    const scope = { paymentIds: cashout.covered_payment_ids || null };
+    const recon = await computeExpectedForPeriod(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at, scope);
     const shortageRes = await pool.query('SELECT * FROM cashout_shortages WHERE cashout_id = $1', [id]);
     const deposits = (await loadDeposits([id])).get(id) || [];
-    const electronic = await listElectronicPayments(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at);
-    const buffer = await buildCashoutDocx(cashout, recon, shortageRes.rows[0] || null, { deposits, ...depositInfo(cashout, deposits), electronic });
+    const electronic = await listElectronicPayments(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at, scope);
+    const rates = await loadLegacyRates([cashout]);
+    const buffer = await buildCashoutDocx(cashout, recon, shortageRes.rows[0] || null, { deposits, ...depositInfo(cashout, deposits, rates.get(id)), electronic });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${cashout.cashout_number}.docx"`);
     res.send(buffer);
@@ -487,17 +523,19 @@ router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), a
     if (myZoneId !== null && cashout.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
     }
+    // V2 rows: exactly the covered payment ids; older rows: the period up to creation.
+    const byIds = Array.isArray(cashout.covered_payment_ids);
     const result = await pool.query(
       `SELECT payments.id, payments.amount, payments.currency, payments.method, payments.amount_usd, payments.created_at,
-              payments.reference_code, payments.channel,
+              payments.reference_code, payments.channel, payments.status,
               invoices.invoice_number, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
        FROM payments
        JOIN invoices ON payments.invoice_id = invoices.id
        JOIN customers ON invoices.customer_id = customers.id
-       WHERE payments.cashier_id = $1 AND payments.status = 'recorded'
-         AND payments.created_at >= $2 AND payments.created_at < $3 AND payments.created_at < $4
+       WHERE ${byIds ? 'payments.id = ANY($1::int[])' : `payments.cashier_id = $1 AND payments.status = 'recorded'
+         AND payments.created_at >= $2 AND payments.created_at < $3 AND payments.created_at < $4`}
        ORDER BY payments.created_at ASC`,
-      [cashout.cashier_id, cashout.period_start, cashout.period_end, cashout.created_at]
+      byIds ? [cashout.covered_payment_ids] : [cashout.cashier_id, cashout.period_start, cashout.period_end, cashout.created_at]
     );
     res.json({ data: result.rows });
   } catch (err) {
@@ -508,8 +546,13 @@ router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), a
 // ---------- Create (atomic: cashout + shortage-debt, one transaction) ----------
 
 router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
-  const { zone_id, cashier_id, period_start, period_end, actual_amount, cash_amount, zaad_amount, edahab_amount, slsh_amount, shortage_reason, remarks } = req.body;
-
+  const { zone_id, cashier_id, period_start, period_end, shortage_reason, remarks } = req.body || {};
+  // Cashout V2 only: the old "type the actual amount" body is gone — the
+  // cash must be counted (cash_count) and manually recorded electronic
+  // payments confirmed (electronic_confirm).
+  if (!req.body || req.body.cash_count === undefined) {
+    return res.status(400).json({ error: { message: 'This request format is no longer accepted — count the cash (cash_count) instead of typing an actual amount.', code: 'LEGACY_FORMAT_REMOVED' } });
+  }
   const zoneId = parseStrictId(String(zone_id ?? ''));
   const cashierId = parseStrictId(String(cashier_id ?? ''));
   if (zoneId === null || cashierId === null) return res.status(400).json({ error: { message: 'zone_id and cashier_id are required.', code: 'VALIDATION' } });
@@ -518,91 +561,83 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
   if (isNaN(periodStart) || isNaN(periodEnd) || periodStart >= periodEnd) {
     return res.status(400).json({ error: { message: 'A valid period_start before period_end is required.', code: 'VALIDATION' } });
   }
-  // Two request shapes. V2 (`cash_count`): only the physical cash is
-  // counted, per currency (notes or a remarked manual total); electronic
-  // money is auto-verified from the matched payments and every legacy
-  // USD-equivalent column is derived server-side. Legacy (`actual_amount`
-  // + method amounts): unchanged validation, kept for existing callers.
-  const isV2 = req.body.cash_count !== undefined;
-  let cashCount = null;
-  let actual, cash, zaad, edahab, slsh;
-  if (isV2) {
-    if ([actual_amount, cash_amount, zaad_amount, edahab_amount, slsh_amount].some((v) => v !== undefined)) {
-      return res.status(400).json({ error: { message: 'Send either cash_count or the legacy actual_amount breakdown, not both.', code: 'VALIDATION' } });
-    }
-    cashCount = normalizeCashCount(req.body.cash_count);
-    if (cashCount.error) return res.status(400).json({ error: { message: cashCount.error, code: 'VALIDATION' } });
-    if (periodEnd.getTime() > Date.now() + FUTURE_SKEW_MS) {
-      return res.status(400).json({ error: { message: 'The period cannot end in the future — payments recorded later would fall outside this cashout.', code: 'PERIOD_IN_FUTURE' } });
-    }
-  } else {
-    actual = parseFloat(actual_amount);
-    if (isNaN(actual) || actual < 0) return res.status(400).json({ error: { message: 'actual_amount must be a non-negative number.', code: 'VALIDATION' } });
-    cash = parseFloat(cash_amount) || 0; zaad = parseFloat(zaad_amount) || 0; edahab = parseFloat(edahab_amount) || 0; slsh = parseFloat(slsh_amount) || 0;
-    const methodSum = cash + zaad + edahab + slsh;
-    if (Math.abs(methodSum - actual) > EPSILON) {
-      return res.status(400).json({ error: { message: `Method breakdown (${methodSum.toFixed(2)}) does not sum to actual_amount (${actual.toFixed(2)}).`, code: 'VALIDATION' } });
-    }
+  if (periodEnd.getTime() > Date.now() + FUTURE_SKEW_MS) {
+    return res.status(400).json({ error: { message: 'The period cannot end in the future — payments recorded later would fall outside this cashout.', code: 'PERIOD_IN_FUTURE' } });
   }
+  const cashCount = normalizeCashCount(req.body.cash_count);
+  if (cashCount.error) return res.status(400).json({ error: { message: cashCount.error, code: 'VALIDATION' } });
+  const confirm = normalizeElectronicConfirm(req.body.electronic_confirm);
+  if (confirm.error) return res.status(400).json({ error: { message: confirm.error, code: confirm.code || 'VALIDATION' } });
   const reasonText = typeof shortage_reason === 'string' ? shortage_reason.trim() : '';
   if (reasonText.length > 1000) return res.status(400).json({ error: { message: 'shortage_reason can be at most 1000 characters.', code: 'VALIDATION' } });
+  const remarksText = typeof remarks === 'string' ? remarks.trim() : '';
+  if (remarksText.length > 1000) return res.status(400).json({ error: { message: 'remarks can be at most 1000 characters.', code: 'VALIDATION' } });
 
   const myZoneId = await resolveUserZoneId(req.user);
   if (myZoneId !== null && zoneId !== myZoneId) {
     return res.status(403).json({ error: { message: 'You cannot create a cashout outside your zone.', code: 'FORBIDDEN' } });
   }
   // Head of Cashiers identity is server-resolved for the actor performing
-  // this reconciliation — never trusted from the client — mirroring the
-  // T2.8-H cashier-identity fix and Module 6's own cashier_id precedent.
+  // this reconciliation — never trusted from the client.
   const headOfCashiersId = req.user.id;
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     // Advisory lock keyed on cashier_id, held for the rest of this
-    // transaction: a new cashout is a fresh INSERT with no existing row to
-    // FOR UPDATE, so without this, two concurrent creates for the same
-    // cashier could both pass the overlap check before either commits.
-    // pg_advisory_xact_lock auto-releases at COMMIT/ROLLBACK.
+    // transaction: serialises creates (and approvals) for one cashier so
+    // two cannot both pass the overlap check. Auto-released at COMMIT/ROLLBACK.
     await client.query('SELECT pg_advisory_xact_lock($1)', [cashierId]);
-    const zoneRes = await client.query('SELECT id FROM zones WHERE id = $1', [zoneId]);
+    const zoneRes = await client.query('SELECT id, name FROM zones WHERE id = $1', [zoneId]);
     if (zoneRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'Zone not found.', code: 'NOT_FOUND' } });
     }
-    // Double-counting guard (§ db.js comment) — no two non-voided cashouts
-    // for the same cashier may cover overlapping time.
+    // The cashier must be an active cashier, and the cashout is filed under
+    // the cashier's own district.
+    const cashierRes = await client.query(`SELECT id, role, is_active, zone FROM v2_users WHERE id = $1`, [cashierId]);
+    const cashier = cashierRes.rows[0];
+    if (!cashier || cashier.role !== 'cashier' || !cashier.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: 'cashier_id must be an active cashier.', code: 'INVALID_CASHIER' } });
+    }
+    if (cashier.zone !== zoneRes.rows[0].name) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: "zone_id must be the cashier's own district.", code: 'ZONE_MISMATCH' } });
+    }
+    // Double-counting guard — no two live cashouts for the same cashier may
+    // cover overlapping time.
     const overlap = await hasOverlappingCashout(cashierId, periodStart, periodEnd, client);
     if (overlap) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: { message: 'This cashier already has a cashout covering an overlapping period.', code: 'PERIOD_OVERLAP' } });
     }
 
-    // Server-authoritative expected amount — computed from real recorded
-    // payments, never trusted from client input. expected_amount comes from
-    // the breakdown query's own exact grand total: the same SUM(amount_usd)
-    // over the same rows as computeExpectedForPeriod, in the same statement
-    // as the per-currency/per-method figures.
-    const recon = await computeExpectedForPeriod(cashierId, periodStart, periodEnd, client);
+    // Server-authoritative figures from real recorded payments. One
+    // statement gives the per-currency/per-method lines, the exact legacy
+    // grand total (expected_amount) and the covered payment ids; every
+    // other figure is then derived from exactly those ids.
     const expectedLines = await computeBreakdownForPeriod(cashierId, periodStart, periodEnd, client);
     const expected = expectedLines.expectedAmount;
+    const coveredIds = expectedLines.paymentIds;
+    const recon = await computeExpectedForPeriod(cashierId, periodStart, periodEnd, client, null, { paymentIds: coveredIds });
     const controls = await getCashoutControls(client);
-    let built;
-    if (isV2) {
-      built = buildBreakdown(expectedLines, { cashTotals: cashCount.totals, rate: await getCurrentRate(client) });
-      if (built.error) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ error: built.error });
-      }
-      ({ actual_amount: actual, cash_amount: cash, zaad_amount: zaad, edahab_amount: edahab, slsh_amount: slsh } = built.legacy);
-    } else {
-      built = buildBreakdown(expectedLines);
+    const built = buildBreakdown(expectedLines, { cashTotals: cashCount.totals, electronicTotals: confirm.totals, rate: await getCurrentRate(client) });
+    if (built.error) {
+      await client.query('ROLLBACK');
+      return res.status(built.error.code === 'NO_EXCHANGE_RATE' ? 409 : 400).json({ error: built.error });
     }
-    const variance = classifyVariance({ expectedAmount: expected, actualAmount: actual, grossCashShortageUsd: built.breakdown.gross_cash_shortage_usd, controls });
+    const { actual_amount: actual, cash_amount: cash, zaad_amount: zaad, edahab_amount: edahab, slsh_amount: slsh } = built.legacy;
+    // Cumulative escalation: the cashier's other unpaid shortages of live cashouts.
+    const prior = await client.query(
+      `SELECT COALESCE(SUM(cs.shortage_amount), 0) AS total FROM cashout_shortages cs JOIN cashouts co ON co.id = cs.cashout_id
+       WHERE cs.cashier_id = $1 AND cs.status = 'unpaid' AND co.status IN ('pending', 'approved')`, [cashierId]);
+    const priorUnpaid = Number(prior.rows[0].total);
+    const variance = classifyVariance({ expectedAmount: expected, actualAmount: actual, grossShortageUsd: built.breakdown.gross_shortage_usd, priorUnpaidUsd: priorUnpaid, controls });
     const { shortage, surplus } = variance;
 
-    // Tolerance rule: a shortage above the tolerance needs a reason (as
-    // before); within it the cashout is "balanced" and the reason optional.
+    // Tolerance rule: a shortage above the tolerance needs a reason; within
+    // it the cashout is "balanced" and the reason optional.
     if (variance.reasonRequired && !reasonText) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: { message: 'A shortage_reason is required when there is a shortage.', code: 'VALIDATION' } });
@@ -611,7 +646,8 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
       ...built.breakdown,
       control: {
         net_shortage_usd: Number(shortage.toFixed(6)), surplus_usd: Number(surplus.toFixed(6)),
-        control_shortage_usd: variance.controlShortage, status: variance.status, needs_admin: variance.needsAdmin, ...controls,
+        control_shortage_usd: variance.controlShortage, prior_unpaid_shortage_usd: Number(priorUnpaid.toFixed(6)),
+        cumulative_shortage_usd: variance.cumulativeShortage, status: variance.status, needs_admin: variance.needsAdmin, ...controls,
       },
     };
 
@@ -620,23 +656,18 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
       `INSERT INTO cashouts (cashout_number, zone_id, cashier_id, head_of_cashiers_id, period_start, period_end,
         expected_amount, actual_amount, cash_amount, zaad_amount, edahab_amount, slsh_amount, shortage, surplus,
         shortage_reason, remarks, status, created_by,
-        breakdown, count_detail, needs_admin, variance_status, control_shortage_usd, tolerance_usd, admin_threshold_usd)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *`,
+        breakdown, count_detail, needs_admin, variance_status, control_shortage_usd, tolerance_usd, admin_threshold_usd, covered_payment_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
       [cashoutNumber, zoneId, cashierId, headOfCashiersId, periodStart, periodEnd, expected, actual, cash, zaad, edahab, slsh,
-        shortage, surplus, reasonText || null, remarks || null, req.user.id,
-        JSON.stringify(breakdown), cashCount ? JSON.stringify(cashCount.detail) : null, variance.needsAdmin, variance.status,
-        variance.controlShortage, controls.tolerance_usd, controls.admin_threshold_usd]
+        shortage, surplus, reasonText || null, remarksText || null, req.user.id,
+        JSON.stringify(breakdown), JSON.stringify(cashCount.detail), variance.needsAdmin, variance.status,
+        variance.controlShortage, controls.tolerance_usd, controls.admin_threshold_usd, coveredIds]
     );
-    const cashout = inserted.rows[0];
+    const { covered_payment_ids: storedIds, ...cashout } = inserted.rows[0];
 
-    // Atomic shortage -> cashout_shortages, in the SAME transaction —
-    // resolving the architecture conflict flagged in the prior checkpoint.
-    // NOT a debts row: a Cashout Shortage is cashier accountability, never
-    // a customer-owed Debt (approved architecture decision, this pass).
-    // If this insert fails, the whole transaction (including the cashout
-    // row itself) rolls back — the cashout is never left half-recorded.
-    // A shortage inside the tolerance is still recorded (never silently
-    // dropped) — with an explicit system reason when none was given.
+    // Atomic shortage -> cashout_shortages, in the SAME transaction (cashier
+    // accountability, never a customer Debt). A shortage inside the
+    // tolerance is still recorded — with an explicit system reason.
     let shortageRecord = null;
     if (shortage > 0) {
       const reasonForRecord = reasonText || `Within tolerance ($${controls.tolerance_usd.toFixed(2)}) — no reason required.`;
@@ -649,12 +680,12 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     }
 
     await client.query('COMMIT');
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.create', entityType: 'cashout', entityId: cashout.id, before: null, after: cashout });
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.create', entityType: 'cashout', entityId: cashout.id, before: null, after: { ...cashout, covered_payment_count: storedIds.length } });
     if (shortageRecord) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout_shortage.create', entityType: 'cashout_shortage', entityId: shortageRecord.id, before: null, after: shortageRecord });
     }
-    // Escalation: a shortage above the admin threshold — tell every active
-    // admin. Best-effort: a notification failure never undoes the cashout.
+    // Escalation: tell every active admin. Best-effort: a notification
+    // failure never undoes the cashout.
     if (cashout.needs_admin) {
       try {
         const admins = await pool.query(`SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE`);
@@ -663,16 +694,16 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
           await createStaffNotification({
             recipientId: a.id, eventType: 'cashout.needs_admin', entityType: 'cashout', entityId: cashout.id,
             title: `Cashout ${cashout.cashout_number} needs admin approval`,
-            body: `Shortage of $${variance.controlShortage.toFixed(2)} is above the $${controls.admin_threshold_usd.toFixed(2)} admin-approval threshold.`,
+            body: `Cumulative unresolved shortage of $${variance.cumulativeShortage.toFixed(2)} is above the $${controls.admin_threshold_usd.toFixed(2)} admin-approval threshold.`,
           });
         }
       } catch (e) {
         logNotificationFailure('cashout.needs_admin', e);
       }
     }
-    res.status(201).json({ data: { ...cashout, shortage_record: shortageRecord, reconciliation: recon } });
+    res.status(201).json({ data: { ...cashout, covered_payment_count: storedIds.length, shortage_record: shortageRecord, reconciliation: recon } });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') return res.status(409).json({ error: { message: 'Duplicate cashout number — retry.', code: 'CONFLICT' } });
     res.status(500).json({ error: { message: 'Failed to create cashout.', code: 'INTERNAL' } });
   } finally {
@@ -681,41 +712,59 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
 });
 
 // ---------- Cashout Shortage resolution ----------
-// Manual, audited resolution only — NO automatic recovery mechanism
-// (salary/payroll deduction, auto-debt, auto-accounting-entry) is
-// implemented anywhere, per explicit instruction. This route records
-// WHO resolved it, HOW MUCH was actually recovered, and WHY/notes —
-// nothing more.
+// Manual, audited resolution only — NO automatic recovery mechanism.
+// Cashout V2 rules: only on a live (pending/approved) cashout; never by
+// whoever prepared it; an escalated (needs_admin) cashout's shortage is
+// resolved by an admin; the recovered amount cannot exceed the shortage.
 router.put('/:id/shortage/resolve', authenticateToken, requireRole(...RESOLVE_SHORTAGE_ROLES), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
-  const resolvedAmount = parseFloat(req.body?.resolved_amount);
+  const resolvedAmount = Number(req.body?.resolved_amount);
   const notes = (req.body?.resolution_notes || '').trim();
-  if (isNaN(resolvedAmount) || resolvedAmount <= 0) {
+  if (!Number.isFinite(resolvedAmount) || resolvedAmount <= 0) {
     return res.status(400).json({ error: { message: 'resolved_amount must be a positive number.', code: 'VALIDATION' } });
+  }
+  if (Math.abs(resolvedAmount * 100 - Math.round(resolvedAmount * 100)) > 1e-6) {
+    return res.status(400).json({ error: { message: 'resolved_amount can have at most 2 decimals.', code: 'VALIDATION' } });
   }
   if (!notes) return res.status(400).json({ error: { message: 'resolution_notes is required.', code: 'VALIDATION' } });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const coRes = await client.query('SELECT * FROM cashouts WHERE id = $1 FOR UPDATE', [id]);
+    if (!coRes.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
+    const cashout = coRes.rows[0];
+    const myZoneId = await resolveUserZoneId(req.user);
+    if (myZoneId !== null && cashout.zone_id !== myZoneId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
+    }
+    if (!['pending', 'approved'].includes(cashout.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'Only the shortage of a pending or approved cashout can be resolved.', code: 'NOT_LIVE' } });
+    }
+    if (cashout.created_by === req.user.id || cashout.head_of_cashiers_id === req.user.id) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'The preparer of a cashout cannot resolve its shortage.', code: 'FORBIDDEN' } });
+    }
+    if (cashout.needs_admin && req.user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'This shortage is above the admin threshold — only an admin can resolve it.', code: 'NEEDS_ADMIN_APPROVAL' } });
+    }
     const shortageRes = await client.query('SELECT * FROM cashout_shortages WHERE cashout_id = $1 FOR UPDATE', [id]);
     if (shortageRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'No shortage record exists for this cashout.', code: 'NOT_FOUND' } });
     }
     const shortage = shortageRes.rows[0];
-    if (shortage.status === 'paid') {
+    if (shortage.status !== 'unpaid') {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: { message: 'This shortage is already resolved.', code: 'CONFLICT' } });
+      return res.status(409).json({ error: { message: shortage.status === 'paid' ? 'This shortage is already resolved.' : 'This shortage was cancelled.', code: 'CONFLICT' } });
     }
-    const myZoneId = await resolveUserZoneId(req.user);
-    if (myZoneId !== null) {
-      const coRes = await client.query('SELECT zone_id FROM cashouts WHERE id = $1', [id]);
-      if (coRes.rows[0]?.zone_id !== myZoneId) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
-      }
+    if (resolvedAmount > Number(shortage.shortage_amount) + EPSILON) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: `resolved_amount cannot exceed the shortage ($${Number(shortage.shortage_amount).toFixed(2)}).`, code: 'VALIDATION' } });
     }
     const updated = await client.query(
       `UPDATE cashout_shortages SET status = 'paid', resolved_amount = $1, resolved_at = NOW(), resolved_by = $2, resolution_notes = $3, updated_at = NOW() WHERE id = $4 RETURNING *`,
@@ -725,12 +774,37 @@ router.put('/:id/shortage/resolve', authenticateToken, requireRole(...RESOLVE_SH
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout_shortage.resolve', entityType: 'cashout_shortage', entityId: shortage.id, before: shortage, after: updated.rows[0] });
     res.json({ data: updated.rows[0] });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: { message: 'Failed to resolve shortage.', code: 'INTERNAL' } });
   } finally {
     client.release();
   }
 });
+
+// A rejected or voided cashout's shortage is cancelled in the same
+// transaction: it is no longer a cashier liability and can never be
+// deducted from pay. Returns the cancelled row (or null).
+async function cancelShortage(client, cashoutId, user, reason) {
+  const r = await client.query(
+    `UPDATE cashout_shortages SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, cancelled_reason = $3, updated_at = NOW()
+     WHERE cashout_id = $1 AND status = 'unpaid' RETURNING *`, [cashoutId, user.id, reason]);
+  return r.rows[0] || null;
+}
+async function auditCancelledShortage(user, row) {
+  if (!row) return;
+  await logAudit({ actorId: user.id, actorUsername: user.username, action: 'cashout_shortage.cancel', entityType: 'cashout_shortage', entityId: row.id, before: { status: 'unpaid' }, after: row });
+}
+
+// Locks a cashout for a state change: the cashier advisory lock FIRST (the
+// same lock create takes — consistent order, so approve and a concurrent
+// create for the same cashier serialise), then the row.
+async function lockCashoutForChange(client, id) {
+  const peek = await client.query('SELECT cashier_id FROM cashouts WHERE id = $1', [id]);
+  if (!peek.rows.length) return null;
+  await client.query('SELECT pg_advisory_xact_lock($1)', [peek.rows[0].cashier_id]);
+  const r = await client.query('SELECT * FROM cashouts WHERE id = $1 FOR UPDATE', [id]);
+  return r.rows[0] || null;
+}
 
 // ---------- Approve / Reject / Void ----------
 
@@ -745,9 +819,8 @@ router.put('/:id/approve', authenticateToken, requireRole(...APPROVE_ROLES, 'hea
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const existing = await client.query('SELECT * FROM cashouts WHERE id = $1 FOR UPDATE', [id]);
-    if (existing.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
-    const cashout = existing.rows[0];
+    const cashout = await lockCashoutForChange(client, id);
+    if (!cashout) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
     if (!APPROVE_ROLES.includes(role)) {
       await client.query('ROLLBACK');
       if (cashout.needs_admin) return res.status(403).json({ error: { message: 'This cashout\'s shortage is above the admin-approval threshold — only an admin can approve it.', code: 'NEEDS_ADMIN_APPROVAL' } });
@@ -757,21 +830,23 @@ router.put('/:id/approve', authenticateToken, requireRole(...APPROVE_ROLES, 'hea
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'This cashout is outside your zone.', code: 'FORBIDDEN' } });
     }
-    // Phase 7 Approval Engine Discovery/Decisions — Future CR promoted to
-    // in-scope: self-approval prevention, mirroring the exact pattern
-    // already proven in Procurement (routes/procurement.js) and Inventory
-    // Adjustments (routes/inventory.js).
+    // Only a pending cashout can be approved (approved = final; rejected /
+    // voided were sent back or cancelled and must be redone).
+    if (cashout.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: cashout.status === 'approved' ? 'This cashout was already approved.' : `A ${cashout.status} cashout cannot be approved.`, code: 'CONFLICT' } });
+    }
+    // Self-approval prevention (Phase 7) + Cashout V2 maker-checker: the
+    // approver is never the creator, the cashier whose money this is, nor
+    // the Head of Cashiers who reconciled it.
     if (cashout.created_by === req.user.id) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'You cannot approve a cashout you created yourself.', code: 'FORBIDDEN' } });
     }
-    // Cashout V2 maker-checker: the approver is never the cashier whose
-    // money this is, nor the Head of Cashiers who reconciled it.
     if (cashout.cashier_id === req.user.id || cashout.head_of_cashiers_id === req.user.id) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'The cashier or the preparer of a cashout cannot approve it.', code: 'FORBIDDEN' } });
     }
-    // Cashout V2 escalation: above the admin threshold only an admin approves.
     if (cashout.needs_admin && role !== 'admin') {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'This cashout\'s shortage is above the admin-approval threshold — only an admin can approve it.', code: 'NEEDS_ADMIN_APPROVAL' } });
@@ -781,17 +856,21 @@ router.put('/:id/approve', authenticateToken, requireRole(...APPROVE_ROLES, 'hea
       await client.query('ROLLBACK');
       return res.status(400).json({ error: { message: 'Upload the signed cashout document before approving.', code: 'SIGNED_DOCUMENT_REQUIRED' } });
     }
-    if (cashout.status === 'approved') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'This cashout was already approved.', code: 'CONFLICT' } }); }
-    if (cashout.status === 'voided') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'Cannot approve a voided cashout.', code: 'CONFLICT' } }); }
+    // Re-check the double-counting guard under the cashier lock.
+    if (await hasOverlappingCashout(cashout.cashier_id, cashout.period_start, cashout.period_end, client, id)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'Another live cashout of this cashier overlaps this period.', code: 'PERIOD_OVERLAP' } });
+    }
     const updated = await client.query(
       `UPDATE cashouts SET status = 'approved', approved_by = $1, approved_at = NOW(), rejection_reason = NULL, updated_at = NOW() WHERE id = $2 RETURNING *`,
       [req.user.id, id]
     );
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.approve', entityType: 'cashout', entityId: id, before: cashout, after: updated.rows[0] });
-    res.json({ data: updated.rows[0] });
+    const { covered_payment_ids: _ids, ...out } = updated.rows[0];
+    res.json({ data: out });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: { message: 'Failed to approve cashout.', code: 'INTERNAL' } });
   } finally {
     client.release();
@@ -806,15 +885,12 @@ router.put('/:id/reject', authenticateToken, requireRole(...APPROVE_ROLES), asyn
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const existing = await client.query('SELECT * FROM cashouts WHERE id = $1 FOR UPDATE', [id]);
-    if (existing.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
-    const cashout = existing.rows[0];
+    const cashout = await lockCashoutForChange(client, id);
+    if (!cashout) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
     if ((req.user.role || '').toLowerCase() === 'gudoomiye' && cashout.zone_id !== await resolveUserZoneId(req.user)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'This cashout is outside your zone.', code: 'FORBIDDEN' } });
     }
-    // Phase 7 Approval Engine Discovery/Decisions — same narrow,
-    // explicitly-authorized self-approval-prevention addition as /approve above.
     if (cashout.created_by === req.user.id) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'You cannot reject a cashout you created yourself.', code: 'FORBIDDEN' } });
@@ -823,25 +899,35 @@ router.put('/:id/reject', authenticateToken, requireRole(...APPROVE_ROLES), asyn
       await client.query('ROLLBACK');
       return res.status(403).json({ error: { message: 'The cashier or the preparer of a cashout cannot reject it.', code: 'FORBIDDEN' } });
     }
-    if (cashout.status === 'approved') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'An already-approved cashout cannot be rejected.', code: 'CONFLICT' } }); }
+    // Only a pending cashout can be rejected (a voided one must never flip to rejected).
+    if (cashout.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: `A ${cashout.status} cashout cannot be rejected.`, code: 'CONFLICT' } });
+    }
+    if (cashout.needs_admin && req.user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'This cashout\'s shortage is above the admin threshold — only an admin can reject it.', code: 'NEEDS_ADMIN_APPROVAL' } });
+    }
     const updated = await client.query(
       `UPDATE cashouts SET status = 'rejected', approved_by = $1, approved_at = NOW(), rejection_reason = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id]
     );
+    const cancelled = await cancelShortage(client, id, req.user, `Cashout rejected: ${reason}`);
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.reject', entityType: 'cashout', entityId: id, before: cashout, after: updated.rows[0] });
-    res.json({ data: updated.rows[0] });
+    await auditCancelledShortage(req.user, cancelled);
+    const { covered_payment_ids: _ids, ...out } = updated.rows[0];
+    res.json({ data: out });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: { message: 'Failed to reject cashout.', code: 'INTERNAL' } });
   } finally {
     client.release();
   }
 });
 
-// Void, not delete (OD-1) — allowed only pre-approval, matching the
-// reference system's own reasoning (an unapproved cashout is a draft, not
-// yet a finalized financial fact). Row + audit trail always preserved.
+// Void, not delete (OD-1) — allowed only pre-approval (pending or rejected).
+// Row + audit trail always preserved; its shortage is cancelled.
 router.put('/:id/void', authenticateToken, requireRole(...VOID_ROLES), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid cashout id.', code: 'VALIDATION' } });
@@ -850,20 +936,22 @@ router.put('/:id/void', authenticateToken, requireRole(...VOID_ROLES), async (re
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const existing = await client.query('SELECT * FROM cashouts WHERE id = $1 FOR UPDATE', [id]);
-    if (existing.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
-    const cashout = existing.rows[0];
+    const cashout = await lockCashoutForChange(client, id);
+    if (!cashout) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Cashout not found.', code: 'NOT_FOUND' } }); }
     if (cashout.status === 'approved') { await client.query('ROLLBACK'); return res.status(400).json({ error: { message: 'Cannot void an approved cashout — it is a finalized financial record.', code: 'VALIDATION' } }); }
     if (cashout.status === 'voided') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'This cashout is already voided.', code: 'CONFLICT' } }); }
     const updated = await client.query(
       `UPDATE cashouts SET status = 'voided', voided_at = NOW(), voided_by = $1, voided_reason = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id]
     );
+    const cancelled = await cancelShortage(client, id, req.user, `Cashout voided: ${reason}`);
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.void', entityType: 'cashout', entityId: id, before: cashout, after: updated.rows[0] });
-    res.json({ data: updated.rows[0] });
+    await auditCancelledShortage(req.user, cancelled);
+    const { covered_payment_ids: _ids, ...out } = updated.rows[0];
+    res.json({ data: out });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: { message: 'Failed to void cashout.', code: 'INTERNAL' } });
   } finally {
     client.release();
@@ -948,6 +1036,9 @@ router.delete('/:id/attachments/:attachmentId', authenticateToken, requireRole('
   try {
     const existing = await pool.query('SELECT * FROM cashout_attachments WHERE id = $1 AND cashout_id = $2', [attachmentId, id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: { message: 'Attachment not found.', code: 'NOT_FOUND' } });
+    // A slip that backs a live deposit cannot be removed (void the deposit first).
+    const inUse = await pool.query('SELECT 1 FROM cashout_deposits WHERE attachment_id = $1 AND voided_at IS NULL LIMIT 1', [attachmentId]);
+    if (inUse.rows.length) return res.status(409).json({ error: { message: 'This slip backs a recorded deposit — void that deposit first.', code: 'ATTACHMENT_IN_USE' } });
     const updated = await pool.query(
       `UPDATE cashout_attachments SET voided_at = NOW(), voided_by = $1, voided_reason = $2 WHERE id = $3 RETURNING *`,
       [req.user.id, reason, attachmentId]
@@ -1016,6 +1107,11 @@ router.post('/:id/deposits', authenticateToken, requireRole(...DEPOSIT_RECORD_RO
         await client.query('ROLLBACK');
         return res.status(400).json({ error: { message: 'attachment_id must be a deposit slip uploaded to this cashout.', code: 'VALIDATION' } });
       }
+      const used = await client.query('SELECT 1 FROM cashout_deposits WHERE attachment_id = $1 AND voided_at IS NULL LIMIT 1', [attachmentId]);
+      if (used.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: { message: 'This slip already backs another deposit.', code: 'SLIP_ALREADY_USED' } });
+      }
     } else if (acc.rows[0].type !== 'safe') {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: { message: 'A deposit slip is required for a bank or mobile-money deposit.', code: 'SLIP_REQUIRED' } });
@@ -1030,6 +1126,7 @@ router.post('/:id/deposits', authenticateToken, requireRole(...DEPOSIT_RECORD_RO
     res.status(201).json({ data: ins.rows[0] });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'This slip already backs another deposit.', code: 'SLIP_ALREADY_USED' } });
     res.status(500).json({ error: { message: 'Failed to record deposit.', code: 'INTERNAL' } });
   } finally {
     client.release();

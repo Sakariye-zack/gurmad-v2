@@ -495,6 +495,9 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
   if (ref.length > 50) return res.status(400).json({ error: { message: 'reference_code can be at most 50 characters.', code: 'VALIDATION' } });
   // A manually recorded ZAAD payment must carry the ZAAD transaction code.
   if (method === 'zaad' && !ref) return res.status(400).json({ error: { message: 'reference_code (the ZAAD transaction code) is required for a ZAAD payment.', code: 'VALIDATION' } });
+  // Cashout V2: an eDahab payment carries its eDahab transaction code too —
+  // the Head of Cashiers confirms it against the merchant statement.
+  if (method === 'edahab' && !ref) return res.status(400).json({ error: { message: 'reference_code (the eDahab transaction code) is required for an eDahab payment.', code: 'VALIDATION' } });
 
   const client = await pool.connect();
   try {
@@ -508,7 +511,7 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
   } catch (err) {
     await client.query('ROLLBACK');
     if (err instanceof PaymentError) return res.status(err.status).json({ error: { message: err.message, code: err.code } });
-    if (err && err.code === '23505') return res.status(409).json({ error: { message: 'A ZAAD payment with this transaction code is already recorded.', code: 'DUPLICATE_REFERENCE' } });
+    if (err && err.code === '23505') return res.status(409).json({ error: { message: `A ${method === 'edahab' ? 'eDahab' : 'ZAAD'} payment with this transaction code is already recorded.`, code: 'DUPLICATE_REFERENCE' } });
     res.status(500).json({ error: { message: 'Failed to record payment.', code: 'INTERNAL' } });
   } finally {
     client.release();

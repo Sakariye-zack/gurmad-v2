@@ -2202,6 +2202,76 @@ async function runCashoutV2Migrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_deposits_cashout ON cashout_deposits(cashout_id);`);
 
+  // ---- Fix round (independent review) ----
+  // Exact payment ids a V2 cashout covered (coverage + detail recomputation).
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS covered_payment_ids INTEGER[];`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_covered_ids ON cashouts USING GIN (covered_payment_ids);`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS deposit_exempt BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // One system marker row: when Cashout V2 was first installed. The first
+  // boot that creates it exempts pre-V2 cashouts that were already approved
+  // from the deposit step (their cash was handled the old way).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_v2_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      installed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  const firstInstall = await pool.query(`INSERT INTO cashout_v2_meta (id) VALUES (1) ON CONFLICT (id) DO NOTHING RETURNING installed_at`);
+  if (firstInstall.rows.length) {
+    await pool.query(
+      `UPDATE cashouts SET deposit_exempt = TRUE
+       WHERE status = 'approved' AND created_at < $1 AND (breakdown IS NULL OR breakdown->>'mode' <> 'counted')`,
+      [firstInstall.rows[0].installed_at]);
+  }
+  // Lower bound of the uncovered-payments scan / monitor (admin-editable);
+  // NULL = cashout_v2_meta.installed_at.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_v2_since TIMESTAMP;`);
+  // Legacy pending cashouts whose shortage is above the threshold need an admin.
+  await pool.query(
+    `UPDATE cashouts SET needs_admin = TRUE
+     WHERE status = 'pending' AND NOT needs_admin AND breakdown IS NULL
+       AND shortage > COALESCE((SELECT cashout_admin_threshold_usd FROM company_settings WHERE id = 1), 10)`);
+  // A rejected/voided cashout's shortage is 'cancelled' (never payroll-deductible).
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_by INTEGER;`);
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_reason TEXT;`);
+  const sc = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_shortages'::regclass AND conname = 'cashout_shortages_status_check'`);
+  if (!sc.rows.length || !sc.rows[0].def.includes('cancelled')) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE cashout_shortages IN SHARE ROW EXCLUSIVE MODE');
+      const again = await c.query(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_shortages'::regclass AND conname = 'cashout_shortages_status_check'`);
+      if (!again.rows.length || !again.rows[0].def.includes('cancelled')) {
+        await c.query('ALTER TABLE cashout_shortages DROP CONSTRAINT IF EXISTS cashout_shortages_status_check');
+        await c.query(`ALTER TABLE cashout_shortages ADD CONSTRAINT cashout_shortages_status_check CHECK (status IN ('unpaid', 'paid', 'cancelled'))`);
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+  // A deposit slip backs at most one live deposit.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_cashout_deposits_attachment ON cashout_deposits(attachment_id) WHERE attachment_id IS NOT NULL AND voided_at IS NULL;`);
+  // One recorded eDahab payment per reference code (same guard as ZAAD).
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM payments WHERE method = 'edahab' AND status = 'recorded' AND reference_code IS NOT NULL
+                 GROUP BY reference_code HAVING COUNT(*) > 1) THEN
+        RAISE WARNING 'duplicate recorded eDahab reference codes exist; skipping uq_payments_edahab_reference';
+      ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_edahab_reference ON payments(reference_code)
+          WHERE method = 'edahab' AND status = 'recorded' AND reference_code IS NOT NULL;
+      END IF;
+    END $$;
+  `);
+
   // Monitor dedupe: one row per alert already sent (kind, item, local day).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cashout_alerts_sent (
@@ -2520,4 +2590,4 @@ async function logAudit({ actorId, actorUsername, action, entityType, entityId, 
   );
 }
 
-module.exports = { pool, runMigrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };
+module.exports = { pool, runMigrations, runCashoutV2Migrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };

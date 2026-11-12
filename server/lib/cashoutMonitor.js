@@ -1,7 +1,9 @@
 // Cashout V2 — hourly overdue alerts.
 //  1. a cashout still pending more than 24 h after it was created;
-//  2. a staff member holding payments not covered by any live cashout whose
-//     oldest is more than 2 days old.
+//  2. a cashier holding payments (since Cashout V2 went live) not covered by
+//     any live cashout whose oldest is more than 2 days old;
+//  3. a deposit not verified by an admin within 24 h.
+// Rows older than 60 days are pruned from cashout_alerts_sent.
 // Recipients: active admins + active heads of cashiers. Each item alerts at
 // most once per company-local day (cashout_alerts_sent), so the hourly tick
 // never spams. Disabled with CASHOUT_MONITOR=off (the test suite drives
@@ -28,6 +30,13 @@ async function release(alert, today, client = pool) {
 }
 
 function payloadFor(alert) {
+  if (alert.kind === 'deposit_unverified') {
+    return {
+      eventType: 'cashout.deposit_unverified', entityType: 'cashout', entityId: alert.cashout_id,
+      title: `Deposit on ${alert.cashout_number} not verified for ${alert.hours} h`,
+      body: `A deposit recorded on cashout ${alert.cashout_number} is still waiting for an admin to verify it.`,
+    };
+  }
   if (alert.kind === 'pending_overdue') {
     return {
       eventType: 'cashout.pending_overdue', entityType: 'cashout', entityId: alert.ref_id,
@@ -48,9 +57,13 @@ async function checkOnce(now = new Date()) {
   const pending = (await pool.query(
     `SELECT id, cashout_number, created_at FROM cashouts WHERE status = 'pending' ORDER BY id`)).rows;
   const uncovered = await listUncoveredPayments();
+  const deposits = (await pool.query(
+    `SELECT d.id, d.cashout_id, d.deposited_at, co.cashout_number FROM cashout_deposits d JOIN cashouts co ON co.id = d.cashout_id
+     WHERE d.verified_at IS NULL AND d.voided_at IS NULL ORDER BY d.id`)).rows;
+  await pool.query(`DELETE FROM cashout_alerts_sent WHERE for_date < $1::date - 60`, [today]);
   const sentRows = (await pool.query('SELECT kind, ref_id FROM cashout_alerts_sent WHERE for_date = $1', [today])).rows;
   const sentKeys = new Set(sentRows.map((r) => `${r.kind}:${r.ref_id}:${today}`));
-  const plan = planCashoutAlerts({ pending, uncovered, sentKeys, now, today });
+  const plan = planCashoutAlerts({ pending, uncovered, deposits, sentKeys, now, today });
   const to = await recipients();
   let sent = 0;
   for (const alert of plan) {
