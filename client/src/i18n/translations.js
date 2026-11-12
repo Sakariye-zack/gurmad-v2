@@ -24,6 +24,7 @@ import { DAILY_LISTS } from './dailyLists.js';
 import { COLLECTORS_OPS } from './collectorsOps.js';
 import { DEBT_SUSPENSION } from './debtSuspension.js';
 import { OPS_PAGES } from './opsPages.js';
+import { CALENDAR_CYCLES } from './calendarCycles.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -40,6 +41,7 @@ export const TRANSLATIONS = {
   ...COLLECTORS_OPS,
   ...DEBT_SUSPENSION,
   ...OPS_PAGES,
+  ...CALENDAR_CYCLES,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

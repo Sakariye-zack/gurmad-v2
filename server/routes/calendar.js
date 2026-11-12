@@ -13,6 +13,7 @@ const ALLOWED_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'head_of_cashier
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'head_of_cashiers'];
 const VALID_STATUSES = ['draft', 'assigned', 'in_progress', 'partially_completed', 'completed', 'cancelled'];
 const VALID_CUSTOMER_TYPES = ['residential', 'commercial'];
+const VALID_SOURCES = ['all', 'auto', 'manual'];
 const MAX_WINDOW_DAYS = 42;
 
 router.use(authenticateToken, requireRole(...ALLOWED_ROLES));
@@ -42,7 +43,7 @@ async function resolveUserZoneId(user) {
 
 // GET /api/v2/calendar/batches
 router.get('/batches', async (req, res) => {
-  const { from, to, zone_id, status, customer_type } = req.query;
+  const { from, to, zone_id, status, customer_type, source } = req.query;
 
   if (!isValidDateString(from) || !isValidDateString(to)) {
     return res.status(400).json({ error: { message: 'from and to must be valid YYYY-MM-DD dates.', code: 'VALIDATION' } });
@@ -67,6 +68,10 @@ router.get('/batches', async (req, res) => {
 
   if (customer_type !== undefined && !VALID_CUSTOMER_TYPES.includes(customer_type)) {
     return res.status(400).json({ error: { message: `customer_type must be one of: ${VALID_CUSTOMER_TYPES.join(', ')}.`, code: 'VALIDATION' } });
+  }
+
+  if (source !== undefined && !VALID_SOURCES.includes(source)) {
+    return res.status(400).json({ error: { message: `source must be one of: ${VALID_SOURCES.join(', ')}.`, code: 'VALIDATION' } });
   }
 
   let requestedZoneId = null;
@@ -106,12 +111,34 @@ router.get('/batches', async (req, res) => {
       params.push(customer_type);
       where += ` AND b.customer_type = $${params.length}`;
     }
+    if (source === 'auto') where += ' AND b.auto_generated';
+    else if (source === 'manual') where += ' AND NOT b.auto_generated';
 
     const result = await pool.query(
       `SELECT b.id, b.batch_code, b.start_date, b.end_date, b.status, b.zone_id, z.name AS zone_name,
-              b.customer_type, b.commercial_shift, b.total_customers
+              b.customer_type, b.commercial_shift, b.total_customers,
+              to_char(b.start_date, 'YYYY-MM-DD') AS start_day, to_char(b.end_date, 'YYYY-MM-DD') AS end_day,
+              b.auto_generated, b.route_id, sz.name AS route_name, sz.code AS route_code,
+              col.name AS collector_name, trk.plate_number AS truck_plate,
+              COALESCE(p.serviced, 0)::int AS serviced_count, COALESCE(p.total, 0)::int AS customer_count
        FROM batches b
        JOIN zones z ON z.id = b.zone_id
+       LEFT JOIN routes sz ON sz.id = b.route_id
+       LEFT JOIN batch_progress p ON p.batch_id = b.id
+       -- Same collector/truck resolution as the routes/batches.js list
+       -- (first task_resources row by id) — read-only.
+       LEFT JOIN LATERAL (
+         SELECT e.name FROM tasks t
+         JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'collector'
+         JOIN employees e ON e.id = tr.resource_id
+         WHERE t.batch_id = b.id ORDER BY tr.id LIMIT 1
+       ) col ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT tk.plate_number FROM tasks t
+         JOIN task_resources tr ON tr.task_id = t.id AND tr.resource_type = 'truck'
+         JOIN trucks tk ON tk.id = tr.resource_id
+         WHERE t.batch_id = b.id ORDER BY tr.id LIMIT 1
+       ) trk ON TRUE
        WHERE ${where}
        ORDER BY b.start_date ASC, b.id ASC`,
       params

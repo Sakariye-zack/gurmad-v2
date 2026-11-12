@@ -6,14 +6,15 @@ import { apiClient } from '../lib/apiClient.js';
 // (GET /v2/calendar/batches), server-side filtered (zone/status/customer
 // type) and server-side date-window bounded (<=42 days) — no client-side
 // pagination or filtering layered on top.
-export function useCalendarBatches({ from, to, zoneId, status, customerType }) {
+export function useCalendarBatches({ from, to, zoneId, status, customerType, source }) {
   const params = new URLSearchParams({ from, to });
   if (zoneId) params.set('zone_id', String(zoneId));
   if (status) params.set('status', status);
   if (customerType) params.set('customer_type', customerType);
+  if (source) params.set('source', source);
 
   return useQuery({
-    queryKey: ['v2', 'calendar', 'batches', { from, to, zoneId, status, customerType }],
+    queryKey: ['v2', 'calendar', 'batches', { from, to, zoneId, status, customerType, source }],
     queryFn: () => apiClient.get(`/v2/calendar/batches?${params.toString()}`),
     enabled: Boolean(from && to),
   });
