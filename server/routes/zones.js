@@ -67,6 +67,15 @@ function validateZoneInput(body, { partial = false } = {}) {
   return { errors, data: out };
 }
 
+// Which district's counts the caller may see on the list: null = all (admin),
+// otherwise the id of their own district (-1 = none).
+async function resolveCountsZoneId(user) {
+  if ((user.role || '').toLowerCase() === 'admin') return null;
+  if (!user.zone) return -1;
+  const r = await pool.query('SELECT id FROM zones WHERE name = $1', [user.zone]);
+  return r.rows[0]?.id ?? -1;
+}
+
 // GET /api/v2/zones — any authenticated staff role. No zone-scoping applied
 // here: Zones is the scope-defining entity, not a scoped one (see Discovery
 // report, "Zone-scoping requirements"). Supports simple pagination/filtering.
@@ -88,9 +97,24 @@ router.get('/', authenticateToken, async (req, res) => {
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM zones ${whereSql}`, params);
+    // Per-district counts (Groups › Zones › Sub Zones › active Customers ›
+    // distinct Collectors of its Sub Zones). The list itself stays unscoped,
+    // but the counts are only filled in for districts the caller can see:
+    // admin = all, everyone else = their own district only (null otherwise),
+    // so no role learns another district's size from this endpoint.
+    const countsZoneId = await resolveCountsZoneId(req.user);
+    params.push(countsZoneId);
+    const scopeIdx = params.length;
+    const visible = `($${scopeIdx}::int IS NULL OR z.id = $${scopeIdx}::int)`;
     params.push(limit, offset);
     const result = await pool.query(
-      `SELECT * FROM zones ${whereSql} ORDER BY name ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      `SELECT z.*,
+        CASE WHEN ${visible} THEN (SELECT COUNT(*)::int FROM groups g WHERE g.zone_id = z.id) END AS group_count,
+        CASE WHEN ${visible} THEN (SELECT COUNT(*)::int FROM group_zones gz JOIN groups g ON g.id = gz.group_id WHERE g.zone_id = z.id) END AS group_zone_count,
+        CASE WHEN ${visible} THEN (SELECT COUNT(*)::int FROM routes r JOIN groups g ON g.id = r.group_id WHERE g.zone_id = z.id) END AS subzone_count,
+        CASE WHEN ${visible} THEN (SELECT COUNT(*)::int FROM customers c WHERE c.zone_id = z.id AND c.status = 'active') END AS customer_count,
+        CASE WHEN ${visible} THEN (SELECT COUNT(DISTINCT r.collector_user_id)::int FROM routes r JOIN groups g ON g.id = r.group_id WHERE g.zone_id = z.id) END AS collector_count
+       FROM zones z ${where.length ? 'WHERE z.status = $1' : ''} ORDER BY z.name ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
 

@@ -181,4 +181,22 @@ router.get('/operations-today', authenticateToken, requireRole(...OPS_ROLES), as
   }
 });
 
+// ---------- Setup checklist ----------
+// GET /api/v2/dashboard/setup-health — admin (company-wide) and gudoomiye
+// (own district; no district = empty "all set" panel, never company-wide),
+// same scoping as operations-today. Read-only: lists what keeps Sub Zones
+// and customers off the automatic daily lists (lib/setupHealth, shared with
+// GET /daily-lists/warnings).
+router.get('/setup-health', authenticateToken, requireRole(...OPS_ROLES), async (req, res) => {
+  const role = (req.user.role || '').toLowerCase();
+  try {
+    const { getSetupHealth, emptySetupHealth } = require('../lib/setupHealth');
+    const zoneId = await resolveUserZoneId(req.user);
+    if (role !== 'admin' && zoneId === null) return res.json({ data: { zone_id: null, ...emptySetupHealth() } });
+    res.json({ data: { zone_id: zoneId, ...(await getSetupHealth(zoneId)) } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load setup checklist.', code: 'INTERNAL' } });
+  }
+});
+
 module.exports = router;
