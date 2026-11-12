@@ -12,7 +12,8 @@ test('invoice -> partial payment -> remaining payment -> paid; status and outsta
   assert.equal(p1.status, 201);
   assert.equal(p1.data.invoice_status, 'partial');
   assert.equal(num(p1.data.outstanding), 15);
-  const p2 = await pay(tokens.cashier, inv, 15, 'zaad');
+  // a manual ZAAD entry must carry the ZAAD transaction code
+  const p2 = await api('POST', '/payments', { token: tokens.cashier, body: { invoice_id: inv.id, amount: 15, currency: 'USD', method: 'zaad', reference_code: `MZ${Date.now()}` } });
   assert.equal(p2.status, 201);
   assert.equal(p2.data.invoice_status, 'paid');
   assert.equal(num(p2.data.outstanding), 0);

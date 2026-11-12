@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Database, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
-  ListChecks, Gauge, UserPlus, SlidersHorizontal,
+  ListChecks, Gauge, UserPlus, SlidersHorizontal, ArrowLeftRight,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
@@ -21,7 +21,7 @@ import { useI18n } from '../i18n/I18nContext.jsx';
 export const NAV_LABEL_KEYS = {
   Dashboard: 'nav.dashboard', "Today's list": 'nav.today', Customers: 'nav.customers', 'Signup requests': 'nav.signupRequests', Zones: 'nav.zones', Groups: 'nav.groups',
   'Collection Cycles': 'nav.collectionCycles', Batches: 'nav.batches', Calendar: 'nav.calendar', Map: 'nav.map',
-  Billing: 'nav.billing', Invoices: 'nav.invoices', Debts: 'nav.debts', 'Debt suspensions': 'nav.debtSuspensions', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
+  Billing: 'nav.billing', Invoices: 'nav.invoices', Transactions: 'nav.transactions', Debts: 'nav.debts', 'Debt suspensions': 'nav.debtSuspensions', Cashout: 'nav.cashout', 'Exchange Rate': 'nav.exchangeRate',
   Employees: 'nav.employees', Attendance: 'nav.attendance', 'Leave Requests': 'nav.leaveRequests', 'Leave Types': 'nav.leaveTypes',
   Payroll: 'nav.payroll', 'Payroll History': 'nav.payrollHistory', 'HR Reports': 'nav.hrReports',
   'Fleet Overview': 'nav.fleetOverview', Trucks: 'nav.trucks', 'Fleet Maintenance': 'nav.fleetMaintenance', 'Fuel Records': 'nav.fuelRecords', 'Document Expiry': 'nav.documentExpiry',
@@ -77,6 +77,8 @@ export const NAV = [
   // ---- Financial ----
   { to: '/billing', label: 'Billing', icon: Wallet, permission: 'billing.view', group: 'Financial' },
   { to: '/financial/invoices', label: 'Invoices', icon: Receipt, permission: 'invoices.view', group: 'Financial' },
+  // Read-only payments ledger; same roles as Billing (server: payments VIEW_ROLES).
+  { to: '/financial/transactions', label: 'Transactions', icon: ArrowLeftRight, permission: 'billing.view', group: 'Financial' },
   { to: '/financial/debts', label: 'Debts', icon: HandCoins, permission: 'debts.view', group: 'Financial' },
   { to: '/admin/debt-suspensions', label: 'Debt suspensions', icon: ShieldAlert, roles: ['admin', 'gudoomiye'], group: 'Financial' },
   { to: '/financial/cashouts', label: 'Cashout', icon: Wallet2, permission: 'cashouts.view', group: 'Financial' },

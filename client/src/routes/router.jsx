@@ -72,6 +72,7 @@ const BatchDetailPage = lazy(() => import('../pages/collection/BatchDetailPage.j
 const InvoicesListPage = lazy(() => import('../pages/financial/InvoicesListPage.jsx'));
 const InvoiceDetailPage = lazy(() => import('../pages/financial/InvoiceDetailPage.jsx'));
 const BillingView = lazy(() => import('../pages/financial/BillingView.jsx'));
+const TransactionsPage = lazy(() => import('../pages/financial/TransactionsPage.jsx'));
 const DebtsView = lazy(() => import('../pages/financial/DebtsView.jsx'));
 const CashoutsListPage = lazy(() => import('../pages/financial/CashoutsListPage.jsx'));
 const ReportsPage = lazy(() => import('../pages/reports/ReportsPage.jsx'));
@@ -157,6 +158,7 @@ export const router = createBrowserRouter([
       // no longer a placeholder.
       { path: 'financial/invoices', element: <InvoicesListPage /> },
       { path: 'financial/invoices/:id', element: <InvoiceDetailPage /> },
+      { path: 'financial/transactions', element: <TransactionsPage /> },
       { path: 'financial/debts', element: <DebtsView /> },
       { path: 'financial/cashouts', element: <CashoutsListPage /> },
       { path: 'financial/cashouts/:id', element: <CashoutDetailPage /> },

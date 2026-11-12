@@ -78,7 +78,8 @@ function validateHeaders(headers, entityDef) {
 }
 
 // ---------- CSV formula-injection sanitization (Decisions §26 — ADAPT of audit.js's own H-A1 fix; audit.js is CLOSED and not imported from) ----------
-const FORMULA_LEAD_RE = /^[=+\-@]/;
+// A leading tab / CR also starts a formula in some spreadsheet apps (OWASP CSV injection).
+const FORMULA_LEAD_RE = /^[=+\-@\t\r]/;
 function csvFormulaSafe(value) {
   if (typeof value !== 'string') return value;
   return FORMULA_LEAD_RE.test(value) ? `'${value}` : value;

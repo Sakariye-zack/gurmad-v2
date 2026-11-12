@@ -1,7 +1,8 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { getInvoiceBalance } = require('../lib/financialCalculations');
+const { getInvoiceBalance, getInvoiceBalancesBulk } = require('../lib/financialCalculations');
+const { zaadStateFor } = require('../lib/zaadAttempts');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
 const { generateInvoiceNumber, insertInvoice } = require('../lib/invoiceInsert');
 const autoBilling = require('../lib/autoBilling');
@@ -31,6 +32,14 @@ function parseStrictId(raw) {
   if (!/^\d+$/.test(raw)) return null;
   return parseInt(raw, 10);
 }
+
+// Group › District › Zone › Sub Zone of the invoice's customer (read-only,
+// same path shape as dailyLists.js / documentGenerators.customerContext).
+const CUSTOMER_PATH_JOINS = `LEFT JOIN zones cz ON cz.id = customers.zone_id
+       LEFT JOIN groups cg ON cg.id = customers.group_id
+       LEFT JOIN routes cr ON cr.id = customers.route_id
+       LEFT JOIN group_zones cgz ON cgz.id = cr.group_zone_id`;
+const CUSTOMER_PATH_SQL = `NULLIF(concat_ws(' › ', NULLIF(COALESCE(cg.name, cg.code), ''), NULLIF(cz.name, ''), NULLIF(COALESCE(cgz.name, cgz.code), ''), NULLIF(COALESCE(cr.name, cr.code), '')), '')`;
 
 async function resolveUserZoneId(user) {
   if (!ZONE_SCOPED_ROLES.includes((user.role || '').toLowerCase())) return null;
@@ -88,6 +97,56 @@ router.post('/auto-billing/run', authenticateToken, requireRole('admin'), async 
   }
 });
 
+// Billing workspace (?open=1): unpaid/partial invoices, paginated
+// (page, page_size default 100, max 500) with optional status / currency
+// filters. ?with_balance=1 attaches each invoice's balance from ONE
+// set-based query (getInvoiceBalancesBulk — same rules as getInvoiceBalance)
+// and meta.summary (counts + still-owed per currency over every open invoice
+// in scope, ignoring the status/currency filters). Each row also carries the
+// ZAAD push state (zaad_in_progress / zaad_blocked_until).
+async function listOpenInvoices(req, res, where, params) {
+  const base = [...where, `invoices.status IN ('unpaid', 'partial')`];
+  const idRows = (await pool.query(
+    `SELECT invoices.id, invoices.status, CASE WHEN invoices.currency = 'SLSH' THEN 'SLSH' ELSE 'USD' END AS currency
+     FROM invoices JOIN customers ON invoices.customer_id = customers.id
+     WHERE ${base.join(' AND ')} ORDER BY invoices.created_at DESC, invoices.id DESC`,
+    params
+  )).rows;
+  const withBalance = req.query.with_balance === '1';
+  const balances = withBalance ? await getInvoiceBalancesBulk(idRows.map((r) => r.id)) : new Map();
+  const statusF = ['unpaid', 'partial'].includes(req.query.status) ? req.query.status : null;
+  const curF = ['USD', 'SLSH'].includes(String(req.query.currency || '').toUpperCase()) ? String(req.query.currency).toUpperCase() : null;
+  const filtered = idRows.filter((r) => (!statusF || r.status === statusF) && (!curF || r.currency === curF));
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.min(500, Math.max(1, parseInt(req.query.page_size, 10) || 100));
+  const pageIds = filtered.slice((page - 1) * pageSize, page * pageSize).map((r) => r.id);
+  const rows = pageIds.length ? (await pool.query(
+    `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone,
+            customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, ${CUSTOMER_PATH_SQL} AS customer_path
+     FROM invoices JOIN customers ON invoices.customer_id = customers.id
+     ${CUSTOMER_PATH_JOINS}
+     WHERE invoices.id = ANY($1::int[]) ORDER BY invoices.created_at DESC, invoices.id DESC`,
+    [pageIds]
+  )).rows : [];
+  const zaad = await zaadStateFor(pageIds);
+  for (const row of rows) {
+    if (withBalance) row.balance = balances.get(row.id) || null;
+    const z = zaad.get(row.id);
+    row.zaad_in_progress = !!(z && z.in_progress);
+    row.zaad_blocked_until = (z && z.blocked_until) || null;
+  }
+  const meta = { total: filtered.length, page, page_size: pageSize };
+  if (withBalance) {
+    const summary = { count: idRows.length, unpaid: 0, partial: 0, owed: { USD: 0, SLSH: 0 } };
+    for (const r of idRows) {
+      summary[r.status] += 1;
+      summary.owed[r.currency] += balances.get(r.id)?.outstanding || 0;
+    }
+    meta.summary = summary;
+  }
+  return res.json({ data: rows, meta });
+}
+
 // GET / — list, zone-scoped via the customer's own zone_id (invoices have
 // no zone_id of their own; joining to customers is the same pattern the
 // reference system uses via c.zone).
@@ -100,7 +159,8 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(myZoneId);
       where.push(`customers.zone_id = $${params.length}`);
     }
-    if (req.query.status) {
+    const openMode = req.query.open === '1';
+    if (req.query.status && !openMode) {
       params.push(req.query.status);
       where.push(`invoices.status = $${params.length}`);
     }
@@ -121,10 +181,13 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
         where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR invoices.customer_number_snapshot ILIKE $${i})`);
       }
     }
+    if (openMode) return await listOpenInvoices(req, res, where, params);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone,
+              customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, ${CUSTOMER_PATH_SQL} AS customer_path
        FROM invoices JOIN customers ON invoices.customer_id = customers.id
+       ${CUSTOMER_PATH_JOINS}
        ${whereSql} ORDER BY invoices.created_at DESC`,
       params
     );
@@ -139,8 +202,14 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   if (id === null) return res.status(400).json({ error: { message: 'Invalid invoice id.', code: 'VALIDATION' } });
   try {
     const invRes = await pool.query(
-      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone, customers.zone_id
-       FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.id = $1`,
+      `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone, customers.zone_id,
+              customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, customers.address_line AS customer_address,
+              customers.door_number AS customer_door, customers.billing_type AS customer_billing_type, ${CUSTOMER_PATH_SQL} AS customer_path,
+              COALESCE(cu.full_name, cu.username) AS created_by_name
+       FROM invoices JOIN customers ON invoices.customer_id = customers.id
+       ${CUSTOMER_PATH_JOINS}
+       LEFT JOIN v2_users cu ON cu.id = invoices.created_by
+       WHERE invoices.id = $1`,
       [id]
     );
     if (invRes.rows.length === 0) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
@@ -153,13 +222,32 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
 
     const balance = await getInvoiceBalance(id);
     const payments = await pool.query(
-      `SELECT id, amount, currency, method, amount_usd, status, reference_code, cashier_id, channel, created_at, reversed_at, reversed_reason
-       FROM payments WHERE invoice_id = $1 ORDER BY created_at ASC`,
+      `SELECT p.id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.cashier_id, p.channel, p.created_at, p.reversed_at, p.reversed_reason,
+              COALESCE(u.full_name, u.username) AS cashier_name
+       FROM payments p LEFT JOIN v2_users u ON u.id = p.cashier_id WHERE p.invoice_id = $1 ORDER BY p.created_at ASC`,
       [id]
     );
     const debt = await pool.query(`SELECT * FROM debts WHERE invoice_id = $1`, [id]);
+    // Letterhead contact block for the printed invoice (name/address/phone/
+    // email from Settings > Company Information) — the full settings route
+    // is admin-only, but every invoice viewer needs these on the paper copy.
+    const co = (await pool.query('SELECT company_name, address, phone, email FROM company_settings WHERE id = 1').catch(() => ({ rows: [] }))).rows[0] || {};
+    // Collection event (visit) date, when the invoice is linked to one.
+    let visit = null;
+    if (invoice.batch_customer_id) {
+      const v = await pool.query(
+        `SELECT bc.status, bc.status_at, b.batch_code FROM batch_customers bc LEFT JOIN batches b ON b.id = bc.batch_id WHERE bc.id = $1`,
+        [invoice.batch_customer_id]
+      ).catch(() => ({ rows: [] }));
+      visit = v.rows[0] || null;
+    }
 
-    const out = { ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null };
+    const zs = (await zaadStateFor([id])).get(id);
+    const out = {
+      ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null, visit,
+      zaad_in_progress: !!(zs && zs.in_progress), zaad_blocked_until: (zs && zs.blocked_until) || null,
+      company: { name: co.company_name || 'GURMAD', address: co.address || null, phone: co.phone || null, email: co.email || null },
+    };
     if (invoice.billing_period) out.worked_days = await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone());
     res.json({ data: out });
   } catch (err) {

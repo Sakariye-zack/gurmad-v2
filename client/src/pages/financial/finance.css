@@ -1,0 +1,280 @@
+/* Finance redesign — Billing workspace, Transactions, Invoice page.
+   Screen styles use the design tokens (tokens.css) so light/dark both work.
+   The printable invoice document (.invdoc) deliberately uses FIXED colours:
+   it is paper, and the dark UI theme must never leak into it. */
+
+/* ---------- shared bits ---------- */
+.fin-section-label {
+  display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); margin: 0 0 10px;
+}
+.fin-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.fin-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; min-height: 34px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.fin-chip:hover { border-color: var(--brand); }
+.fin-chip[aria-pressed='true'] { background: var(--brand); border-color: var(--brand); color: #fff; }
+.fin-chip .fin-chip-count { font-size: 11px; opacity: .8; font-variant-numeric: tabular-nums; }
+.fin-input {
+  width: 100%; padding: 10px 12px; min-height: 44px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 14px; font-family: inherit;
+}
+.fin-input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+.fin-search { position: relative; }
+.fin-search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.fin-search .fin-input { padding-left: 36px; }
+.fin-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fin-field > span { font-size: 12px; font-weight: 700; }
+.fin-field .fin-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.fin-money { font-variant-numeric: tabular-nums; }
+.fin-muted { color: var(--text-muted); }
+.fin-err { font-size: 12px; color: var(--danger); font-weight: 600; }
+.fin-linkbtn {
+  background: none; border: none; padding: 0; color: var(--brand); font-weight: 700; font-size: 12px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-align: left;
+}
+.fin-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 20px; }
+
+/* ---------- Billing workspace ---------- */
+.fin-bill-grid { display: grid; grid-template-columns: minmax(300px, 5fr) minmax(340px, 6fr); gap: 20px; align-items: start; }
+.fin-bill-list { min-width: 0; }
+.fin-bill-tools { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.fin-bill-cards { display: flex; flex-direction: column; gap: 8px; }
+.fin-inv-card {
+  display: block; width: 100%; text-align: left; padding: 12px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer;
+  box-shadow: var(--shadow-sm); transition: border-color .12s ease, box-shadow .12s ease;
+}
+.fin-inv-card:hover { border-color: var(--brand); }
+.fin-inv-card[aria-current='true'] { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand) inset, var(--shadow-sm); }
+.fin-inv-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.fin-inv-name { font-weight: 800; font-size: 14px; overflow-wrap: anywhere; }
+.fin-inv-cno { color: var(--brand); font-weight: 700; font-size: 12px; margin-left: 6px; white-space: nowrap; }
+.fin-inv-path { font-size: 12px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-inv-meta { font-size: 12px; color: var(--text-muted); margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.fin-inv-amt { text-align: right; flex-shrink: 0; }
+.fin-inv-owed { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.fin-inv-sec { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fin-age-old { color: var(--danger); font-weight: 700; }
+.fin-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 11px; font-weight: 700; color: var(--text-muted); }
+
+.fin-panel { position: sticky; top: 16px; }
+.fin-panel-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md); overflow: hidden;
+}
+.fin-panel-head { padding: 16px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.fin-panel-head h3 { font-size: 17px; overflow-wrap: anywhere; }
+.fin-panel-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.fin-panel-empty { padding: 36px 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.fin-panel-close { display: none; }
+
+.fin-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fin-sum > div { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; min-width: 0; }
+.fin-sum .k { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.fin-sum .v { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+.fin-sum .s { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fin-sum .owed { border-color: var(--danger); background: var(--danger-bg); }
+.fin-sum .owed .v { color: var(--danger); }
+.fin-rate { font-size: 12px; color: var(--text-muted); margin-top: -8px; }
+
+.fin-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.fin-seg button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 58px;
+  padding: 8px 6px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer;
+}
+.fin-seg button:hover { border-color: var(--brand); }
+.fin-seg button[aria-pressed='true'] { border-color: var(--brand); background: var(--success-bg); color: var(--brand-dark); box-shadow: 0 0 0 1px var(--brand) inset; }
+:root[data-theme='dark'] .fin-seg button[aria-pressed='true'] { color: var(--brand); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .fin-seg button[aria-pressed='true'] { color: var(--brand); } }
+.fin-seg.fin-seg-2 { grid-template-columns: repeat(2, 1fr); }
+.fin-seg.fin-seg-2 button { min-height: 40px; flex-direction: row; }
+
+.fin-amount-row { display: flex; gap: 8px; align-items: stretch; }
+.fin-amount-row .fin-input { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.fin-amount-row button { flex-shrink: 0; }
+.fin-phone-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.fin-phone-chips button { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--text-muted); cursor: pointer; font-variant-numeric: tabular-nums; }
+.fin-phone-chips button:hover { border-color: var(--brand); color: var(--text); }
+.fin-zaad-box { border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: var(--radius-md); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+.fin-primary-btn { width: 100%; min-height: 50px; font-size: 15px !important; }
+.fin-note { font-size: 12px; color: var(--text-muted); }
+.fin-warn { font-size: 12px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning); font-weight: 600; }
+
+.fin-wait { padding: 28px 18px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.fin-spinner { width: 46px; height: 46px; border-radius: 50%; border: 4px solid var(--border); border-top-color: var(--brand); animation: fin-spin 0.9s linear infinite; }
+@keyframes fin-spin { to { transform: rotate(360deg); } }
+.fin-wait-title { font-weight: 800; font-size: 15px; }
+.fin-progress { width: 100%; max-width: 280px; height: 6px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.fin-progress > div { height: 100%; background: var(--brand); transition: width 1s linear; }
+
+.fin-receipt { border: 1px solid var(--success); background: var(--success-bg); border-radius: var(--radius-md); padding: 16px; }
+.fin-receipt h4 { margin: 0 0 10px; font-size: 15px; color: var(--success); display: flex; align-items: center; gap: 8px; }
+.fin-receipt dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+.fin-receipt dt { color: var(--text-muted); font-weight: 700; }
+.fin-receipt dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; }
+.fin-alert { border-radius: var(--radius-md); padding: 14px; border: 1px solid var(--danger); background: var(--danger-bg); }
+.fin-alert h4 { margin: 0 0 6px; font-size: 14px; color: var(--danger); display: flex; align-items: center; gap: 8px; }
+.fin-alert p { margin: 0 0 6px; font-size: 13px; }
+.fin-alert .detail { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.fin-alert.soft { border-color: var(--warning); background: var(--warning-bg); }
+.fin-alert.soft h4 { color: var(--warning); }
+
+.fin-paylist { display: flex; flex-direction: column; }
+.fin-paylist > div { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: center; }
+.fin-paylist > div:last-child { border-bottom: none; }
+.fin-paylist .ref { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.fin-struck { text-decoration: line-through; opacity: .65; }
+
+.fin-sheet-backdrop { display: none; }
+
+@media (max-width: 900px) {
+  .fin-bill-grid { grid-template-columns: 1fr; }
+  .fin-panel { position: static; }
+  .fin-bill-grid.has-selection .fin-panel {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 90; max-height: 90vh; overflow-y: auto;
+    /* bottom padding keeps the last rows scrollable above the mobile tab bar */
+    padding: 0 0 calc(72px + env(safe-area-inset-bottom, 0px)); animation: fin-sheet-up .22s ease-out;
+  }
+  .fin-bill-grid.has-selection .fin-panel-card { border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: none; }
+  .fin-bill-grid.has-selection .fin-sheet-backdrop { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 89; }
+  .fin-bill-grid:not(.has-selection) .fin-panel { display: none; }
+  .fin-panel-close { display: inline-flex; }
+  .fin-panel-card::before { content: ''; display: block; width: 44px; height: 5px; border-radius: 999px; background: var(--border); margin: 8px auto 0; }
+}
+@keyframes fin-sheet-up { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+@media (max-width: 420px) {
+  .fin-seg { grid-template-columns: repeat(2, 1fr); }
+  .fin-sum { grid-template-columns: 1fr 1fr; }
+  .fin-sum .owed { grid-column: span 2; }
+  .fin-inv-owed { font-size: 16px; }
+}
+
+/* ---------- Transactions ---------- */
+.fin-tx-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; align-items: end; }
+.fin-tx-filters .fin-search { grid-column: span 2; }
+.fin-tx-filters .fin-input { min-height: 40px; padding-top: 8px; padding-bottom: 8px; }
+.fin-tx-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.fin-tx-row { border-bottom: 1px solid var(--border); cursor: pointer; }
+.fin-tx-row:hover { background: var(--bg); }
+.fin-tx-row td { padding: 11px 14px; vertical-align: top; }
+.fin-tx-row.reversed td { color: var(--text-muted); }
+.fin-tx-row.reversed .fin-money { text-decoration: line-through; }
+.fin-mbar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--border); margin: 8px 0 6px; }
+.fin-mlegend { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 12px; }
+.fin-mlegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.fin-card-pad { padding: 18px; }
+.fin-card-k { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }
+.fin-card-v { font-size: 22px; font-weight: 800; margin-top: 6px; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
+.fin-card-s { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+@media (max-width: 560px) { .fin-tx-filters .fin-search { grid-column: auto; } }
+
+/* ---------- Invoice page (screen) ---------- */
+.inv-hero { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 20px; }
+.inv-hero h1 { font-size: 26px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.inv-hero .who { margin-top: 4px; font-size: 14px; }
+.inv-hero .who a { color: var(--text); font-weight: 700; }
+.inv-hero .path { font-size: 12px; color: var(--text-muted); }
+.inv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.inv-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+.inv-side { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 16px; }
+.inv-preview { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; overflow-x: auto; }
+.inv-preview .invdoc { box-shadow: 0 6px 24px rgba(0, 0, 0, .12); border-radius: 6px; margin: 0 auto; }
+@media (max-width: 1100px) { .inv-layout { grid-template-columns: 1fr; } .inv-side { position: static; } }
+@media (max-width: 640px) { .inv-preview { padding: 8px; } }
+
+/* ---------- The invoice document (screen preview + print) ---------- */
+.invdoc {
+  --g: #3DAA35; --o: #F5A623; --ink: #1B1F16; --mut: #6B7280; --line: #E3E8E1; --soft: #F3F8F1; --red: #C0392B;
+  color-scheme: light; background: #ffffff; color: var(--ink); font-family: 'Inter', 'Segoe UI', Roboto, Arial, sans-serif;
+  font-size: 12px; line-height: 1.45; width: 100%; max-width: 794px; padding: 34px 38px 26px; position: relative; overflow: hidden;
+}
+.invdoc * { color: inherit; }
+.invdoc table { width: 100%; border-collapse: collapse; }
+.invdoc th, .invdoc td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.invdoc th { background: var(--soft); color: var(--mut); font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
+.invdoc .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.invdoc .top { display: flex; justify-content: space-between; gap: 24px; }
+.invdoc .logo { height: 54px; width: auto; max-width: 220px; display: block; margin-bottom: 6px; object-fit: contain; }
+.invdoc .co-name { font-size: 18px; font-weight: 800; }
+.invdoc .co-tag { color: var(--g); font-size: 11.5px; font-weight: 600; }
+.invdoc .co-line { color: var(--mut); font-size: 10.5px; }
+.invdoc .doc { text-align: right; }
+.invdoc .doc .title { color: var(--g); font-size: 28px; font-weight: 800; letter-spacing: .14em; line-height: 1.1; }
+.invdoc .doc .no { font-size: 14px; font-weight: 800; margin-top: 2px; }
+.invdoc .doc .date { color: var(--mut); font-size: 11px; }
+.invdoc .rule { height: 4px; background: var(--g); margin: 16px 0 2px; border-radius: 2px; }
+.invdoc .rule2 { height: 2px; background: var(--o); margin-bottom: 18px; border-radius: 2px; }
+.invdoc .lbl { color: var(--mut); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 4px; }
+.invdoc .billing { display: flex; justify-content: space-between; gap: 18px; align-items: stretch; }
+.invdoc .cust { font-size: 16px; font-weight: 800; }
+.invdoc .custno { color: var(--g); font-weight: 800; font-size: 12px; }
+.invdoc .small { color: var(--mut); font-size: 11px; }
+.invdoc .due { background: var(--soft); border-radius: 10px; padding: 12px 16px; text-align: right; min-width: 220px; border: 1px solid var(--line); }
+.invdoc .due .amt { font-size: 24px; font-weight: 800; color: var(--g); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.invdoc .due.zero .amt { color: var(--mut); }
+.invdoc .due .sec { font-size: 13px; font-weight: 700; color: var(--mut); font-variant-numeric: tabular-nums; }
+.invdoc h2 { color: var(--g); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; margin: 18px 0 6px; font-weight: 800; }
+.invdoc .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.invdoc .facts > div { padding: 7px 10px; border-right: 1px solid var(--line); }
+.invdoc .facts > div:last-child { border-right: none; }
+.invdoc .facts .v { font-weight: 700; font-size: 11.5px; }
+.invdoc .sub { color: var(--mut); font-size: 10px; font-variant-numeric: tabular-nums; }
+.invdoc .totals { display: flex; justify-content: flex-end; margin-top: 10px; }
+.invdoc .totals table { width: 62%; }
+.invdoc .totals td { padding: 5px 8px; }
+.invdoc .totals th { text-align: right; }
+.invdoc .totals th:first-child { text-align: left; }
+.invdoc .totals tr.due-row td { background: var(--soft); color: var(--g); font-weight: 800; font-size: 13.5px; border-top: 2px solid var(--g); border-bottom: 2px solid var(--g); }
+.invdoc .totals tr.paid-row td { color: var(--ink); }
+.invdoc .rate { color: var(--mut); font-size: 10px; font-style: italic; text-align: right; margin-top: 4px; }
+.invdoc tr.rev td { color: var(--mut); text-decoration: line-through; }
+.invdoc tr.rev td.revnote { text-decoration: none; font-style: italic; }
+.invdoc .empty { color: var(--mut); font-style: italic; }
+.invdoc .terms { margin-top: 16px; padding: 8px 12px; border-left: 3px solid var(--o); background: #FFFBF3; color: var(--ink); font-size: 10.5px; }
+.invdoc .thanks { text-align: center; font-weight: 800; margin-top: 16px; font-size: 12.5px; }
+.invdoc .foot { display: flex; justify-content: space-between; gap: 12px; color: var(--mut); font-size: 9.5px; border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.invdoc .foot b { color: var(--g); }
+.invdoc .stamp {
+  display: inline-block; margin: 10px 6px 0 0; transform: rotate(-8deg); border: 3px solid currentColor; border-radius: 8px;
+  padding: 3px 14px; font-size: 22px; font-weight: 900; letter-spacing: .16em; opacity: .85; pointer-events: none; line-height: 1.2;
+}
+.invdoc .stamp.paid { color: var(--g); }
+.invdoc .stamp.partial { color: #D6870F; }
+.invdoc .stamp.unpaid { color: var(--red); }
+.invdoc .stamp.voided { color: var(--mut); }
+.invdoc .voidbox { margin-top: 10px; padding: 8px 12px; border: 1px dashed var(--mut); border-radius: 6px; color: var(--mut); font-size: 11px; }
+@media (max-width: 640px) {
+  .inv-preview .invdoc { padding: 18px 14px; }
+  .inv-preview .invdoc .top, .inv-preview .invdoc .billing { flex-direction: column; }
+  .inv-preview .invdoc .doc { text-align: left; }
+  .inv-preview .invdoc .due { text-align: left; min-width: 0; }
+  .inv-preview .invdoc .totals table { width: 100%; }
+  .inv-preview .invdoc .stamp { font-size: 18px; }
+}
+
+/* Print: only the portalled print copy is shown, on white A4 paper. */
+.invdoc-print-root { display: none; }
+@media print {
+  /* Named page: only the invoice print root uses it; other pages' printouts
+     keep the browser defaults. */
+  @page invoice {
+    size: A4 portrait; margin: 10mm 10mm 12mm;
+    /* Page numbers (honoured by Chromium 131+; ignored elsewhere). */
+    @bottom-right { content: counter(page) ' / ' counter(pages); font-size: 8pt; color: #6B7280; }
+  }
+  /* Scoped with :has() so this stylesheet (kept loaded after visiting the
+     invoice page) never blanks other pages' printouts. */
+  html:has(body > .invdoc-print-root), body:has(> .invdoc-print-root) { background: #ffffff !important; color: #1B1F16 !important; height: auto !important; margin: 0 !important; }
+  body:has(> .invdoc-print-root) > *:not(.invdoc-print-root) { display: none !important; }
+  .invdoc-print-root { display: block !important; page: invoice; }
+  .invdoc-print-root .invdoc { max-width: none; padding: 0; box-shadow: none; border-radius: 0; font-size: 11px; }
+  .invdoc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .invdoc tr, .invdoc .billing, .invdoc .totals { break-inside: avoid; }
+}
+.inv-side dt { color: var(--text-muted); font-weight: 700; }
+.inv-side dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .fin-stats { grid-template-columns: 1fr 1fr; gap: 10px; } }

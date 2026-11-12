@@ -1,23 +1,30 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Receipt, XCircle, FileDown, Printer } from 'lucide-react';
-import { PageHeader, Button, Card, DetailGrid, StatusBadge, LoadingState, ErrorState, ConfirmDialog, useToast, StatCard } from '../../components/ui/index.js';
+import { ArrowLeft, Receipt, XCircle, FileDown, Printer, Wallet, Undo2 } from 'lucide-react';
+import { Button, Card, StatusBadge, LoadingState, ErrorState, ConfirmDialog, Modal, useToast, StatCard } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import { apiClient } from '../../lib/apiClient.js';
 import { useInvoice, useVoidInvoice, useReversePayment } from '../../hooks/useFinancial.js';
-import { useCompanyName } from '../../hooks/useSettings.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import InvoiceDocument, { LOGO_URL } from './InvoiceDocument.jsx';
+import {
+  STATUS_MAP, PAYMENT_STATUS_MAP, fmtMoney, invCurrency, otherCurrency, secondaryBlock, rateText, methodLabel,
+  recordedByLabel, fmtDateTime, periodLabel,
+} from './financeUtils.js';
+import './finance.css';
 
-const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// 'USD' -> $12.00, 'SLSH' -> SLSH 30,000
-function fmtMoney(n, cur) {
-  const v = Number(n || 0);
-  return cur === 'SLSH' ? `SLSH ${Math.round(v).toLocaleString('en-US')}` : `$${v.toFixed(2)}`;
+// Wait (bounded) until every image in `root` has loaded or failed, so the
+// company logo is on the page before the print dialog snapshots it.
+async function waitForImages(root, timeoutMs = 4000) {
+  const preload = new Promise((resolve) => { const i = new Image(); i.onload = resolve; i.onerror = resolve; i.src = LOGO_URL; });
+  const imgs = root ? Array.from(root.querySelectorAll('img')) : [];
+  const each = imgs.map((img) => (img.complete
+    ? (img.decode ? img.decode().catch(() => {}) : Promise.resolve())
+    : new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', resolve, { once: true }); })));
+  await Promise.race([Promise.all([preload, ...each]), new Promise((r) => setTimeout(r, timeoutMs))]);
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 }
-const periodLabel = (p) => { const m = /^(\d{4})-(\d{2})$/.exec(p || ''); return m ? `${MONTHS[Number(m[2]) - 1]} ${m[1]}` : ''; };
-const dayLabel = (iso) => `${iso.slice(8, 10)} ${MONTHS[Number(iso.slice(5, 7)) - 1]}`;
 
 export default function InvoiceDetailPage() {
   const { t } = useI18n();
@@ -25,21 +32,30 @@ export default function InvoiceDetailPage() {
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useInvoice(id);
   const [voidOpen, setVoidOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState('');
+  const [reverseFor, setReverseFor] = useState(null);
+  const [reverseReason, setReverseReason] = useState('');
+  const [reverseError, setReverseError] = useState('');
   const voidInvoice = useVoidInvoice(id);
   const reversePayment = useReversePayment(id);
   const toast = useToast();
   const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const invoice = data?.data;
-  // System name — user-requested ('meel kasta oo magaca system ku ka soo
-  // muuqanayo waa in aan markan update gareeyo'). The printed/PDF
-  // letterhead is exactly the kind of surface a hardcoded name matters
-  // most on — a customer-facing document.
-  const { data: companyNameData } = useCompanyName();
-  const companyName = companyNameData?.data?.company_name || 'GURMAD';
 
   if (isLoading) return <LoadingState label={t('portal.invoice.loading')} />;
   if (error) return <ErrorState message={error.message} onRetry={refetch} />;
   if (!invoice) return null;
+
+  async function handlePrint() {
+    setPrinting(true);
+    try {
+      await waitForImages(document.querySelector('.invdoc-print-root'));
+      window.print();
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   async function handleDownloadDocx() {
     setDownloading(true);
@@ -52,36 +68,36 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  async function handleVoid(reason) {
-    try { await voidInvoice.mutateAsync(reason); toast.success(t('fin.invoice_voided')); setVoidOpen(false); }
+  async function handleVoid() {
+    if (!voidReason.trim()) { toast.error(t('fr.inv.reasonRequired')); return; }
+    try { await voidInvoice.mutateAsync(voidReason.trim()); toast.success(t('fin.invoice_voided')); setVoidOpen(false); setVoidReason(''); }
     catch (err) { toast.error(err.message || t('common.somethingWrong')); }
   }
 
-  async function handleReverse(paymentId) {
-    const reason = window.prompt('Reason for reversing this payment?');
-    if (!reason) return;
+  async function handleReverse() {
+    setReverseError('');
+    if (!reverseReason.trim()) { setReverseError(t('fr.inv.reasonRequired')); return; }
     try {
-      const result = await reversePayment.mutateAsync({ id: paymentId, reason });
+      const result = await reversePayment.mutateAsync({ id: reverseFor.id, reason: reverseReason.trim() });
       toast.success(t('fin.payment_reversed'));
-      if (result.data.warnings || result.warnings) {
-        (result.warnings || []).forEach((w) => toast.error(w));
-      }
-    } catch (err) { toast.error(err.message || t('common.somethingWrong')); }
+      (result.warnings || []).forEach((w) => toast.error(w));
+      setReverseFor(null);
+      setReverseReason('');
+    } catch (err) { setReverseError(err.message || t('common.somethingWrong')); }
   }
 
   const balance = invoice.balance || {};
-  // Agreed (invoice) currency is the primary figure; the other currency is secondary, shown only when a rate exists.
-  const cur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
-  const other = cur === 'SLSH' ? 'USD' : 'SLSH';
-  const secBlock = balance.rate ? (other === 'USD' ? balance.usd : balance.slsh) : null;
-  const secLine = (v) => (secBlock ? `≈ ${fmtMoney(v, other)}` : undefined);
+  const cur = invCurrency(invoice);
+  const other = otherCurrency(cur);
+  const sec = secondaryBlock(balance, cur);
+  const rate = rateText(balance);
   const net = Number(balance.netTotal || 0);
-  const grossSec = secBlock && net > 0 ? secBlock.netTotal * (parseFloat(invoice.invoice_total) / net) : 0;
-  const rateText = balance.rate ? t('inv.rate_line', undefined, { rate: Number(balance.rate.rate).toLocaleString('en-US', { maximumFractionDigits: 2 }) }) : null;
+  const grossSec = sec && net > 0 ? sec.netTotal * (parseFloat(invoice.invoice_total) / net) : null;
+  const owed = Number(balance.outstanding || 0);
+  const canPay = invoice.status === 'unpaid' || invoice.status === 'partial';
   const autoBadge = invoice.auto_generated
     ? (invoice.billing_period ? t('inv.auto_badge_month', undefined, { month: periodLabel(invoice.billing_period) }) : t('inv.auto_badge_daily'))
     : null;
-  const workedDays = Array.isArray(invoice.worked_days) ? invoice.worked_days : null;
 
   return (
     <div>
@@ -89,162 +105,149 @@ export default function InvoiceDetailPage() {
         <ArrowLeft size={14} /> {t('portal.invoice.back')}
       </button>
 
-      <PageHeader
-        icon={Receipt}
-        title={invoice.invoice_number}
-        subtitle={<span>{invoice.customer_name} ({invoice.customer_number}){autoBadge && <span style={autoBadgeStyle}>{autoBadge}</span>}</span>}
-        actions={
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <Button variant="secondary" icon={Printer} onClick={() => window.print()}>{t('fin.print_download_pdf')}</Button>
-            <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? t('fin.preparing') : t('fin.download_word_docx')}</Button>
-            {invoice.status !== 'voided' && (
-              <RoleGate roles={['admin']}>
-                <Button variant="danger" icon={XCircle} onClick={() => setVoidOpen(true)}>{t('fin.void_invoice')}</Button>
-              </RoleGate>
-            )}
+      <div className="inv-hero">
+        <div style={{ minWidth: 0 }}>
+          <h1>
+            <Receipt size={24} color="var(--brand)" /> {invoice.invoice_number}
+            <StatusBadge status={invoice.status} map={STATUS_MAP} />
+            {autoBadge && <span style={autoBadgeStyle}>{autoBadge}</span>}
+          </h1>
+          <div className="who">
+            <Link to={`/customers/${invoice.customer_id}`}>{invoice.customer_name}</Link>
+            <span style={{ color: 'var(--brand)', fontWeight: 700, marginLeft: '8px' }}>{invoice.customer_number}</span>
           </div>
-        }
-      />
-
-      <style>{`
-        @media print {
-          body * { visibility: hidden; }
-          .invoice-print-document, .invoice-print-document * { visibility: visible; }
-          .invoice-print-document { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; color: #000; background: #fff; }
-        }
-      `}</style>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }} className="no-print">
-        <StatCard label={t('fin.invoice_total')} value={fmtMoney(invoice.invoice_total, cur)} sub={secLine(grossSec)} icon={Receipt} />
-        <StatCard label={t('status.paid')} value={fmtMoney(balance.paid, cur)} sub={secLine(secBlock?.paid)} accent="var(--success)" />
-        <StatCard label={t('portal.invoice.outstanding')} value={fmtMoney(balance.outstanding, cur)} sub={secLine(secBlock?.outstanding)} accent={balance.outstanding > 0 ? 'var(--danger)' : 'var(--success)'} />
-        <StatCard label={t('common.status')} value={<StatusBadge status={invoice.status} map={STATUS_MAP} />} />
+          {invoice.customer_path && <div className="path">{invoice.customer_path}</div>}
+        </div>
+        <div className="inv-actions">
+          {canPay && (
+            <RoleGate roles={['admin', 'cashier']}>
+              <Button icon={Wallet} onClick={() => navigate(`/billing?invoice=${invoice.id}`)}>{t('fr.inv.payNow')}</Button>
+            </RoleGate>
+          )}
+          <Button variant="secondary" icon={Printer} onClick={handlePrint} disabled={printing} title={t('fr.inv.printHint')}>
+            {printing ? t('fr.inv.preparing') : t('fin.print_download_pdf')}
+          </Button>
+          <Button variant="secondary" icon={FileDown} onClick={handleDownloadDocx} disabled={downloading}>{downloading ? t('fin.preparing') : t('fin.download_word_docx')}</Button>
+          {invoice.status !== 'voided' && (
+            <RoleGate roles={['admin']}>
+              <Button variant="danger" icon={XCircle} onClick={() => setVoidOpen(true)}>{t('fin.void_invoice')}</Button>
+            </RoleGate>
+          )}
+        </div>
       </div>
-      {rateText && (
-        <div className="no-print" style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '-8px 0 16px' }}>
-          {t('inv.exchange_rate')}: <strong>{rateText}</strong>
+
+      <div className="inv-layout">
+        <div className="inv-preview">
+          <InvoiceDocument invoice={invoice} />
         </div>
-      )}
 
-      <Card className="invoice-print-document" style={{ padding: '24px', marginBottom: '20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--brand)', paddingBottom: '16px', marginBottom: '16px' }}>
-          <div>
-            <div style={{ fontSize: '20px', fontWeight: 900, color: 'var(--brand)' }}>{companyName}</div>
-            <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '2px' }}>{t('fin.invoice')}</div>
+        <div className="inv-side">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <StatCard label={t('fin.invoice_total')} value={<span style={{ fontSize: '20px' }}>{fmtMoney(invoice.invoice_total, cur)}</span>} sub={grossSec !== null ? `≈ ${fmtMoney(grossSec, other)}` : undefined} />
+            <StatCard label={t('fr.pay.paid')} value={<span style={{ fontSize: '20px' }}>{fmtMoney(balance.paid, cur)}</span>} sub={sec ? `≈ ${fmtMoney(sec.paid, other)}` : undefined} accent="var(--success)" />
           </div>
-          <div style={{ textAlign: 'right', fontSize: '12px' }}>
-            <div><strong>{t('fin.invoice_no')}</strong> {invoice.invoice_number}</div>
-            <div><strong>{t('common.date')}</strong> {new Date(invoice.created_at).toLocaleDateString()}</div>
-            <div><strong>{t('fin.customer')}</strong> {invoice.customer_name} ({invoice.customer_number})</div>
-          </div>
-        </div>
-        <DetailGrid items={[
-          { label: t('fin.customer'), value: <Link to={`/customers/${invoice.customer_id}`}>{invoice.customer_name}</Link> },
-          { label: t('portal.invoice.discount'), value: fmtMoney(invoice.discount_amount, invoice.currency) },
-          { label: t('fin.created'), value: new Date(invoice.created_at).toLocaleString() },
-          { label: t('fin.collection_event'), value: invoice.batch_customer_id ? t('fin.m.batchCustomer', undefined, { id: invoice.batch_customer_id }) : t('fin.walk_in_not_linked') },
-          { label: t('fin.linked_debt'), value: invoice.debt ? <StatusBadge status={invoice.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> : 'None' },
-          ...(invoice.status === 'voided' ? [
-            { label: t('fin.voided_reason'), value: invoice.voided_reason },
-            { label: t('fin.voided_at'), value: new Date(invoice.voided_at).toLocaleString() },
-          ] : []),
-        ]} />
-      </Card>
+          <StatCard
+            label={t('fr.inv.balanceDue')}
+            value={fmtMoney(owed, cur)}
+            sub={[sec ? `≈ ${fmtMoney(sec.outstanding, other)}` : null, rate ? t('fr.pay.rate', undefined, { rate }) : null].filter(Boolean).join(' · ') || undefined}
+            accent={owed > 0.004 ? 'var(--danger)' : 'var(--success)'}
+          />
 
-      {workedDays && (
-        <>
-          <span style={sectionLabelStyle}>{t('inv.service_days')}{invoice.billing_period ? ` — ${periodLabel(invoice.billing_period)}` : ''}</span>
-          <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: '20px' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                  {[t('inv.week'), t('inv.dates')].map((h) => (
-                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {workedDays.map((wk) => (
-                  <tr key={wk.week} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={cellStyle}>{t('inv.week_n', undefined, { n: wk.week })} <span style={{ color: 'var(--text-muted)' }}>({wk.range})</span></td>
-                    <td style={cellStyle}>{wk.dates.length ? wk.dates.map(dayLabel).join(', ') : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      <span style={sectionLabelStyle}>{t('portal.invoice.paymentHistory')}</span>
-      {invoice.payments.length === 0 && (
-        <Card style={{ padding: '16px' }}><p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px' }}>{t('portal.invoice.noPayments')}</p></Card>
-      )}
-      {invoice.payments.length > 0 && (
-        <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-            <thead>
-              <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                {[t('common.amount'), t('common.method'), t('fin.usd_value'), t('common.status'), t('common.date'), ''].map((h) => (
-                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
+          <Card style={{ padding: '16px' }}>
+            <span className="fin-section-label">{t('fr.inv.payments')}</span>
+            {invoice.payments.length === 0 && <div className="fin-note">{t('fr.inv.noPayments')}</div>}
+            <div className="fin-paylist">
               {invoice.payments.map((p) => (
-                <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={cellStyle} className="tabular-nums">{fmtMoney(p.amount, p.currency)}</td>
-                  <td style={{ ...cellStyle, textTransform: p.channel === 'portal_zaad' ? 'none' : 'capitalize' }}>{p.channel === 'portal_zaad' ? t('portal.zaad.viaPortal') : t('method.' + p.method, p.method)}</td>
-                  <td style={cellStyle} className="tabular-nums">${parseFloat(p.amount_usd).toFixed(2)}</td>
-                  <td style={cellStyle}><StatusBadge status={p.status} map={{ recorded: 'success', reversed: 'danger' }} /></td>
-                  <td style={cellStyle}>{new Date(p.created_at).toLocaleString()}</td>
-                  <td style={cellStyle}>
+                <div key={p.id}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700 }} className={p.status === 'reversed' ? 'fin-struck' : undefined}>
+                      {fmtMoney(p.amount, p.currency)} · {p.channel === 'portal_zaad' ? t('fr.portalZaad') : methodLabel(t, p.method)}
+                    </div>
+                    <div className="ref">
+                      {fmtDateTime(p.created_at)}{p.reference_code ? ` · ${p.reference_code}` : ''} · {recordedByLabel(t, p)}
+                      {p.status === 'reversed' && p.reversed_reason ? ` · ${p.reversed_reason}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
+                    <StatusBadge status={p.status} map={PAYMENT_STATUS_MAP} />
                     {p.status === 'recorded' && (
                       <RoleGate roles={['admin']}>
-                        <Button variant="secondary" onClick={() => handleReverse(p.id)} disabled={reversePayment.isPending}>{t('fin.reverse')}</Button>
+                        <button type="button" className="fin-linkbtn" onClick={() => { setReverseFor(p); setReverseReason(''); setReverseError(''); }}>
+                          <Undo2 size={12} style={{ verticalAlign: '-2px' }} /> {t('fin.reverse')}
+                        </button>
                       </RoleGate>
                     )}
-                  </td>
-                </tr>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </Card>
+
+          <Card style={{ padding: '16px', fontSize: '13px' }}>
+            <span className="fin-section-label">{t('fr.inv.details')}</span>
+            <dl style={dlStyle}>
+              <dt>{t('fin.created')}</dt><dd>{fmtDateTime(invoice.created_at)}{invoice.created_by_name ? ` · ${invoice.created_by_name}` : ''}</dd>
+              <dt>{t('fr.inv.collectionEvent')}</dt><dd>{invoice.visit?.batch_code || (invoice.batch_customer_id ? `#${invoice.batch_customer_id}` : t('fin.walk_in_not_linked'))}</dd>
+              <dt>{t('fr.inv.linkedDebt')}</dt><dd>{invoice.debt ? <StatusBadge status={invoice.debt.status} map={{ unpaid: 'danger', paid: 'success' }} /> : t('fr.inv.none')}</dd>
+              {invoice.status === 'voided' && (<>
+                <dt>{t('fin.voided_reason')}</dt><dd>{invoice.voided_reason}</dd>
+                <dt>{t('fin.voided_at')}</dt><dd>{fmtDateTime(invoice.voided_at)}</dd>
+              </>)}
+            </dl>
+          </Card>
         </div>
-      )}
+      </div>
+
+      {/* The only thing that prints (see finance.css @media print). */}
+      {createPortal(<div className="invdoc-print-root"><InvoiceDocument invoice={invoice} /></div>, document.body)}
 
       <ConfirmDialog
         open={voidOpen}
         onClose={() => setVoidOpen(false)}
-        onConfirm={() => handleVoid(document.getElementById('void-reason')?.value || '')}
+        onConfirm={handleVoid}
         title={t('fin.void_this_invoice')}
         message={
           <div>
             <p style={{ margin: '0 0 8px' }}>{t('fin.the_invoice_row_and_its')}</p>
-            <input id="void-reason" placeholder={t('fin.reason_for_voiding')} style={inputStyle} />
+            <input value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder={t('fin.reason_for_voiding')} className="fin-input" />
           </div>
         }
         confirmLabel={t('fin.void_invoice')}
         danger
         isLoading={voidInvoice.isPending}
       />
+
+      <Modal
+        open={!!reverseFor}
+        onClose={() => setReverseFor(null)}
+        title={t('fr.inv.reverseTitle')}
+        footer={<>
+          <Button variant="secondary" onClick={() => setReverseFor(null)} disabled={reversePayment.isPending}>{t('common.cancel')}</Button>
+          <Button variant="danger" icon={Undo2} onClick={handleReverse} disabled={reversePayment.isPending}>{t('fr.inv.reverseConfirm')}</Button>
+        </>}
+      >
+        {reverseFor && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ fontWeight: 800 }}>{fmtMoney(reverseFor.amount, reverseFor.currency)} · {methodLabel(t, reverseFor.method)} · {fmtDateTime(reverseFor.created_at)}</div>
+            <div className="fin-note">{t('fr.inv.reverseHelp')}</div>
+            <label className="fin-field">
+              <span>{t('fr.inv.reversePrompt')}</span>
+              <input className="fin-input" value={reverseReason} onChange={(e) => setReverseReason(e.target.value)} autoFocus />
+            </label>
+            {reverseError && <span className="fin-err">{reverseError}</span>}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
 
-const cellStyle = { padding: '12px 14px' };
 const autoBadgeStyle = {
-  marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', background: 'var(--brand-soft, rgba(61,170,53,0.12))',
-  color: 'var(--brand)', fontSize: '11px', fontWeight: 800, verticalAlign: 'middle',
+  padding: '2px 8px', borderRadius: '999px', background: 'var(--success-bg)',
+  color: 'var(--brand)', fontSize: '11px', fontWeight: 800,
 };
 const backLinkStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',
   color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', padding: 0, marginBottom: '16px',
 };
-const sectionLabelStyle = {
-  display: 'block', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em',
-  color: 'var(--text-muted)', margin: '0 0 10px',
-};
-const inputStyle = {
-  padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-  background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit', marginTop: '8px',
-};
+const dlStyle = { margin: 0, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 12px' };

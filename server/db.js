@@ -2046,6 +2046,24 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE payments ALTER COLUMN cashier_id DROP NOT NULL;`);
   await pool.query(`ALTER TABLE debts ALTER COLUMN created_by DROP NOT NULL;`);
   await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS channel VARCHAR(20);`);
+  // Transactions page: date-range scans on payments.created_at.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);`);
+  // One recorded ZAAD payment per ZAAD transaction/reference code. Live data
+  // may already hold duplicates: then the index is skipped with a warning
+  // (boot never fails); the route still rejects new duplicates via 23505 only
+  // once the index exists.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM payments WHERE method = 'zaad' AND status = 'recorded' AND reference_code IS NOT NULL
+                 GROUP BY reference_code HAVING COUNT(*) > 1) THEN
+        RAISE WARNING 'duplicate recorded ZAAD reference codes exist; skipping uq_payments_zaad_reference';
+      ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_zaad_reference ON payments(reference_code)
+          WHERE method = 'zaad' AND status = 'recorded' AND reference_code IS NOT NULL;
+      END IF;
+    END $$;
+  `);
   // One row per portal attempt: drives the in-flight guard (one 'pending' row
   // per invoice, enforced by the partial unique index) and the per-customer
   // rate limit.
@@ -2071,6 +2089,13 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_phone_created ON portal_zaad_attempts(phone, created_at DESC);`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_zaad_one_pending_per_invoice ON portal_zaad_attempts(invoice_id) WHERE status = 'pending';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_customer_created ON portal_zaad_attempts(customer_id, created_at DESC);`);
+  // Staff ZAAD pushes (POST /payments/zaad-request) share this table, so the
+  // one-pending-per-invoice index above excludes a portal and a staff attempt
+  // on the same invoice from each other. Existing rows are portal attempts.
+  await pool.query(`ALTER TABLE portal_zaad_attempts ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'portal';`);
+  await addCheckIfMissing('portal_zaad_attempts', 'portal_zaad_attempts_source_check', `source IN ('portal', 'staff')`);
+  await pool.query(`ALTER TABLE portal_zaad_attempts ADD COLUMN IF NOT EXISTS staff_user_id INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_zaad_invoice_status ON portal_zaad_attempts(invoice_id, status);`);
 
   // Customer self-signup requests (portal /portal/signup). No OTP (no SMS):
   // an admin/gudoomiye approval is the gate. Additive table only.

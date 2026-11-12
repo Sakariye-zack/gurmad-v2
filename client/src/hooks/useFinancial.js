@@ -35,6 +35,41 @@ export function useVoidInvoice(id) {
   });
 }
 
+// Billing workspace: open (unpaid/partial) invoices with the authoritative
+// per-invoice balance attached by the server (?open=1&with_balance=1).
+// Server-side filters + pagination; meta.summary covers every open invoice
+// in scope (counts, still owed per currency).
+export function useOpenInvoices({ q, status, currency, pageSize = 100 } = {}) {
+  const qs = new URLSearchParams({ open: '1', with_balance: '1', page_size: String(pageSize) });
+  if (q) qs.set('q', q);
+  if (status) qs.set('status', status);
+  if (currency) qs.set('currency', currency);
+  return useQuery({
+    queryKey: ['v2', 'invoices', 'open', q || '', status || '', currency || '', pageSize],
+    queryFn: () => apiClient.get(`/v2/invoices?${qs.toString()}`),
+    placeholderData: (prev) => prev,
+  });
+}
+
+// Transactions page — read-only ledger listing / summary / CSV.
+export function transactionsQuery(filters = {}) {
+  const qs = new URLSearchParams();
+  for (const k of ['date_from', 'date_to', 'method', 'currency', 'channel', 'status', 'q', 'page', 'page_size']) {
+    if (filters[k] !== undefined && filters[k] !== null && filters[k] !== '') qs.set(k, String(filters[k]));
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+}
+export function useTransactions(filters) {
+  return useQuery({ queryKey: ['v2', 'payments', 'transactions', filters], queryFn: () => apiClient.get(`/v2/payments/transactions${transactionsQuery(filters)}`), placeholderData: (prev) => prev });
+}
+export function useTransactionsSummary(filters) {
+  return useQuery({ queryKey: ['v2', 'payments', 'transactions-summary', filters], queryFn: () => apiClient.get(`/v2/payments/transactions/summary${transactionsQuery(filters)}`), placeholderData: (prev) => prev });
+}
+export function downloadTransactionsCsv(filters) {
+  return apiClient.downloadAuthorizedFile(`/v2/payments/transactions.csv${transactionsQuery(filters)}`, `transactions-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
 export function usePayments(invoiceId) {
   return useQuery({ queryKey: ['v2', 'payments', invoiceId], queryFn: () => apiClient.get(`/v2/payments?invoice_id=${invoiceId}`), enabled: !!invoiceId });
 }
@@ -45,7 +80,7 @@ export function useRecordPayment() {
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: ['v2', 'invoices'] });
       qc.invalidateQueries({ queryKey: ['v2', 'invoices', vars.invoice_id] });
-      qc.invalidateQueries({ queryKey: ['v2', 'payments', vars.invoice_id] });
+      qc.invalidateQueries({ queryKey: ['v2', 'payments'] });
     },
   });
 }
@@ -61,7 +96,7 @@ export function useRequestZaadPayment() {
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: ['v2', 'invoices'] });
       qc.invalidateQueries({ queryKey: ['v2', 'invoices', vars.invoice_id] });
-      qc.invalidateQueries({ queryKey: ['v2', 'payments', vars.invoice_id] });
+      qc.invalidateQueries({ queryKey: ['v2', 'payments'] });
     },
   });
 }
