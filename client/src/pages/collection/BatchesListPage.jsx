@@ -4,6 +4,7 @@ import { ClipboardList, Plus } from 'lucide-react';
 import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
 import CapacityPanel from '../../components/collection/CapacityPanel.jsx';
+import LegacyOpsBanner from '../../components/collection/LegacyOpsBanner.jsx';
 import { useBatches, useCreateBatch, useCycles } from '../../hooks/useCollectionOps.js';
 import { useZonesList, useCustomers } from '../../hooks/useCustomers.js';
 import { useGroups, useGroupEligibleCustomers } from '../../hooks/useGroups.js';
@@ -15,9 +16,11 @@ export default function BatchesListPage() {
   const { t, tc } = useI18n();
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useBatches({ status: statusFilter || undefined, search: search || undefined });
+  const { data, isLoading, error, refetch } = useBatches({ status: statusFilter || undefined, search: search || undefined, date: dateFilter || undefined, source: sourceFilter || undefined });
   const batches = data?.data || [];
   const inProgressCount = batches.filter((b) => b.status === 'in_progress').length;
   const draftCount = batches.filter((b) => b.status === 'draft').length;
@@ -35,6 +38,8 @@ export default function BatchesListPage() {
         }
       />
 
+      <LegacyOpsBanner />
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <StatCard label={t('coll.total_batches')} value={error ? '—' : (data?.data?.length ?? '—')} icon={ClipboardList} />
         <StatCard label={t('status.in_progress')} value={error ? '—' : inProgressCount} icon={ClipboardList} accent="var(--info)" />
@@ -46,6 +51,13 @@ export default function BatchesListPage() {
           <option value="">{t('cust.all_statuses')}</option>
           {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{tc('status.' + k, v)}</option>)}
         </select>
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={selectStyle} aria-label={t('opsp.col.source')}>
+          <option value="">{t('opsp.allSources')}</option>
+          <option value="auto">{t('opsp.sourceAuto')}</option>
+          <option value="manual">{t('opsp.sourceManual')}</option>
+        </select>
+        <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={selectStyle} aria-label={t('opsp.col.date')} title={t('opsp.col.date')} />
+        {dateFilter && <Button variant="secondary" onClick={() => setDateFilter('')}>{t('opsp.clearDate')}</Button>}
       </FilterBar>
 
       <DataTable
@@ -55,15 +67,19 @@ export default function BatchesListPage() {
         isEmpty={!isLoading && !error && batches.length === 0}
         emptyTitle={t('coll.no_batches_yet')}
         emptySubtitle={t('coll.create_the_first_batch_to')}
-        columns={[{ label: t('common.batch') }, { label: t('common.zone') }, { label: t('cust.type') }, { label: t('nav.customers') }, { label: t('coll.capacity') }, { label: t('common.status') }]}
+        columns={[{ label: t('common.batch') }, { label: t('opsp.col.source') }, { label: t('opsp.col.date') }, { label: t('common.zone') }, { label: t('opsp.col.subZone') }, { label: t('opsp.col.collector') }, { label: t('opsp.col.truck') }, { label: t('cust.type') }, { label: t('nav.customers') }, { label: t('coll.capacity') }, { label: t('common.status') }]}
       >
         {batches.map((b) => (
           <tr key={b.id} onClick={() => navigate(`/collection-cycles/batches/${b.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+            <td style={cellStyle}><strong>{b.batch_code}</strong></td>
             <td style={cellStyle}>
-              <strong>{b.batch_code}</strong>
-              {b.auto_generated && <span style={autoChipStyle}>{t('daily.auto')}</span>}
+              <span style={b.auto_generated ? autoChipStyle : manualChipStyle}>{b.auto_generated ? t('opsp.sourceAuto') : t('opsp.sourceManual')}</span>
             </td>
+            <td style={{ ...cellStyle, whiteSpace: 'nowrap' }} className="tabular-nums">{formatRange(b.start_day, b.end_day)}</td>
             <td style={cellStyle}>{b.zone_name}</td>
+            <td style={cellStyle}>{b.route_name || b.route_code || '—'}</td>
+            <td style={cellStyle}>{b.collector_name || '—'}</td>
+            <td style={cellStyle}>{b.truck_plate || '—'}</td>
             <td style={cellStyle}>
               <span style={{ textTransform: 'capitalize' }}>{t('cust.' + b.customer_type, b.customer_type)}</span>
               {b.commercial_shift && <span style={{ color: 'var(--text-muted)' }}> ({t('cust.' + b.commercial_shift, b.commercial_shift)})</span>}
@@ -248,4 +264,11 @@ const inputStyle = {
   background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit',
 };
 
-const autoChipStyle = { marginLeft: '6px', fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', color: 'var(--info)', border: '1px solid var(--info)' };
+const autoChipStyle = { fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', color: 'var(--info)', border: '1px solid var(--info)', whiteSpace: 'nowrap' };
+const manualChipStyle = { ...autoChipStyle, color: 'var(--text-muted)', border: '1px solid var(--border)' };
+
+// Start date, or "start – end" only when the batch spans more than one day.
+function formatRange(start, end) {
+  if (!start) return '—';
+  return end && end !== start ? `${start} – ${end}` : start;
+}

@@ -107,10 +107,10 @@ function ZoneFormModalContent({ onClose, zone }) {
         <Field label={t('zone.zone_code')} error={fieldErrors.zone_code} hint={t('zone.unique_e_g_farah_omar')}>
           <input value={form.zone_code} onChange={(e) => set('zone_code', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label={t('zone.sub_zone')}>
+        <Field label={`${t('zone.sub_zone')} (${t('opsp.legacyField')})`} hint={t('opsp.legacyHint')}>
           <input value={form.sub_zone} onChange={(e) => set('sub_zone', e.target.value)} style={inputStyle} />
         </Field>
-        <Field label={t('zone.area')}>
+        <Field label={`${t('zone.area')} (${t('opsp.legacyField')})`} hint={t('opsp.legacyHint')}>
           <input value={form.area} onChange={(e) => set('area', e.target.value)} style={inputStyle} />
         </Field>
         <Field label={t('common.status')}>
@@ -119,7 +119,7 @@ function ZoneFormModalContent({ onClose, zone }) {
             <option value="inactive">{t('status.inactive')}</option>
           </select>
         </Field>
-        <Field label={t('zone.collection_days')}>
+        <Field label={`${t('zone.collection_days')} (${t('opsp.legacyField')})`} hint={t('opsp.legacyHint')}>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {DAYS.map((d) => {
               const active = form.collection_days.includes(d);

@@ -49,14 +49,19 @@ export default function GroupsListPage() {
         isEmpty={!isLoading && !error && groups.length === 0}
         emptyTitle={t('group.no_groups_yet')}
         emptySubtitle={t('group.create_the_first_group_to')}
-        columns={[{ label: t('group.group') }, { label: t('common.zone') }, { label: t('nav.customers') }, { label: t('group.routes') }, { label: t('common.status') }]}
+        columns={[{ label: t('group.group') }, { label: t('common.zone') }, { label: t('nav.customers') }, { label: t('opsp.col.zones') }, { label: t('group.routes') }, { label: t('opsp.col.collectors') }, { label: t('common.status') }]}
       >
         {groups.map((g) => (
           <tr key={g.id} onClick={() => navigate(`/groups/${g.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
-            <td style={cellStyle}><strong>{g.code}</strong>{g.name && g.name !== g.code ? <span style={{ color: 'var(--text-muted)' }}> — {g.name}</span> : null}</td>
+            <td style={cellStyle}>
+              <strong>{g.code}</strong>{g.name && g.name !== g.code ? <span style={{ color: 'var(--text-muted)' }}> — {g.name}</span> : null}
+              {g.is_empty && <span style={emptyChipStyle} title={t('opsp.emptyHint')}>{t('opsp.empty')}</span>}
+            </td>
             <td style={cellStyle}>{g.zone_name}</td>
             <td style={cellStyle} className="tabular-nums">{g.customer_count}</td>
+            <td style={cellStyle} className="tabular-nums">{g.group_zone_count ?? 0}</td>
             <td style={cellStyle} className="tabular-nums">{g.route_count}</td>
+            <td style={cellStyle} title={(g.collectors || []).map((c) => c.name).join(', ')}>{collectorSummary(g.collectors, t)}</td>
             <td style={cellStyle}><StatusBadge status={g.status} /></td>
           </tr>
         ))}
@@ -68,6 +73,20 @@ export default function GroupsListPage() {
 }
 
 const cellStyle = { padding: '12px 14px' };
+const emptyChipStyle = {
+  marginLeft: '8px', fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px',
+  color: 'var(--warning)', border: '1px solid var(--warning)', whiteSpace: 'nowrap',
+};
+
+// "Axmed +1": first collector's first name (truncated), then how many more.
+// The full list is in the cell's title tooltip.
+function collectorSummary(collectors, t) {
+  const list = collectors || [];
+  if (list.length === 0) return '—';
+  const first = (list[0].name || '').trim().split(/\s+/)[0];
+  const short = first.length > 18 ? `${first.slice(0, 17)}…` : first;
+  return list.length > 1 ? `${short} ${t('opsp.moreN', undefined, { n: list.length - 1 })}` : short;
+}
 const selectStyle = {
   padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
   background: 'var(--surface)', color: 'var(--text)', fontSize: '13px',
