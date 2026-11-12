@@ -32,8 +32,9 @@ async function world() {
   // cashier: ZAAD push (stub-approved) on A3
   const z = await api('POST', '/payments/zaad-request', { token: w.tokens.cashier, body: { invoice_id: invA3.id, phone: magicPhone(), amount: 12, currency: 'USD' } });
   assert.equal(z.status, 201, JSON.stringify(z.body));
-  // cashier B (zone B) on B
-  const pB = await pay(w.tokens.cashierB, invB, 9);
+  // admin on B (zone B). Not cashier B: reports.test.js asserts cashier B's
+  // cumulative revenue for today, so this file must not add to it.
+  const pB = await pay(w.tokens.admin, invB, 9);
   assert.equal(pB.status, 201, JSON.stringify(pB.body));
   // a reversed cash payment by the cashier on A2
   const pr = await pay(w.tokens.cashier, invA2, 3);
