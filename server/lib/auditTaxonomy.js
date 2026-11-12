@@ -102,6 +102,13 @@ const TAXONOMY = {
   'cashout.void':                 { category: 'Financial', severity: 'WARNING' },
   'cashout_shortage.create':    { category: 'Financial', severity: 'WARNING' },
   'cashout_shortage.resolve':   { category: 'Financial', severity: 'INFO' },
+  'cashout.deposit_create':      { category: 'Financial', severity: 'INFO' },
+  'cashout.statement_missing':   { category: 'Financial', severity: 'WARNING' },
+  'cashout_shortage.cancel':     { category: 'Financial', severity: 'INFO' },
+  'cashout.deposit_verify':      { category: 'Financial', severity: 'INFO' },
+  'cashout.deposit_void':        { category: 'Financial', severity: 'WARNING' },
+  'cashout_deposit_account.create': { category: 'Financial', severity: 'INFO' },
+  'cashout_deposit_account.update': { category: 'Financial', severity: 'INFO' },
   'exchange_rate.create':        { category: 'Financial', severity: 'INFO' },
 
   // Cashout Documents

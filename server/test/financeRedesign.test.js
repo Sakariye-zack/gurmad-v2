@@ -143,7 +143,7 @@ test('transactions summary: received today/month by currency, method, channel; d
   assert.ok(before.date && before.period && before.timezone);
   const inv = await createInvoice(w.tokens.admin, w.custA, 50);
   assert.equal((await pay(w.tokens.cashier, inv, 4)).status, 201);
-  assert.equal((await pay(w.tokens.cashier, inv, 6, { method: 'edahab' })).status, 201);
+  assert.equal((await pay(w.tokens.cashier, inv, 6, { method: 'edahab', reference_code: `EDH-FR-${Date.now()}` })).status, 201);
   assert.equal((await pay(w.tokens.cashier, inv, 2, { method: 'debt' })).status, 201);
   const rv = await pay(w.tokens.cashier, inv, 1);
   await api('PUT', `/payments/${rv.data.id}/reverse`, { token: w.tokens.admin, body: { reason: 'x' } });

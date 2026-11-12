@@ -2133,6 +2133,192 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_status_zone ON customer_signup_requests(status, zone_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_ip_created ON customer_signup_requests(ip, created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_phone_created ON customer_signup_requests(phone_canonical, created_at DESC);`);
+
+  await runCashoutV2Migrations();
+}
+
+// ============================================================
+// Cashout V2 — per-currency/per-method breakdown, denomination counts,
+// tolerance + admin escalation, deposits, overdue alerts. Additive and
+// idempotent only: every legacy cashouts column keeps its meaning; existing
+// rows get NULL breakdown/count_detail/variance_status and needs_admin FALSE.
+// ============================================================
+async function runCashoutV2Migrations() {
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS breakdown JSONB;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS count_detail JSONB;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS needs_admin BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // balanced | shortage | surplus, judged against the tolerance at creation.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS variance_status VARCHAR(20);`);
+  await addCheckIfMissing('cashouts', 'cashouts_variance_status_check', `variance_status IS NULL OR variance_status IN ('balanced', 'shortage', 'surplus')`);
+  // The larger of the net shortage and the gross per-currency cash shortage (USD).
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS control_shortage_usd NUMERIC;`);
+  // Settings snapshot at creation, so a later settings change never re-judges an old cashout.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS tolerance_usd NUMERIC;`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS admin_threshold_usd NUMERIC;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_needs_admin ON cashouts(needs_admin) WHERE needs_admin;`);
+
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_tolerance_usd NUMERIC NOT NULL DEFAULT 1;`);
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_admin_threshold_usd NUMERIC NOT NULL DEFAULT 10;`);
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_tolerance_check', 'cashout_tolerance_usd >= 0');
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_threshold_check', 'cashout_admin_threshold_usd >= 0');
+  await addCheckIfMissing('company_settings', 'company_settings_cashout_tol_le_thr_check', 'cashout_tolerance_usd <= cashout_admin_threshold_usd');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_deposit_accounts (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      type VARCHAR(10) NOT NULL CHECK (type IN ('safe', 'bank', 'mobile')),
+      account_ref VARCHAR(100),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_cashout_deposit_accounts_name ON cashout_deposit_accounts (LOWER(name));`);
+
+  // One row per deposit of approved cashout cash. Never deleted: a mistaken
+  // (unverified) deposit is voided with a reason.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_deposits (
+      id SERIAL PRIMARY KEY,
+      cashout_id INTEGER NOT NULL REFERENCES cashouts(id) ON DELETE RESTRICT,
+      deposit_account_id INTEGER NOT NULL REFERENCES cashout_deposit_accounts(id) ON DELETE RESTRICT,
+      currency VARCHAR(10) NOT NULL CHECK (currency IN ('USD', 'SLSH')),
+      amount NUMERIC NOT NULL CHECK (amount > 0),
+      attachment_id INTEGER REFERENCES cashout_attachments(id) ON DELETE RESTRICT,
+      note TEXT,
+      deposited_by INTEGER NOT NULL,
+      deposited_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      verified_by INTEGER,
+      verified_at TIMESTAMP,
+      voided_at TIMESTAMP,
+      voided_by INTEGER,
+      voided_reason TEXT,
+      CONSTRAINT cashout_deposit_verify_fields CHECK ((verified_at IS NULL) = (verified_by IS NULL)),
+      CONSTRAINT cashout_deposit_void_fields CHECK (voided_at IS NULL OR (voided_by IS NOT NULL AND voided_reason IS NOT NULL)),
+      CONSTRAINT cashout_deposit_not_verified_and_void CHECK (voided_at IS NULL OR verified_at IS NULL)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashout_deposits_cashout ON cashout_deposits(cashout_id);`);
+
+  // ---- Fix round (independent review) ----
+  // Exact payment ids a V2 cashout covered (coverage + detail recomputation).
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS covered_payment_ids INTEGER[];`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cashouts_covered_ids ON cashouts USING GIN (covered_payment_ids);`);
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS deposit_exempt BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // One system marker row: when Cashout V2 was first installed. The first
+  // boot that creates it exempts pre-V2 cashouts that were already approved
+  // from the deposit step (their cash was handled the old way).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_v2_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      installed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  const firstInstall = await pool.query(`INSERT INTO cashout_v2_meta (id) VALUES (1) ON CONFLICT (id) DO NOTHING RETURNING installed_at`);
+  if (firstInstall.rows.length) {
+    await pool.query(
+      `UPDATE cashouts SET deposit_exempt = TRUE
+       WHERE status = 'approved' AND created_at < $1 AND (breakdown IS NULL OR breakdown->>'mode' <> 'counted')`,
+      [firstInstall.rows[0].installed_at]);
+  }
+  // Lower bound of the uncovered-payments scan / monitor (admin-editable);
+  // NULL = cashout_v2_meta.installed_at.
+  await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS cashout_v2_since TIMESTAMP;`);
+  // Legacy pending cashouts whose shortage is above the threshold need an admin.
+  await pool.query(
+    `UPDATE cashouts SET needs_admin = TRUE
+     WHERE status = 'pending' AND NOT needs_admin AND breakdown IS NULL
+       AND shortage > COALESCE((SELECT cashout_admin_threshold_usd FROM company_settings WHERE id = 1), 10)`);
+  // A rejected/voided cashout's shortage is 'cancelled' (never payroll-deductible).
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_by INTEGER;`);
+  await pool.query(`ALTER TABLE cashout_shortages ADD COLUMN IF NOT EXISTS cancelled_reason TEXT;`);
+  const sc = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_shortages'::regclass AND conname = 'cashout_shortages_status_check'`);
+  if (!sc.rows.length || !sc.rows[0].def.includes('cancelled')) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE cashout_shortages IN SHARE ROW EXCLUSIVE MODE');
+      const again = await c.query(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_shortages'::regclass AND conname = 'cashout_shortages_status_check'`);
+      if (!again.rows.length || !again.rows[0].def.includes('cancelled')) {
+        await c.query('ALTER TABLE cashout_shortages DROP CONSTRAINT IF EXISTS cashout_shortages_status_check');
+        await c.query(`ALTER TABLE cashout_shortages ADD CONSTRAINT cashout_shortages_status_check CHECK (status IN ('unpaid', 'paid', 'cancelled'))`);
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+  // A deposit slip backs at most one live deposit.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_cashout_deposits_attachment ON cashout_deposits(attachment_id) WHERE attachment_id IS NOT NULL AND voided_at IS NULL;`);
+  // One recorded eDahab payment per reference code (same guard as ZAAD).
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM payments WHERE method = 'edahab' AND status = 'recorded' AND reference_code IS NOT NULL
+                 GROUP BY reference_code HAVING COUNT(*) > 1) THEN
+        RAISE WARNING 'duplicate recorded eDahab reference codes exist; skipping uq_payments_edahab_reference';
+      ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_edahab_reference ON payments(reference_code)
+          WHERE method = 'edahab' AND status = 'recorded' AND reference_code IS NOT NULL;
+      END IF;
+    END $$;
+  `);
+
+  // ---- Cashier ↔ Sub Zone assignment, assignment snapshot, statements ----
+  // One cashier per Sub Zone (a cashier may hold many). FK-less on purpose,
+  // validated in routes/routesEntity.js (active cashier of the same district).
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS cashier_user_id INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_cashier_user_id ON routes(cashier_user_id) WHERE cashier_user_id IS NOT NULL;`);
+  // What the assignment panel showed when the cashout was created.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS assignment_snapshot JSONB;`);
+  // Merchant statements are a new attachment document type; `kind` groups
+  // attachments: statement | signed | other (derived from document_type).
+  const dt = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_attachments'::regclass AND conname = 'cashout_attachments_document_type_check'`);
+  if (!dt.rows.length || !dt.rows[0].def.includes('merchant_statement')) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE cashout_attachments IN SHARE ROW EXCLUSIVE MODE');
+      const again = await c.query(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_attachments'::regclass AND conname = 'cashout_attachments_document_type_check'`);
+      if (!again.rows.length || !again.rows[0].def.includes('merchant_statement')) {
+        await c.query('ALTER TABLE cashout_attachments DROP CONSTRAINT IF EXISTS cashout_attachments_document_type_check');
+        await c.query(`ALTER TABLE cashout_attachments ADD CONSTRAINT cashout_attachments_document_type_check CHECK (document_type IN (
+          'signed_cashout_form', 'deposit_slip', 'cash_handover_evidence', 'receipt', 'shortage_explanation', 'approval_document', 'other', 'merchant_statement'))`);
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+  await pool.query(`ALTER TABLE cashout_attachments ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'other';`);
+  await addCheckIfMissing('cashout_attachments', 'cashout_attachments_kind_check', `kind IN ('statement', 'signed', 'other')`);
+  await pool.query(`UPDATE cashout_attachments SET kind = 'signed' WHERE document_type = 'signed_cashout_form' AND kind <> 'signed';`);
+  await pool.query(`UPDATE cashout_attachments SET kind = 'statement' WHERE document_type = 'merchant_statement' AND kind <> 'statement';`);
+
+  // Monitor dedupe: one row per alert already sent (kind, item, local day).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cashout_alerts_sent (
+      id SERIAL PRIMARY KEY,
+      kind VARCHAR(40) NOT NULL,
+      ref_id INTEGER NOT NULL,
+      for_date DATE NOT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (kind, ref_id, for_date)
+    );
+  `);
 }
 
 // Fleet module upgrade (dashboard, fuel efficiency + receipts, maintenance
@@ -2440,4 +2626,4 @@ async function logAudit({ actorId, actorUsername, action, entityType, entityId, 
   );
 }
 
-module.exports = { pool, runMigrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };
+module.exports = { pool, runMigrations, runCashoutV2Migrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };

@@ -134,6 +134,21 @@ function SetupChecklist({ navigate }) {
       {key === 'customers_without_subzone' && (
         <button type="button" onClick={() => navigate('/operations/today')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
       )}
+      {key === 'subzones_without_cashier' && (() => {
+        const list = d.subzones_without_cashier || [];
+        return (
+          <>
+            {list.slice(0, SHOW_SUBZONES).map((s) => (
+              <button key={s.route_id} type="button" onClick={() => navigate(`/groups/${s.group_id}`)} style={linkChipStyle} title={s.path}>
+                {s.name}
+              </button>
+            ))}
+            {list.length > SHOW_SUBZONES && (
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('opsp.setup.more', undefined, { n: list.length - SHOW_SUBZONES })}</span>
+            )}
+          </>
+        );
+      })()}
       {key === 'customers_without_location' && (
         <button type="button" onClick={() => navigate('/customers')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
       )}

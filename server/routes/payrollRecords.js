@@ -124,8 +124,14 @@ router.post('/:id/items', authenticateToken, requireRole('admin'), async (req, r
       if (srcId === null) return res.status(400).json({ error: { message: 'source_id is required when source_type is cashout_shortage.', code: 'VALIDATION' } });
       // Cashout (CLOSED Module 7) is validated by SELECT only — no
       // write, no FK, no dependency at the schema level (Spec §1.6.1).
-      const shortage = await pool.query('SELECT id, status FROM cashout_shortages WHERE id = $1', [srcId]);
+      const shortage = await pool.query(
+        `SELECT cs.id, cs.status, co.status AS cashout_status FROM cashout_shortages cs JOIN cashouts co ON co.id = cs.cashout_id WHERE cs.id = $1`, [srcId]);
       if (shortage.rows.length === 0) return res.status(400).json({ error: { message: 'source_id does not reference an existing cashout shortage.', code: 'VALIDATION' } });
+      // Cashout V2: a shortage of a rejected/voided cashout (status
+      // 'cancelled', or its cashout no longer live) can never be deducted.
+      if (shortage.rows[0].status === 'cancelled' || !['pending', 'approved'].includes(shortage.rows[0].cashout_status)) {
+        return res.status(409).json({ error: { message: 'This cashout shortage was cancelled (its cashout was rejected or voided) and cannot be deducted.', code: 'SHORTAGE_NOT_LIVE' } });
+      }
     }
   }
 

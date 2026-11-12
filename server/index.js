@@ -238,6 +238,7 @@ runMigrations()
       require('./lib/backupMonitor').startMonitor();
       require('./lib/fleetMonitor').startMonitor();
       require('./lib/debtSuspension').startMonitor();
+      require('./lib/cashoutMonitor').startMonitor();
       // Pending portal ZAAD attempts left over from a crash/restart -> unknown + admin alert.
       require('./routes/customerPortal').sweepStaleZaadAttempts().catch((e) => console.error('zaad stale sweep failed:', e && e.message));
     });

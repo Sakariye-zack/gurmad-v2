@@ -5,12 +5,59 @@ import { apiClient } from '../lib/apiClient.js';
 // results only — reconciliation/shortage/surplus are always server-computed,
 // never recalculated here (non-negotiable per the approved spec).
 
+const LIST_PARAMS = ['status', 'q', 'zone_id', 'cashier_id', 'date_from', 'date_to', 'deposit_status', 'needs_admin', 'has_shortage'];
 export function useCashouts(params = {}) {
   const qs = new URLSearchParams();
-  if (params.status) qs.set('status', params.status);
-  if (params.q) qs.set('q', params.q);
+  for (const k of LIST_PARAMS) if (params[k]) qs.set(k, params[k]);
   const query = qs.toString();
-  return useQuery({ queryKey: ['v2', 'cashouts', params], queryFn: () => apiClient.get(`/v2/cashouts${query ? `?${query}` : ''}`) });
+  return useQuery({ queryKey: ['v2', 'cashouts', 'list', params], queryFn: () => apiClient.get(`/v2/cashouts${query ? `?${query}` : ''}`) });
+}
+// Cashout V2: denominations (server is the single source), tolerance /
+// threshold, active deposit accounts.
+export function useCashoutMeta() {
+  return useQuery({ queryKey: ['v2', 'cashouts', 'meta'], queryFn: () => apiClient.get('/v2/cashouts/meta'), staleTime: 60 * 1000 });
+}
+export function useCashoutSummary() {
+  return useQuery({ queryKey: ['v2', 'cashouts', 'summary'], queryFn: () => apiClient.get('/v2/cashouts/summary') });
+}
+export function useUncoveredPayments() {
+  return useQuery({ queryKey: ['v2', 'cashouts', 'uncovered'], queryFn: () => apiClient.get('/v2/cashouts/uncovered') });
+}
+export function useDepositAccounts(all = false) {
+  return useQuery({ queryKey: ['v2', 'cashouts', 'deposit-accounts', all], queryFn: () => apiClient.get(`/v2/cashouts/deposit-accounts${all ? '?all=1' : ''}`) });
+}
+export function useSaveDepositAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }) => (id ? apiClient.put(`/v2/cashouts/deposit-accounts/${id}`, data) : apiClient.post('/v2/cashouts/deposit-accounts', data)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'cashouts'] }),
+  });
+}
+// Records a deposit; when a slip file is given it is uploaded first as a
+// 'deposit_slip' attachment of the cashout and linked by id.
+export function useRecordDeposit(cashoutId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ file, ...data }) => {
+      let attachmentId = null;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('document_type', 'deposit_slip');
+        const up = await apiClient.uploadFile(`/v2/cashouts/${cashoutId}/attachments`, form);
+        attachmentId = up.data.id;
+      }
+      return apiClient.post(`/v2/cashouts/${cashoutId}/deposits`, { ...data, ...(attachmentId ? { attachment_id: attachmentId } : {}) });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'cashouts'] }),
+  });
+}
+export function useChangeDeposit(cashoutId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ depositId, action, reason }) => apiClient.put(`/v2/cashouts/${cashoutId}/deposits/${depositId}/${action}`, action === 'void' ? { reason } : {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'cashouts'] }),
+  });
 }
 export function useCashout(id) {
   return useQuery({ queryKey: ['v2', 'cashouts', id], queryFn: () => apiClient.get(`/v2/cashouts/${id}`), enabled: !!id });
@@ -88,5 +135,16 @@ export function useResolveShortage(cashoutId) {
   return useMutation({
     mutationFn: ({ resolved_amount, resolution_notes }) => apiClient.put(`/v2/cashouts/${cashoutId}/shortage/resolve`, { resolved_amount, resolution_notes }),
     onSuccess: () => invalidateCashout(qc, cashoutId),
+  });
+}
+// The cashier's assignment panel (his Sub Zones; sent vs collected) —
+// information only, never part of the reconciliation figures.
+export function useAssignmentPreview(cashierId, periodStart, periodEnd) {
+  const enabled = !!cashierId && !!periodStart && !!periodEnd;
+  const qs = new URLSearchParams({ cashier_id: cashierId || '', period_start: periodStart || '', period_end: periodEnd || '' });
+  return useQuery({
+    queryKey: ['v2', 'cashouts', 'assignment-preview', cashierId, periodStart, periodEnd],
+    queryFn: () => apiClient.get(`/v2/cashouts/assignment-preview?${qs.toString()}`),
+    enabled,
   });
 }

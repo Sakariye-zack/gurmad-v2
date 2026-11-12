@@ -1,230 +1,232 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Wallet2, Plus, FileCheck2 } from 'lucide-react';
-import { PageHeader, Button, DataTable, StatusBadge, FilterBar, StatCard, Modal, useToast } from '../../components/ui/index.js';
+import { Wallet2, Plus, FileCheck2, Search, Clock, AlertTriangle, Landmark, Banknote, Hourglass } from 'lucide-react';
+import { PageHeader, Button, LoadingState, ErrorState } from '../../components/ui/index.js';
 import RoleGate from '../../components/RoleGate.jsx';
-import { useCashouts, useCreateCashout, useReconciliationPreview, useCashiers } from '../../hooks/useCashouts.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
+import { useCashouts, useCashoutSummary, useUncoveredPayments, useCashiers } from '../../hooks/useCashouts.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { fmtDate, fmtDateTime } from './financeUtils.js';
+import { fmtMoney, fmtPair, varianceOf, ageDays } from './cashoutUtils.js';
+import { StatusChip, DepositChip, VarianceChip, NeedsAdminChip, Person } from './CashoutBits.jsx';
+import CashoutFormModal from './CashoutFormModal.jsx';
+import './cashout.css';
 
-const STATUS_MAP = { pending: 'warning', approved: 'success', rejected: 'danger', voided: 'info' };
+const STATUSES = ['pending', 'approved', 'rejected', 'voided'];
+const DEPOSIT_STATUSES = ['not_deposited', 'partial', 'deposited', 'verified', 'variance', 'not_required'];
+const EMPTY_FILTERS = { status: '', q: '', zone_id: '', cashier_id: '', date_from: '', date_to: '', deposit_status: '', needs_admin: '', has_shortage: '' };
 
 export default function CashoutsListPage() {
   const { t } = useI18n();
-  const [statusFilter, setStatusFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [formOpen, setFormOpen] = useState(false);
+  const { user } = useAuth();
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useCashouts({ status: statusFilter || undefined, q: search || undefined });
+  const role = (user?.role || '').toLowerCase();
+  const canCreate = role === 'admin' || role === 'head_of_cashiers';
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [form, setForm] = useState(null); // null | prefill object
+  const q = filters.q.trim().length >= 2 ? filters.q.trim() : '';
+  const { data, isLoading, error, refetch } = useCashouts({ ...filters, q });
+  const summary = useCashoutSummary();
+  const uncovered = useUncoveredPayments();
+  const { data: zonesData } = useZonesList();
+  const cashiersQ = useCashiers();
   const cashouts = data?.data || [];
-  const pendingCount = cashouts.filter((c) => c.status === 'pending').length;
-  const shortageCount = cashouts.filter((c) => parseFloat(c.shortage) > 0).length;
+  const s = summary.data?.data;
+  const set = (patch) => setFilters((f) => ({ ...f, ...patch }));
+  const toggle = (patch) => setFilters((f) => {
+    const same = Object.entries(patch).every(([k, v]) => f[k] === v);
+    return { ...EMPTY_FILTERS, q: f.q, ...(same ? {} : patch) };
+  });
+  const active = (patch) => Object.entries(patch).every(([k, v]) => filters[k] === v);
+  const zones = zonesData?.data || [];
+  const cashierOptions = canCreate ? (cashiersQ.data?.data || []) : [];
+  const anyFilter = Object.entries(filters).some(([, v]) => v);
 
   return (
     <div>
       <PageHeader
         icon={Wallet2}
         title={t('nav.cashout')}
-        subtitle={t('fin.cash_reconciliation_head_of_cashiers')}
-        actions={
-          <RoleGate roles={['admin', 'head_of_cashiers']}>
-            <Button icon={Plus} onClick={() => setFormOpen(true)}>{t('fin.new_cashout')}</Button>
-          </RoleGate>
-        }
+        subtitle={t('co2.list.subtitle')}
+        actions={canCreate && <Button icon={Plus} onClick={() => setForm({})}>{t('fin.new_cashout')}</Button>}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <StatCard label={t('fin.total_cashouts')} value={error ? '—' : cashouts.length} icon={Wallet2} />
-        <StatCard label={t('fin.pending_approval')} value={error ? '—' : pendingCount} icon={Wallet2} accent="var(--warning)" />
-        <StatCard label={t('fin.with_shortage')} value={error ? '—' : shortageCount} icon={Wallet2} accent="var(--danger)" />
+      <div className="co-stats">
+        <button type="button" className="co-stat" style={{ '--accent-c': 'var(--brand)' }} onClick={() => setFilters(EMPTY_FILTERS)}>
+          <span className="k"><Banknote size={14} /> {t('co2.list.receivedMonth')}</span>
+          <span className="v">{s ? fmtMoney(s.received_this_month.USD, 'USD') : '—'}</span>
+          <span className="s">{s ? `+ ${fmtMoney(s.received_this_month.SLSH, 'SLSH')}` : ''}</span>
+        </button>
+        <button type="button" className="co-stat" style={{ '--accent-c': 'var(--warning)' }} aria-pressed={active({ status: 'pending' })} onClick={() => toggle({ status: 'pending' })}>
+          <span className="k"><Hourglass size={14} /> {t('fin.pending_approval')}</span>
+          <span className="v">{s ? s.pending : '—'}</span>
+          <span className="s">{t('co2.list.awaiting')}</span>
+        </button>
+        <button type="button" className="co-stat" style={{ '--accent-c': 'var(--danger)' }} aria-pressed={active({ has_shortage: '1' })} onClick={() => toggle({ has_shortage: '1' })}>
+          <span className="k"><AlertTriangle size={14} /> {t('fin.with_shortage')}</span>
+          <span className="v">{s ? s.with_shortage : '—'}</span>
+          <span className="s">{s ? t('co2.list.needAdminN', undefined, { n: s.needs_admin }) : ''}</span>
+        </button>
+        <button type="button" className="co-stat" style={{ '--accent-c': 'var(--info)' }} aria-pressed={active({ status: 'approved', deposit_status: 'not_deposited' })} onClick={() => toggle({ status: 'approved', deposit_status: 'not_deposited' })}>
+          <span className="k"><Landmark size={14} /> {t('co2.list.notDeposited')}</span>
+          <span className="v">{s ? s.not_deposited : '—'}</span>
+          <span className="s">{s && s.unverified_deposits > 0 ? t('co2.list.unverifiedN', undefined, { n: s.unverified_deposits }) : t('co2.list.notDepositedHint')}</span>
+        </button>
       </div>
 
-      <FilterBar searchValue={search} onSearchChange={setSearch} searchPlaceholder={t('fin.search_cashout_number')}>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-          <option value="">{t('cust.all_statuses')}</option>
-          <option value="pending">{t('status.pending')}</option>
-          <option value="approved">{t('status.approved')}</option>
-          <option value="rejected">{t('status.rejected')}</option>
-          <option value="voided">{t('status.voided')}</option>
+      <UncoveredPanel query={uncovered} canCreate={canCreate} onCashOut={(row) => setForm({
+        cashierId: row.cashier_id, zoneId: row.zone_id, periodStart: row.suggested_start,
+        // never past "now": a cashout cannot cover time that has not happened yet
+        periodEnd: row.suggested_end && new Date(row.suggested_end) < new Date() ? row.suggested_end : new Date(),
+      })} />
+
+      <div className="co-filters">
+        <label className="co-search">
+          <Search size={15} />
+          <input className="co-input" value={filters.q} onChange={(e) => set({ q: e.target.value })} placeholder={t('co2.list.search')} aria-label={t('co2.list.search')} />
+        </label>
+        {(role === 'admin' || role === 'head_of_cashiers') && (
+          <select className="co-input" value={filters.zone_id} onChange={(e) => set({ zone_id: e.target.value })} aria-label={t('co2.district')}>
+            <option value="">{t('co2.list.allDistricts')}</option>
+            {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+          </select>
+        )}
+        {cashierOptions.length > 0 && (
+          <select className="co-input" value={filters.cashier_id} onChange={(e) => set({ cashier_id: e.target.value })} aria-label={t('fin.cashier')}>
+            <option value="">{t('co2.list.allCashiers')}</option>
+            {cashierOptions.map((c) => <option key={c.id} value={c.id}>{c.full_name || c.username}</option>)}
+          </select>
+        )}
+        <select className="co-input" value={filters.deposit_status} onChange={(e) => set({ deposit_status: e.target.value })} aria-label={t('co2.deposit')}>
+          <option value="">{t('co2.list.anyDeposit')}</option>
+          {DEPOSIT_STATUSES.map((d) => <option key={d} value={d}>{t(`co2.dep.${d}`)}</option>)}
         </select>
-      </FilterBar>
-
-      <DataTable
-        loading={isLoading}
-        error={error?.message}
-        onRetry={refetch}
-        isEmpty={!isLoading && !error && cashouts.length === 0}
-        emptyTitle={t('fin.no_cashouts_yet')}
-        columns={[{ label: t('fin.cashout_no') }, { label: t('common.zone') }, { label: t('dash.expected') }, { label: t('dash.actual') }, { label: t('dash.shortage') }, { label: t('dash.surplus') }, { label: t('common.status') }, { label: t('fin.signed') }]}
-      >
-        {cashouts.map((co) => (
-          <tr key={co.id} onClick={() => navigate(`/financial/cashouts/${co.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
-            <td style={cellStyle}><strong>{co.cashout_number}</strong></td>
-            <td style={cellStyle}>{co.zone_name}</td>
-            <td style={cellStyle} className="tabular-nums">${parseFloat(co.expected_amount).toFixed(2)}</td>
-            <td style={cellStyle} className="tabular-nums">${parseFloat(co.actual_amount).toFixed(2)}</td>
-            <td style={cellStyle} className="tabular-nums">{parseFloat(co.shortage) > 0 ? <span style={{ color: 'var(--danger)', fontWeight: 700 }}>${parseFloat(co.shortage).toFixed(2)}</span> : '—'}</td>
-            <td style={cellStyle} className="tabular-nums">{parseFloat(co.surplus) > 0 ? <span style={{ color: 'var(--info)', fontWeight: 700 }}>${parseFloat(co.surplus).toFixed(2)}</span> : '—'}</td>
-            <td style={cellStyle}><StatusBadge status={co.status} map={STATUS_MAP} /></td>
-            <td style={cellStyle}>{co.has_signed_document ? <FileCheck2 size={16} color="var(--success)" /> : <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>}</td>
-          </tr>
+        <input type="date" className="co-input" value={filters.date_from} onChange={(e) => set({ date_from: e.target.value })} aria-label={t('co2.list.from')} title={t('co2.list.from')} />
+        <input type="date" className="co-input" value={filters.date_to} onChange={(e) => set({ date_to: e.target.value })} aria-label={t('co2.list.to')} title={t('co2.list.to')} />
+      </div>
+      <div className="co-chiprow">
+        <button type="button" className="co-fchip" aria-pressed={!filters.status} onClick={() => set({ status: '' })}>{t('co2.list.all')}</button>
+        {STATUSES.map((st) => (
+          <button key={st} type="button" className="co-fchip" aria-pressed={filters.status === st} onClick={() => set({ status: filters.status === st ? '' : st })}>{t(`status.${st}`)}</button>
         ))}
-      </DataTable>
+        {anyFilter && <button type="button" className="co-fchip" onClick={() => setFilters(EMPTY_FILTERS)}>{t('co2.list.clear')}</button>}
+      </div>
 
-      <CashoutFormModal open={formOpen} onClose={() => setFormOpen(false)} />
+      <div className="co-card">
+        {isLoading && <LoadingState label={t('common.loading')} />}
+        {error && <ErrorState message={error.message} onRetry={refetch} />}
+        {!isLoading && !error && cashouts.length === 0 && <div className="co-empty">{anyFilter ? t('co2.list.noMatch') : t('fin.no_cashouts_yet')}</div>}
+        {!isLoading && !error && cashouts.length > 0 && (<>
+          <div className="co-table-wrap">
+            <table className="co-table">
+              <thead>
+                <tr>
+                  <th>{t('fin.cashout_no')}</th><th>{t('fin.cashier')}</th><th className="r">{t('dash.expected')}</th><th className="r">{t('co2.received')}</th>
+                  <th>{t('co2.result')}</th><th>{t('common.status')}</th><th>{t('co2.deposit')}</th><th aria-label={t('fin.signed')} />
+                </tr>
+              </thead>
+              <tbody>
+                {cashouts.map((co) => (
+                  <tr key={co.id} onClick={() => navigate(`/financial/cashouts/${co.id}`)}>
+                    <td>
+                      <div className="co-num">{co.cashout_number}</div>
+                      <div className="co-period">{fmtDate(co.period_start)} – {fmtDate(co.period_end)}</div>
+                    </td>
+                    <td><Person small name={co.cashier_name || co.cashier_username || `#${co.cashier_id}`} id={co.cashier_id} sub={co.zone_name} /></td>
+                    <td className="r co-money">{expectedText(co)}</td>
+                    <td className="r co-money">{receivedText(co)}</td>
+                    <td><ResultCell co={co} /></td>
+                    <td><span style={{ display: 'inline-flex', gap: '6px', flexWrap: 'wrap' }}><StatusChip status={co.status} />{co.needs_admin && co.status === 'pending' && <NeedsAdminChip />}</span></td>
+                    <td>{co.deposit_status ? <DepositChip status={co.deposit_status} /> : <span className="co-muted">—</span>}</td>
+                    <td>{co.has_signed_document ? <FileCheck2 size={16} color="var(--success)" aria-label={t('fin.signed')} /> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="co-cards">
+            {cashouts.map((co) => (
+              <button type="button" key={co.id} className="co-mcard" onClick={() => navigate(`/financial/cashouts/${co.id}`)}>
+                <div className="row">
+                  <Person small name={co.cashier_name || co.cashier_username || `#${co.cashier_id}`} id={co.cashier_id} sub={`${co.cashout_number} · ${co.zone_name || ''}`} />
+                  <span className="co-money" style={{ fontWeight: 800 }}>{receivedText(co)}</span>
+                </div>
+                <div className="co-period" style={{ marginTop: '6px' }}>{fmtDate(co.period_start)} – {fmtDate(co.period_end)}</div>
+                <div className="chips">
+                  <StatusChip status={co.status} />
+                  {co.needs_admin && co.status === 'pending' && <NeedsAdminChip />}
+                  <ResultCell co={co} />
+                  {co.deposit_status && <DepositChip status={co.deposit_status} />}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>)}
+      </div>
+
+      <CashoutFormModal open={!!form} prefill={form} onClose={() => setForm(null)} />
     </div>
   );
 }
 
-function CashoutFormModal({ open, onClose }) {
-  if (!open) return null;
-  return <CashoutFormContent onClose={onClose} />;
+function expectedText(co) {
+  const b = co.breakdown;
+  if (b?.totals) return fmtPair({ USD: b.totals.USD.expected, SLSH: b.totals.SLSH.expected }, fmtMoney(0, 'USD'));
+  return fmtMoney(co.expected_amount, 'USD');
 }
-
-function toIsoZ(local) {
-  if (!local) return '';
-  return new Date(local).toISOString();
+function receivedText(co) {
+  const b = co.breakdown;
+  if (b?.mode === 'counted') return fmtPair({ USD: b.totals.USD.actual, SLSH: b.totals.SLSH.actual }, fmtMoney(0, 'USD'));
+  return fmtMoney(co.actual_amount, 'USD');
 }
-
-function CashoutFormContent({ onClose }) {
-  const { t } = useI18n();
-  const [zoneId, setZoneId] = useState('');
-  const [cashierId, setCashierId] = useState('');
-  const [periodStart, setPeriodStart] = useState('');
-  const [periodEnd, setPeriodEnd] = useState('');
-  const [cash, setCash] = useState('0');
-  const [zaad, setZaad] = useState('0');
-  const [edahab, setEdahab] = useState('0');
-  const [slsh, setSlsh] = useState('0');
-  const [shortageReason, setShortageReason] = useState('');
-  const [remarks, setRemarks] = useState('');
-  const [error, setError] = useState('');
-  const { data: zonesData } = useZonesList();
-  const { data: cashiersData } = useCashiers();
-  const preview = useReconciliationPreview(cashierId, toIsoZ(periodStart), toIsoZ(periodEnd));
-  const createCashout = useCreateCashout();
-  const toast = useToast();
-  const zones = zonesData?.data || [];
-  // User-reported gap (Phase 10 Billing audit): the field below used to
-  // be a raw "type the numeric user id" input — same class of bug already
-  // fixed once this session for Employees' "Linked user account ID".
-  // Narrowed to the cashiers in the selected zone when one is chosen
-  // (zone is picked first in this form), full list otherwise.
-  const cashiers = (cashiersData?.data || []).filter((c) => !zoneId || !c.zone || c.zone === zones.find((z) => String(z.id) === zoneId)?.name);
-
-  const actual = (parseFloat(cash) || 0) + (parseFloat(zaad) || 0) + (parseFloat(edahab) || 0) + (parseFloat(slsh) || 0);
-  const expected = preview.data?.data?.expectedAmount ?? null;
-  const diff = expected != null ? expected - actual : null;
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError('');
-    if (!zoneId || !cashierId || !periodStart || !periodEnd) { setError(t('fin.zone_cashier_and_period_are')); return; }
-    try {
-      const result = await createCashout.mutateAsync({
-        zone_id: parseInt(zoneId, 10), cashier_id: parseInt(cashierId, 10),
-        period_start: toIsoZ(periodStart), period_end: toIsoZ(periodEnd),
-        actual_amount: actual, cash_amount: parseFloat(cash) || 0, zaad_amount: parseFloat(zaad) || 0,
-        edahab_amount: parseFloat(edahab) || 0, slsh_amount: parseFloat(slsh) || 0,
-        shortage_reason: shortageReason || undefined, remarks: remarks || undefined,
-      });
-      toast.success(t('fin.m.created', undefined, { number: result.data.cashout_number }));
-      onClose();
-    } catch (err) {
-      setError(err.message || t('common.somethingWrong'));
-    }
-  }
-
+function ResultCell({ co }) {
+  const v = varianceOf(co);
+  const amt = v === 'shortage' ? Number(co.control_shortage_usd ?? co.shortage) : v === 'surplus' ? Number(co.surplus) : 0;
   return (
-    <Modal
-      open
-      onClose={createCashout.isPending ? () => {} : onClose}
-      title={t('fin.new_cashout')}
-      footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={createCashout.isPending}>{t('common.cancel')}</Button>
-        <Button type="submit" form="cashout-form" disabled={createCashout.isPending}>{createCashout.isPending ? t('common.saving') : t('fin.create_cashout')}</Button>
-      </>}
-    >
-      <form id="cashout-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>{t('common.zone')}</span>
-            <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
-              <option value="">{t('cust.select_a_zone')}</option>
-              {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-            </select>
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>{t('fin.cashier')}</span>
-            <select value={cashierId} onChange={(e) => setCashierId(e.target.value)} style={inputStyle}>
-              <option value="">{t('fin.select_a_cashier')}</option>
-              {cashiers.map((c) => <option key={c.id} value={c.id}>{c.full_name || c.username} ({c.username}{c.zone ? `, ${c.zone}` : ''})</option>)}
-            </select>
-          </label>
-        </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>{t('fin.period_start')}</span>
-            <input type="datetime-local" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} style={inputStyle} />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>{t('fin.period_end')}</span>
-            <input type="datetime-local" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} style={inputStyle} />
-          </label>
-        </div>
-
-        {preview.data?.data && (
-          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg)', border: '1px solid var(--border)', fontSize: '12px' }}>
-            <div className="tabular-nums" style={{ fontWeight: 700, marginBottom: '4px' }}>
-              {t('fin.m.systemExpected', undefined, { expected: expected.toFixed(2), transactions: preview.data.data.transactionCount, customers: preview.data.data.customerCount })}
-            </div>
-            {preview.data.data.overlapsExistingCashout && (
-              <span style={{ color: 'var(--danger)' }}>{t('fin.this_cashier_already_has_a')}</span>
-            )}
-          </div>
-        )}
-
-        <span style={sectionLabelStyle}>{t('fin.amount_physically_received')}</span>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
-          <label style={fieldStyle}><span style={labelStyle}>{t('fin.cash')}</span><input type="number" min="0" step="0.01" value={cash} onChange={(e) => setCash(e.target.value)} style={inputStyle} /></label>
-          <label style={fieldStyle}><span style={labelStyle}>ZAAD</span><input type="number" min="0" step="0.01" value={zaad} onChange={(e) => setZaad(e.target.value)} style={inputStyle} /></label>
-          <label style={fieldStyle}><span style={labelStyle}>{t('fin.edahab')}</span><input type="number" min="0" step="0.01" value={edahab} onChange={(e) => setEdahab(e.target.value)} style={inputStyle} /></label>
-          <label style={fieldStyle}><span style={labelStyle}>SLSH</span><input type="number" min="0" step="0.01" value={slsh} onChange={(e) => setSlsh(e.target.value)} style={inputStyle} /></label>
-        </div>
-        <div className="tabular-nums" style={{ fontSize: '13px', fontWeight: 700 }}>{t('fin.m.totalActual', undefined, { actual: actual.toFixed(2) })}</div>
-        {diff != null && Math.abs(diff) > 0.005 && (
-          <div style={{ fontSize: '12px', color: diff > 0 ? 'var(--danger)' : 'var(--info)' }}>
-            {diff > 0 ? t('fin.m.shortageRecorded', undefined, { amount: diff.toFixed(2) }) : t('fin.m.surplusRecorded', undefined, { amount: (-diff).toFixed(2) })}
-          </div>
-        )}
-        {diff != null && diff > 0.005 && (
-          <label style={fieldStyle}>
-            <span style={labelStyle}>{t('fin.shortage_reason_required')}</span>
-            <input value={shortageReason} onChange={(e) => setShortageReason(e.target.value)} style={inputStyle} placeholder={t('fin.explain_the_shortfall')} />
-          </label>
-        )}
-        <label style={fieldStyle}>
-          <span style={labelStyle}>{t('fin.remarks_optional')}</span>
-          <input value={remarks} onChange={(e) => setRemarks(e.target.value)} style={inputStyle} />
-        </label>
-        {error && <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{error}</span>}
-      </form>
-    </Modal>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+      <VarianceChip status={v} />
+      {amt > 0.004 && <span className={`co-money ${v === 'shortage' ? 'co-neg' : 'co-pos'}`}>{fmtMoney(amt, 'USD')}</span>}
+    </span>
   );
 }
 
-const cellStyle = { padding: '12px 14px' };
-const fieldStyle = { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 };
-const labelStyle = { fontSize: '12px', fontWeight: 700 };
-const sectionLabelStyle = {
-  display: 'block', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em',
-  color: 'var(--text-muted)', margin: '4px 0 -4px',
-};
-const selectStyle = {
-  padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-  background: 'var(--surface)', color: 'var(--text)', fontSize: '13px',
-};
-const inputStyle = {
-  padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-  background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', width: '100%', fontFamily: 'inherit',
-};
+function UncoveredPanel({ query, canCreate, onCashOut }) {
+  const { t } = useI18n();
+  const rows = query.data?.data || [];
+  if (query.isLoading || query.error || rows.length === 0) return null;
+  return (
+    <div className="co-card co-unc">
+      <div className="co-card-head">
+        <h3><Clock size={16} color="var(--warning)" /> {t('co2.unc.title')}</h3>
+        <span className="co-note">{t('co2.unc.hint')}</span>
+      </div>
+      <div className="co-unc-list">
+        {rows.map((r) => {
+          const days = ageDays(r.oldest_at);
+          return (
+            <div key={r.cashier_id} className="co-unc-row">
+              <Person name={r.cashier_name} id={r.cashier_id} sub={[r.zone, r.role !== 'cashier' ? r.role : null].filter(Boolean).join(' · ')} />
+              <div>
+                <div className="co-unc-amt">{fmtPair(r.amounts)}</div>
+                <div className="co-unc-meta">≈ {fmtMoney(r.usd_equiv, 'USD')}</div>
+              </div>
+              <div className="co-unc-cnt">
+                <div className="co-unc-meta">{t('co2.unc.payments', undefined, { n: r.payment_count })}</div>
+                <div className={`co-unc-meta${days > 2 ? ' co-old' : ''}`} title={fmtDateTime(r.oldest_at)}>{t('co2.unc.oldest', undefined, { d: days })}</div>
+                {r.stranded_count > 0 && <div className="co-unc-meta co-old" title={t('co2.unc.stranded', undefined, { n: r.stranded_count })}>{t('co2.unc.strandedShort', undefined, { n: r.stranded_count })}</div>}
+              </div>
+              <div>
+                {canCreate && r.role === 'cashier' && (
+                  <RoleGate roles={['admin', 'head_of_cashiers']}>
+                    <Button variant="secondary" onClick={() => onCashOut(r)}>{t('co2.unc.cashOut')}</Button>
+                  </RoleGate>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

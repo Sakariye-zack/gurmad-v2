@@ -142,6 +142,9 @@ export default function GroupDetailPage() {
                   <td style={{ padding: '8px 4px', color: r.collector_name ? 'inherit' : 'var(--text-muted)' }}>
                     {r.collector_name || t('group.unassigned', 'Unassigned')}
                     {r.truck_plate && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{r.truck_plate}</div>}
+                    <div style={{ fontSize: '11px', color: r.cashier_name ? 'var(--text-muted)' : 'var(--warning)' }}>
+                      {t('subzone.cashier', 'Cashier')}: {r.cashier_name || t('subzone.noCashier', 'none')}
+                    </div>
                   </td>
                   <td style={{ padding: '8px 4px', fontSize: '11px' }}><DaysText days={r.work_days} /></td>
                   <td style={{ padding: '8px 4px' }} className="tabular-nums">{t('group.m.nCustomers', undefined, { n: r.customer_count })}</td>
@@ -221,6 +224,7 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
   const [name, setName] = useState(route?.name || '');
   const [status, setStatus] = useState(route?.status || 'active');
   const [collectorId, setCollectorId] = useState(route?.collector_user_id ? String(route.collector_user_id) : '');
+  const [cashierId, setCashierId] = useState(route?.cashier_user_id ? String(route.cashier_user_id) : '');
   const [zoneId, setZoneId] = useState(route?.group_zone_id ? String(route.group_zone_id) : '');
   const [workDays, setWorkDays] = useState(Array.isArray(route?.work_days) ? route.work_days : []);
   const [truckId, setTruckId] = useState(route?.truck_id ? String(route.truck_id) : '');
@@ -230,7 +234,7 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
   const toast = useToast();
 
   React.useEffect(() => {
-    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setWorkDays(Array.isArray(route.work_days) ? route.work_days : []); setTruckId(route.truck_id ? String(route.truck_id) : ''); setStartPt(startOf(route)); setError(''); }
+    if (route) { setCode(route.code); setName(route.name || ''); setStatus(route.status); setCollectorId(route.collector_user_id ? String(route.collector_user_id) : ''); setCashierId(route.cashier_user_id ? String(route.cashier_user_id) : ''); setZoneId(route.group_zone_id ? String(route.group_zone_id) : ''); setWorkDays(Array.isArray(route.work_days) ? route.work_days : []); setTruckId(route.truck_id ? String(route.truck_id) : ''); setStartPt(startOf(route)); setError(''); }
   }, [route]);
 
   if (!route) return null;
@@ -243,7 +247,7 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
     const sp = startPayload(startPt);
     if (!sp) { setError(t('subzone.startInvalid')); return; }
     try {
-      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
+      await update.mutateAsync({ code: code.trim(), name: name.trim() || null, status, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, cashier_user_id: cashierId ? parseInt(cashierId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
       toast.success(t('group.route_updated'));
       onDone?.();
       onClose();
@@ -273,6 +277,7 @@ function EditRouteModal({ route, zones, districtId, onClose, onDone }) {
         </label>
         <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} current={route} />
+        <CashierSelect value={cashierId} onChange={setCashierId} current={route} />
         <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
         <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} current={route} />
         <StartPointInput value={startPt} onChange={setStartPt} />
@@ -294,6 +299,7 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [collectorId, setCollectorId] = useState('');
+  const [cashierId, setCashierId] = useState('');
   const [zoneId, setZoneId] = useState('');
   const [workDays, setWorkDays] = useState([]);
   const [truckId, setTruckId] = useState('');
@@ -310,9 +316,9 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
     const sp = startPayload(startPt);
     if (!sp) { setError(t('subzone.startInvalid')); return; }
     try {
-      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
+      await createRoute.mutateAsync({ group_id: groupId, code: code.trim(), name: name.trim() || null, collector_user_id: collectorId ? parseInt(collectorId, 10) : null, cashier_user_id: cashierId ? parseInt(cashierId, 10) : null, group_zone_id: zoneId ? parseInt(zoneId, 10) : null, work_days: workDays, truck_id: truckId ? parseInt(truckId, 10) : null, ...sp });
       toast.success(t('fin.m.created', undefined, { number: code }));
-      setCode(''); setName(''); setCollectorId(''); setZoneId(''); setWorkDays([]); setTruckId(''); setStartPt({ lat: '', lng: '' }); setError('');
+      setCode(''); setName(''); setCollectorId(''); setCashierId(''); setZoneId(''); setWorkDays([]); setTruckId(''); setStartPt({ lat: '', lng: '' }); setError('');
       onClose();
     } catch (err) {
       setError(err.message || t('common.somethingWrong'));
@@ -342,6 +348,7 @@ function RouteFormModal({ open, onClose, groupId, zones, districtId }) {
         </label>
         <ZoneSelect value={zoneId} onChange={setZoneId} zones={zones} />
         <CollectorSelect value={collectorId} onChange={setCollectorId} />
+        <CashierSelect value={cashierId} onChange={setCashierId} />
         <WorkDaysPicker value={workDays} onChange={setWorkDays} required={!!collectorId} />
         <TruckSelect value={truckId} onChange={setTruckId} districtId={districtId} />
         <StartPointInput value={startPt} onChange={setStartPt} />
@@ -538,6 +545,35 @@ function CollectorSelect({ value, onChange, current }) {
         <option value="">{t('group.unassigned', 'Unassigned')}</option>
         {collectors.map((u) => <option key={u.id} value={String(u.id)}>{label(u)}</option>)}
       </select>
+    </label>
+  );
+}
+
+// Cashier responsible for a Sub Zone's money (Cashout V2). Same rules as
+// the collector selector: active cashiers listed, an inactive current one
+// kept visible; read-only for non-admins (GET /v2/users is admin-only).
+function CashierSelect({ value, onChange, current }) {
+  const { t } = useI18n();
+  const isAdmin = (useAuth().user?.role || '').toLowerCase() === 'admin';
+  const { data } = useUsers(isAdmin);
+  const cashiers = (data?.data || []).filter((u) => (u.role || '').toLowerCase() === 'cashier' && (u.is_active || String(u.id) === value));
+  const label = (u) => u.full_name || u.name || u.username || u.email || `#${u.id}`;
+  if (!isAdmin) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('subzone.cashier', 'Cashier')}</span>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{current?.cashier_name || t('group.unassigned', 'Unassigned')}</span>
+      </div>
+    );
+  }
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 700 }}>{t('subzone.cashier', 'Cashier')}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={inputStyle}>
+        <option value="">{t('group.unassigned', 'Unassigned')}</option>
+        {cashiers.map((u) => <option key={u.id} value={String(u.id)}>{label(u)}{u.zone ? ` — ${u.zone}` : ''}</option>)}
+      </select>
+      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t('subzone.cashierHint')}</span>
     </label>
   );
 }

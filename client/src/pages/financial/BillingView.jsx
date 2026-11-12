@@ -292,7 +292,7 @@ function PaymentPanel({ invoiceId, onRecorded, onClose, closeDisabled }) {
     setFormError('');
     if (paidNum <= 0 && debtNum <= 0) { setFormError(t('fr.pay.enterAmount')); return; }
     if (paidNum < 0 || debtNum < 0) { setFormError(t('fin.amounts_cannot_be_negative')); return; }
-    if (method === 'zaad' && paidNum > 0 && !reference.trim()) { setFormError(t('fr.pay.referenceRequired')); return; }
+    if ((method === 'zaad' || method === 'edahab') && paidNum > 0 && !reference.trim()) { setFormError(t('fr.pay.referenceRequired')); return; }
     let paidDone = false;
     try {
       // Two rows, one user action — the server still enforces each one
@@ -300,7 +300,7 @@ function PaymentPanel({ invoiceId, onRecorded, onClose, closeDisabled }) {
       if (paidNum > 0) {
         await recordPayment.mutateAsync({
           invoice_id: invoiceId, amount: paidNum, currency, method,
-          ...(method === 'zaad' ? { reference_code: reference.trim() } : {}),
+          ...(method === 'zaad' || method === 'edahab' ? { reference_code: reference.trim() } : {}),
         });
         paidDone = true;
         setAmountPaid('');
@@ -497,6 +497,14 @@ function PaymentPanel({ invoiceId, onRecorded, onClose, closeDisabled }) {
                     <input className="fin-input" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={50} required={paidNum > 0} />
                   </label>
                   <button type="button" className="fin-linkbtn" onClick={() => { setZaadManual(false); setFormError(''); clearAmounts(); }}>{t('fr.zaad.useRequest')}</button>
+                </div>
+              )}
+              {method === 'edahab' && (
+                <div className="fin-zaad-box">
+                  <label className="fin-field">
+                    <span>{t('co2.pay.edahabRef')}</span>
+                    <input className="fin-input" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={50} required={paidNum > 0} />
+                  </label>
                 </div>
               )}
               <label className="fin-field">

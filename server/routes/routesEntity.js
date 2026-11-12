@@ -71,9 +71,11 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     const result = await pool.query(
       `SELECT r.*, g.code AS group_code, g.zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
         u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate,
+        COALESCE(cu.full_name, cu.username) AS cashier_name, cu.is_active AS cashier_active,
         (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count
        FROM routes r JOIN groups g ON r.group_id = g.id
        LEFT JOIN v2_users u ON u.id = r.collector_user_id
+       LEFT JOIN v2_users cu ON cu.id = r.cashier_user_id
        LEFT JOIN group_zones gz ON gz.id = r.group_zone_id
        LEFT JOIN trucks tk ON tk.id = r.truck_id
        ${whereSql} ORDER BY g.code, r.code`,
@@ -91,8 +93,10 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
   if (id === null) return res.status(400).json({ error: { message: 'Invalid route id.', code: 'VALIDATION' } });
   try {
     const result = await pool.query(
-      `SELECT r.*, g.code AS group_code, g.zone_id, u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate
+      `SELECT r.*, g.code AS group_code, g.zone_id, u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate,
+              COALESCE(cu.full_name, cu.username) AS cashier_name, cu.is_active AS cashier_active
        FROM routes r JOIN groups g ON r.group_id = g.id LEFT JOIN v2_users u ON u.id = r.collector_user_id
+       LEFT JOIN v2_users cu ON cu.id = r.cashier_user_id
        LEFT JOIN trucks tk ON tk.id = r.truck_id WHERE r.id = $1`,
       [id]
     );
@@ -132,6 +136,15 @@ function validateRouteInput(body, { partial = false } = {}) {
       const cid = parseStrictId(String(body.collector_user_id));
       if (cid === null) errors.push('collector_user_id must be a valid user id or null.');
       else out.collector_user_id = cid;
+    }
+  }
+  // Cashout V2: the cashier responsible for this Sub Zone's money.
+  if (body.cashier_user_id !== undefined) {
+    if (body.cashier_user_id === null) out.cashier_user_id = null;
+    else {
+      const cid = parseStrictId(String(body.cashier_user_id));
+      if (cid === null) errors.push('cashier_user_id must be a valid user id or null.');
+      else out.cashier_user_id = cid;
     }
   }
   if (body.work_days !== undefined) {
@@ -216,6 +229,17 @@ async function collectorError(collectorId, groupZoneId) {
   return null;
 }
 
+// Cashier of a Sub Zone: an ACTIVE user with the cashier role who works in
+// the same district (same scope rule as the collector).
+async function cashierError(cashierId, groupZoneId) {
+  if (cashierId === undefined || cashierId === null) return null;
+  const r = await pool.query(
+    'SELECT u.role, u.is_active, z.id AS zone_id FROM v2_users u LEFT JOIN zones z ON z.name = u.zone WHERE u.id = $1', [cashierId]);
+  if (r.rows.length === 0 || r.rows[0].role !== 'cashier' || !r.rows[0].is_active) return 'cashier_user_id must reference an active user with the cashier role.';
+  if (r.rows[0].zone_id === null || Number(r.rows[0].zone_id) !== Number(groupZoneId)) return 'That cashier does not work in this district.';
+  return null;
+}
+
 // POST /api/v2/routes — admin, gudoomiye (own zone, resolved via the
 // parent Group).
 router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res) => {
@@ -231,6 +255,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
     const capErr = await collectorCapError(data.collector_user_id, null);
     if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
+    const kErr = await cashierError(data.cashier_user_id, groupRes.rows[0].zone_id);
+    if (kErr) return res.status(400).json({ error: { message: kErr, code: 'VALIDATION' } });
     if (data.collector_user_id && !data.work_days) {
       return res.status(400).json({ error: { message: 'Work days are required for a Sub Zone with a collector.', code: 'VALIDATION' } });
     }
@@ -242,8 +268,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
 
     const result = await pool.query(
-      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id, start_lat, start_lng) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null, data.start_lat ?? null, data.start_lng ?? null]
+      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id, start_lat, start_lng, cashier_user_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null, data.start_lat ?? null, data.start_lng ?? null, data.cashier_user_id ?? null]
     );
     const route = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'route.create', entityType: 'route', entityId: route.id, before: null, after: route });
@@ -273,6 +299,8 @@ router.put('/:id', authenticateToken, requireRole(...WRITE_ROLES), async (req, r
     }
     const cErr = await collectorError(data.collector_user_id, current.zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
+    const kErr = data.cashier_user_id !== undefined && data.cashier_user_id === current.cashier_user_id ? null : await cashierError(data.cashier_user_id, current.zone_id);
+    if (kErr) return res.status(400).json({ error: { message: kErr, code: 'VALIDATION' } });
     const capErr = data.collector_user_id !== undefined && data.collector_user_id === current.collector_user_id ? null : await collectorCapError(data.collector_user_id, id);
     if (capErr) return res.status(400).json({ error: { message: capErr, code: 'VALIDATION' } });
     const gzErr = data.group_zone_id !== undefined && data.group_zone_id === current.group_zone_id ? null : await groupZoneError(data.group_zone_id, current.group_id);

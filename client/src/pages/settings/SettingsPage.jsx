@@ -5,6 +5,7 @@ import { useCompanySettings, useUpdateCompanySettings, useUpdateCompanyLogo } fr
 import { apiClient } from '../../lib/apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import DebtSuspensionSettingsCard from './DebtSuspensionSettingsCard.jsx';
+import CashoutSettingsCard from './CashoutSettingsCard.jsx';
 
 // System Settings — Phase 1 (Company Settings). Admin-only (Sidebar/router
 // gate this page; the backend independently re-enforces it — frontend
@@ -154,6 +155,7 @@ export default function SettingsPage() {
 
       <OperationsCard settings={settings} />
       <DebtSuspensionSettingsCard />
+      <CashoutSettingsCard />
     </div>
   );
 }
