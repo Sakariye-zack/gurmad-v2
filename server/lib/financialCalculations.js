@@ -104,6 +104,44 @@ async function getInvoiceBalance(invoiceId, client = pool) {
   return { status: inv.status, currency, paid, outstanding, netTotal, ...dualBlocks(currency, paid, outstanding, netTotal, rate) };
 }
 
+// Set-based twin of getInvoiceBalance for MANY invoices in one query (Billing
+// workspace list). Same rules, expressed once in SQL: recorded payments only
+// (reversed excluded), method='debt' rows INCLUDED exactly like
+// paidInInvoiceCurrency without excludeDebt; USD invoice = SUM(amount_usd);
+// SLSH invoice = SUM(frozen amount_invoice_currency, legacy fallback: SLSH
+// face amount, else amount_usd x (payment's own rate, else the current
+// rate)). The current rate is read once. Returns Map id -> balance object
+// identical in shape to getInvoiceBalance's. Covered by a parity test
+// (financeRedesign.test.js) against getInvoiceBalance.
+async function getInvoiceBalancesBulk(invoiceIds, client = pool) {
+  const out = new Map();
+  if (!invoiceIds.length) return out;
+  const rate = await getCurrentExchangeRate(client);
+  const curRate = rate ? parseFloat(rate.rate) : null;
+  const r = await client.query(
+    `SELECT i.id, i.status, CASE WHEN i.currency = 'SLSH' THEN 'SLSH' ELSE 'USD' END AS currency,
+            i.invoice_total, i.discount_amount,
+            COALESCE(SUM(
+              CASE WHEN p.id IS NULL THEN 0
+                   WHEN i.currency = 'SLSH' THEN COALESCE(p.amount_invoice_currency,
+                        CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $2::numeric) END)
+                   ELSE p.amount_usd END), 0) AS paid
+     FROM invoices i
+     LEFT JOIN payments p ON p.invoice_id = i.id AND p.status = 'recorded'
+     LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
+     WHERE i.id = ANY($1::int[])
+     GROUP BY i.id`,
+    [invoiceIds, curRate]
+  );
+  for (const row of r.rows) {
+    const netTotal = parseFloat(row.invoice_total) - parseFloat(row.discount_amount);
+    const paid = parseFloat(row.paid);
+    const outstanding = Math.max(netTotal - paid, 0);
+    out.set(row.id, { status: row.status, currency: row.currency, paid, outstanding, netTotal, ...dualBlocks(row.currency, paid, outstanding, netTotal, rate) });
+  }
+  return out;
+}
+
 // The single currently-effective exchange rate (OD-3): the row with the
 // latest effective_from <= now. Never re-reads for a historical payment —
 // only ever called when recording a NEW payment.
@@ -114,4 +152,4 @@ async function getCurrentExchangeRate(client = pool) {
   return r.rows[0] || null;
 }
 
-module.exports = { recalculateInvoiceStatus, getInvoiceBalance, getCurrentExchangeRate, paidInInvoiceCurrency, dualBlocks, EPSILON };
+module.exports = { recalculateInvoiceStatus, getInvoiceBalance, getInvoiceBalancesBulk, getCurrentExchangeRate, paidInInvoiceCurrency, dualBlocks, EPSILON };

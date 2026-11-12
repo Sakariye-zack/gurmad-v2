@@ -1,7 +1,8 @@
 const express = require('express');
 const { pool, logAudit } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { getInvoiceBalance } = require('../lib/financialCalculations');
+const { getInvoiceBalance, getInvoiceBalancesBulk } = require('../lib/financialCalculations');
+const { zaadStateFor } = require('../lib/zaadAttempts');
 const { buildInvoiceDocx } = require('../lib/documentGenerators');
 const { generateInvoiceNumber, insertInvoice } = require('../lib/invoiceInsert');
 const autoBilling = require('../lib/autoBilling');
@@ -96,6 +97,56 @@ router.post('/auto-billing/run', authenticateToken, requireRole('admin'), async 
   }
 });
 
+// Billing workspace (?open=1): unpaid/partial invoices, paginated
+// (page, page_size default 100, max 500) with optional status / currency
+// filters. ?with_balance=1 attaches each invoice's balance from ONE
+// set-based query (getInvoiceBalancesBulk — same rules as getInvoiceBalance)
+// and meta.summary (counts + still-owed per currency over every open invoice
+// in scope, ignoring the status/currency filters). Each row also carries the
+// ZAAD push state (zaad_in_progress / zaad_blocked_until).
+async function listOpenInvoices(req, res, where, params) {
+  const base = [...where, `invoices.status IN ('unpaid', 'partial')`];
+  const idRows = (await pool.query(
+    `SELECT invoices.id, invoices.status, CASE WHEN invoices.currency = 'SLSH' THEN 'SLSH' ELSE 'USD' END AS currency
+     FROM invoices JOIN customers ON invoices.customer_id = customers.id
+     WHERE ${base.join(' AND ')} ORDER BY invoices.created_at DESC, invoices.id DESC`,
+    params
+  )).rows;
+  const withBalance = req.query.with_balance === '1';
+  const balances = withBalance ? await getInvoiceBalancesBulk(idRows.map((r) => r.id)) : new Map();
+  const statusF = ['unpaid', 'partial'].includes(req.query.status) ? req.query.status : null;
+  const curF = ['USD', 'SLSH'].includes(String(req.query.currency || '').toUpperCase()) ? String(req.query.currency).toUpperCase() : null;
+  const filtered = idRows.filter((r) => (!statusF || r.status === statusF) && (!curF || r.currency === curF));
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.min(500, Math.max(1, parseInt(req.query.page_size, 10) || 100));
+  const pageIds = filtered.slice((page - 1) * pageSize, page * pageSize).map((r) => r.id);
+  const rows = pageIds.length ? (await pool.query(
+    `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone,
+            customers.whatsapp AS customer_whatsapp, customers.alternate_phone AS customer_alternate_phone, ${CUSTOMER_PATH_SQL} AS customer_path
+     FROM invoices JOIN customers ON invoices.customer_id = customers.id
+     ${CUSTOMER_PATH_JOINS}
+     WHERE invoices.id = ANY($1::int[]) ORDER BY invoices.created_at DESC, invoices.id DESC`,
+    [pageIds]
+  )).rows : [];
+  const zaad = await zaadStateFor(pageIds);
+  for (const row of rows) {
+    if (withBalance) row.balance = balances.get(row.id) || null;
+    const z = zaad.get(row.id);
+    row.zaad_in_progress = !!(z && z.in_progress);
+    row.zaad_blocked_until = (z && z.blocked_until) || null;
+  }
+  const meta = { total: filtered.length, page, page_size: pageSize };
+  if (withBalance) {
+    const summary = { count: idRows.length, unpaid: 0, partial: 0, owed: { USD: 0, SLSH: 0 } };
+    for (const r of idRows) {
+      summary[r.status] += 1;
+      summary.owed[r.currency] += balances.get(r.id)?.outstanding || 0;
+    }
+    meta.summary = summary;
+  }
+  return res.json({ data: rows, meta });
+}
+
 // GET / — list, zone-scoped via the customer's own zone_id (invoices have
 // no zone_id of their own; joining to customers is the same pattern the
 // reference system uses via c.zone).
@@ -108,7 +159,8 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
       params.push(myZoneId);
       where.push(`customers.zone_id = $${params.length}`);
     }
-    if (req.query.status) {
+    const openMode = req.query.open === '1';
+    if (req.query.status && !openMode) {
       params.push(req.query.status);
       where.push(`invoices.status = $${params.length}`);
     }
@@ -129,8 +181,7 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
         where.push(`(invoices.invoice_number ILIKE $${i} OR customers.name ILIKE $${i} OR customers.customer_number ILIKE $${i} OR invoices.customer_number_snapshot ILIKE $${i})`);
       }
     }
-    // Billing workspace (finance redesign): ?open=1 limits to unpaid/partial.
-    if (req.query.open === '1') where.push(`invoices.status IN ('unpaid', 'partial')`);
+    if (openMode) return await listOpenInvoices(req, res, where, params);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT invoices.*, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number, customers.phone AS customer_phone,
@@ -140,15 +191,6 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
        ${whereSql} ORDER BY invoices.created_at DESC`,
       params
     );
-    // ?with_balance=1 (only together with open=1, to bound the work): the
-    // authoritative read-only balance (getInvoiceBalance) per open invoice,
-    // so the Billing cards can show what is still owed. No figure is derived here.
-    if (req.query.with_balance === '1' && req.query.open === '1') {
-      const rows = result.rows;
-      for (let k = 0; k < rows.length; k += 8) {
-        await Promise.all(rows.slice(k, k + 8).map(async (row) => { row.balance = await getInvoiceBalance(row.id); }));
-      }
-    }
     res.json({ data: result.rows });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to list invoices.', code: 'INTERNAL' } });
@@ -200,8 +242,10 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
       visit = v.rows[0] || null;
     }
 
+    const zs = (await zaadStateFor([id])).get(id);
     const out = {
       ...invoice, balance, payments: payments.rows, debt: debt.rows[0] || null, visit,
+      zaad_in_progress: !!(zs && zs.in_progress), zaad_blocked_until: (zs && zs.blocked_until) || null,
       company: { name: co.company_name || 'GURMAD', address: co.address || null, phone: co.phone || null, email: co.email || null },
     };
     if (invoice.billing_period) out.worked_days = await getWorkedDays(invoice.customer_id, invoice.billing_period, await autoBilling.getTimezone());

@@ -623,7 +623,6 @@ router.get('/invoices/:id/preview', authenticateCustomerPortal, async (req, res)
 // Payments are recorded with cashier_id NULL, channel 'portal_zaad' and an
 // audit actor of 'portal:<customer_number>'.
 // ==================================================================
-const { GATEWAY_TIMEOUT_MS } = require('../lib/zaadService');
 // Canonical international form for comparing / counting numbers
 // (0XXXXXXXX, XXXXXXXX and 252XXXXXXXX are the same number).
 function canonicalPhone(raw) {
@@ -632,14 +631,16 @@ function canonicalPhone(raw) {
   return '252' + (d.startsWith('0') ? d.slice(1) : d);
 }
 
-const ZAAD_INFLIGHT = new Set(); // invoice ids with a request in flight in this process
+// In-flight lock, attempt bookkeeping, unknown-outcome alerts and the stale
+// sweep are shared with the staff flow (lib/zaadAttempts.js) so a portal and
+// a staff attempt on the same invoice exclude each other.
+const {
+  ZAAD_INFLIGHT, ZAAD_UNKNOWN_BLOCK_MIN, PORTAL_ZAAD_CHANNEL, fmtAmt,
+  finishZaadAttempt, notifyAdmins, flagUnknownAttempt, sweepStaleZaadAttempts,
+} = require('../lib/zaadAttempts');
 const ZAAD_RATE_MAX = 5;
 const ZAAD_PHONE_RATE_MAX = 3;
 const ZAAD_RATE_WINDOW_MIN = 10;
-// >= 2x the gateway timeout: a pending row older than this cannot still be in flight.
-const ZAAD_STALE_MIN = Math.max(5, Math.ceil((2 * GATEWAY_TIMEOUT_MS) / 60000));
-const ZAAD_UNKNOWN_BLOCK_MIN = 15;
-const PORTAL_ZAAD_CHANNEL = 'portal_zaad';
 const ZAAD_ADVISORY_NS = 7390; // advisory-lock namespace for portal ZAAD attempts
 
 // Fixed customer-facing messages per code: raw gateway text is never shown.
@@ -661,57 +662,7 @@ const ZAAD_MSG = {
   INTERNAL: 'Payment could not be processed.',
 };
 
-const fmtAmt = (n, cur) => (cur === 'SLSH' ? `${Math.round(n).toLocaleString('en-US')} SLSH` : `$${Number(n).toFixed(2)}`);
 const zaadErr = (res, status, code, msgKey = code) => res.status(status).json({ error: { message: ZAAD_MSG[msgKey], code } });
-
-async function finishZaadAttempt(id, status, fields = {}) {
-  await pool.query(
-    `UPDATE portal_zaad_attempts SET status = $2, transaction_id = $3, payment_id = $4, error_code = $5, finished_at = NOW() WHERE id = $1`,
-    [id, status, fields.transactionId || null, fields.paymentId || null, fields.errorCode || null]
-  ).catch(() => {});
-}
-
-async function notifyAdmins({ title, body, invoiceId }) {
-  try {
-    const admins = await pool.query(`SELECT id FROM v2_users WHERE role = 'admin' AND is_active = TRUE`);
-    for (const a of admins.rows) {
-      await createStaffNotification({ recipientId: a.id, eventType: 'payment.zaad_reconciliation', title, body, entityType: 'invoice', entityId: invoiceId });
-    }
-  } catch (e) {
-    logNotificationFailure('portal_zaad_reconciliation', e);
-  }
-}
-
-// Unknown outcome: audit + admin alert. `attempt` is a portal_zaad_attempts row
-// (or the same fields), joined with invoice_number / customer_number.
-async function flagUnknownAttempt(attempt, reason) {
-  const { logAudit } = require('../db');
-  await logAudit({
-    actorId: null, actorUsername: `portal:${attempt.customer_number}`.slice(0, 50), action: 'payment.zaad_reconciliation_required',
-    entityType: 'invoice', entityId: attempt.invoice_id, before: null,
-    after: { invoice_id: attempt.invoice_id, amount: Number(attempt.amount), currency: attempt.currency, target_phone: attempt.phone, attempt_id: attempt.id, reference: attempt.reference, channel: PORTAL_ZAAD_CHANNEL, outcome: 'unknown', reason },
-  }).catch(() => {});
-  await notifyAdmins({
-    invoiceId: attempt.invoice_id,
-    title: `ZAAD payment outcome unknown — ${attempt.invoice_number}`,
-    body: `Customer ${attempt.customer_number} tried to pay ${fmtAmt(attempt.amount, attempt.currency)} via ZAAD in the customer portal (attempt ${attempt.id}, reference ${attempt.reference}, phone ${attempt.phone}) but the result could not be confirmed (${reason}). Check the merchant account; if the money arrived, record it manually against the invoice.`,
-  });
-}
-
-// Pending attempts older than the stale window -> unknown + alert. Runs on
-// every pay request and once at boot (index.js).
-async function sweepStaleZaadAttempts() {
-  const r = await pool.query(
-    `UPDATE portal_zaad_attempts a SET status = 'unknown', error_code = 'STALE', finished_at = NOW()
-     FROM invoices i, customers c
-     WHERE a.status = 'pending' AND a.created_at < NOW() - make_interval(mins => $1)
-       AND i.id = a.invoice_id AND c.id = a.customer_id
-     RETURNING a.*, i.invoice_number, c.customer_number`,
-    [ZAAD_STALE_MIN]
-  );
-  for (const row of r.rows) await flagUnknownAttempt(row, 'pending attempt went stale');
-  return r.rows.length;
-}
 
 const registeredPhones = (c) => [c.phone, c.alternate_phone, c.whatsapp]
   .map((p) => String(p || '').replace(/\D/g, ''))
@@ -788,7 +739,7 @@ router.post('/invoices/:id/pay-zaad', authenticateCustomerPortal, async (req, re
            COUNT(*) FILTER (WHERE customer_id = $1)::int AS by_customer,
            COUNT(*) FILTER (WHERE phone = $2)::int AS by_phone
          FROM portal_zaad_attempts
-         WHERE (customer_id = $1 OR phone = $2) AND created_at > NOW() - make_interval(mins => $3)
+         WHERE source = 'portal' AND (customer_id = $1 OR phone = $2) AND created_at > NOW() - make_interval(mins => $3)
            AND COALESCE(error_code, '') <> 'NOT_CONFIGURED'`,
         [req.customerId, phoneKey, ZAAD_RATE_WINDOW_MIN]
       )).rows[0];

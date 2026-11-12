@@ -8,6 +8,7 @@ const zaadService = require('../lib/zaadService');
 const debtSuspension = require('../lib/debtSuspension');
 const autoBilling = require('../lib/autoBilling');
 const { toCsv } = require('../lib/csvImportExport');
+const zaadAttempts = require('../lib/zaadAttempts');
 
 const router = express.Router();
 
@@ -45,6 +46,13 @@ class PaymentError extends Error {
   }
 }
 
+// Amount precision (finance redesign fix round): SLSH has no subunit, USD
+// has cents. Returns an error message or null.
+function amountPrecisionError(amt, cur) {
+  if (cur === 'SLSH') return Number.isInteger(amt) ? null : 'SLSH amounts must be whole numbers.';
+  return Math.abs(amt * 100 - Math.round(amt * 100)) < 1e-6 ? null : 'USD amounts can have at most 2 decimals.';
+}
+
 const SLSH_TOLERANCE_USD = 0.005; // half a cent, expressed in SLSH via the rate
 
 const fmtMoney = (cur, n) => cur === 'SLSH' ? `${Math.round(n).toLocaleString('en-US')} SLSH` : `$${n.toFixed(2)}`;
@@ -78,14 +86,18 @@ function sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate }) {
 // gateway call). Returns null when OK, else { status, code, message }.
 async function precheckPayment(client, invoice, { amt, cur }) {
   const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
-  if (invCur === 'USD' && cur !== 'USD') return null; // rate-converted amount only known at record time
-  const rate = invCur === 'SLSH' && cur === 'USD' ? await getCurrentExchangeRate(client) : null;
-  if (invCur === 'SLSH' && cur === 'USD' && !rate) {
-    return { status: 409, code: 'NO_EXCHANGE_RATE', message: 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.' };
+  // A cross-currency payment needs the current rate in both directions: USD
+  // on a SLSH invoice is sized in SLSH; SLSH on a USD invoice is converted to
+  // USD exactly as recordPaymentCore does (amt / rate) — checked BEFORE any
+  // gateway call so an overpaying push never reaches the customer's phone.
+  const rate = cur !== invCur ? await getCurrentExchangeRate(client) : null;
+  if (cur !== invCur && !rate) {
+    return { status: 409, code: 'NO_EXCHANGE_RATE', message: `No exchange rate is configured — cannot apply a ${cur} payment to a ${invCur} invoice.` };
   }
+  const amountUsd = cur === 'SLSH' && invCur === 'USD' ? amt / parseFloat(rate.rate) : amt;
   const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
-  const outstanding = netTotal - await paidInInvoiceCurrency(invoice.id, invCur, client, { rate });
-  const sized = sizePayment({ invCur, cur, amt, amountUsd: amt, outstanding, rate });
+  const outstanding = netTotal - await paidInInvoiceCurrency(invoice.id, invCur, client, { rate: invCur === 'SLSH' ? rate : undefined });
+  const sized = sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate });
   if (sized.error) {
     return { status: 409, code: sized.error.code, message: sized.error.message || `Amount exceeds outstanding balance. Outstanding: ${fmtMoney(invCur, outstanding)}.` };
   }
@@ -263,11 +275,25 @@ const reconciliationMessage = (txId, reason) =>
 // and reversed rows.
 // ---------------------------------------------------------------------
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const validDate = (d) => DATE_RE.test(String(d)) && !isNaN(new Date(d + 'T00:00:00Z').getTime()) && new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) === d;
 const TX_METHODS = ['cash', 'zaad', 'edahab', 'slsh', 'debt'];
-const LOCAL_TS = `(p.created_at AT TIME ZONE 'UTC' AT TIME ZONE $1)`;
+// payments.created_at is a naive TIMESTAMP written by CURRENT_TIMESTAMP, i.e.
+// in the DB session's timezone (UTC in production, EAT on some dev hosts).
+// Both expressions below go through the session timezone, so they are right
+// whatever it is.
+const LOCAL_TS = `(p.created_at::timestamptz AT TIME ZONE $1)`;
+// Sargable date bounds: local (company-timezone) midnight of a YYYY-MM-DD
+// parameter, as a naive timestamp comparable with payments.created_at, so
+// filters hit idx_payments_created_at.
+const localMidnight = (expr) => `((((${expr})::date)::timestamp AT TIME ZONE $1)::timestamp)`;
+const ZONE_SCOPED_TX_ROLES = ['gudoomiye', 'zone_accountant'];
+const TX_CSV_MAX_ROWS = 20000;
 
 async function txScope(user, params, where) {
   const myZoneId = await resolveUserZoneId(user);
+  // Fail closed (new endpoints only): a zone-scoped role whose zone is
+  // missing or unresolvable sees nothing, never everything.
+  if (myZoneId === null && ZONE_SCOPED_TX_ROLES.includes((user.role || '').toLowerCase())) where.push('FALSE');
   if (myZoneId !== null) { params.push(myZoneId); where.push(`c.zone_id = $${params.length}`); }
   if ((user.role || '').toLowerCase() === 'cashier') {
     params.push(user.id ?? -1);
@@ -286,12 +312,12 @@ async function buildTxQuery(req, { withFilters = true } = {}) {
   if (!withFilters) return { tz, params, where };
   const q = req.query;
   if (q.date_from) {
-    if (!DATE_RE.test(q.date_from)) return { error: 'date_from must be YYYY-MM-DD.' };
-    params.push(q.date_from); where.push(`${LOCAL_TS}::date >= $${params.length}::date`);
+    if (!validDate(q.date_from)) return { error: 'date_from must be YYYY-MM-DD.' };
+    params.push(q.date_from); where.push(`p.created_at >= ${localMidnight(`$${params.length}`)}`);
   }
   if (q.date_to) {
-    if (!DATE_RE.test(q.date_to)) return { error: 'date_to must be YYYY-MM-DD.' };
-    params.push(q.date_to); where.push(`${LOCAL_TS}::date <= $${params.length}::date`);
+    if (!validDate(q.date_to)) return { error: 'date_to must be YYYY-MM-DD.' };
+    params.push(q.date_to); where.push(`p.created_at < ${localMidnight(`$${params.length}::date + 1`)}`);
   }
   if (q.method) {
     if (!TX_METHODS.includes(q.method)) return { error: `method must be one of: ${TX_METHODS.join(', ')}.` };
@@ -388,8 +414,8 @@ router.get('/transactions/summary', authenticateToken, requireRole(...VIEW_ROLES
     const todayP = [...base.params, today.date];
     const monthP = [...base.params, today.period];
     const [t, m, f] = await Promise.all([
-      aggregate(todayP, [...base.where, `${LOCAL_TS}::date = $${todayP.length}::date`]),
-      aggregate(monthP, [...base.where, `to_char(${LOCAL_TS}, 'YYYY-MM') = $${monthP.length}`]),
+      aggregate(todayP, [...base.where, `p.created_at >= ${localMidnight(`$${todayP.length}`)}`, `p.created_at < ${localMidnight(`$${todayP.length}::date + 1`)}`]),
+      aggregate(monthP, [...base.where, `p.created_at >= ${localMidnight(`$${monthP.length} || '-01'`)}`, `p.created_at < ${localMidnight(`($${monthP.length} || '-01')::date + interval '1 month'`)}`]),
       aggregate(built.params, built.where),
     ]);
     res.json({ data: { today: t, month: m, filtered: f, date: today.date, period: today.period, timezone: base.tz } });
@@ -405,7 +431,11 @@ router.get('/transactions.csv', authenticateToken, requireRole(...VIEW_ROLES), a
     if (built.error) return badTx(res, built.error);
     const rows = (await pool.query(
       `SELECT ${TX_COLS}, to_char(${LOCAL_TS}, 'YYYY-MM-DD HH24:MI') AS local_time
-       ${TX_FROM} ${whereSql(built.where)} ORDER BY p.created_at DESC, p.id DESC LIMIT 20000`, built.params)).rows;
+       ${TX_FROM} ${whereSql(built.where)} ORDER BY p.created_at DESC, p.id DESC LIMIT ${TX_CSV_MAX_ROWS + 1}`, built.params)).rows;
+    // Never hand out a silently truncated export: over the cap -> 413.
+    if (rows.length > TX_CSV_MAX_ROWS) {
+      return res.status(413).json({ error: { message: `More than ${TX_CSV_MAX_ROWS.toLocaleString('en-US')} transactions match — narrow the date range or filters and export again.`, code: 'TOO_MANY_ROWS' } });
+    }
     const columns = [
       { key: 'local_time', label: 'Date' }, { key: 'invoice_number', label: 'Invoice' },
       { key: 'customer_number', label: 'Customer #' }, { key: 'customer_name', label: 'Customer' },
@@ -459,11 +489,17 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
   const cur = (currency || 'USD').toUpperCase();
   if (!['USD', 'SLSH'].includes(cur)) return res.status(400).json({ error: { message: 'currency must be USD or SLSH.', code: 'VALIDATION' } });
   if (!VALID_METHODS.includes(method)) return res.status(400).json({ error: { message: `method must be one of: ${VALID_METHODS.join(', ')}.`, code: 'VALIDATION' } });
+  const precision = amountPrecisionError(amt, cur);
+  if (precision) return res.status(400).json({ error: { message: precision, code: 'VALIDATION' } });
+  const ref = reference_code === undefined || reference_code === null ? '' : String(reference_code).trim();
+  if (ref.length > 50) return res.status(400).json({ error: { message: 'reference_code can be at most 50 characters.', code: 'VALIDATION' } });
+  // A manually recorded ZAAD payment must carry the ZAAD transaction code.
+  if (method === 'zaad' && !ref) return res.status(400).json({ error: { message: 'reference_code (the ZAAD transaction code) is required for a ZAAD payment.', code: 'VALIDATION' } });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { payment, recalculated, invoice } = await recordPaymentCore(client, req.user, { invoiceId, amt, cur, method, referenceCode: reference_code });
+    const { payment, recalculated, invoice } = await recordPaymentCore(client, req.user, { invoiceId, amt, cur, method, referenceCode: ref || null });
     await client.query('COMMIT');
     // F3: a debt-suspended customer whose balance is now cleared is reactivated (best-effort, never fails the payment).
     await debtSuspension.afterPayment(invoice.customer_id);
@@ -472,6 +508,7 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
   } catch (err) {
     await client.query('ROLLBACK');
     if (err instanceof PaymentError) return res.status(err.status).json({ error: { message: err.message, code: err.code } });
+    if (err && err.code === '23505') return res.status(409).json({ error: { message: 'A ZAAD payment with this transaction code is already recorded.', code: 'DUPLICATE_REFERENCE' } });
     res.status(500).json({ error: { message: 'Failed to record payment.', code: 'INTERNAL' } });
   } finally {
     client.release();
@@ -504,26 +541,37 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
 // generic 500. A human must record that payment manually (via POST /
 // with method=zaad and the given reference code) once the invoice's
 // current state is reviewed.
+//
+// Per-invoice guard (finance redesign fix round), shared with the customer
+// portal through lib/zaadAttempts.js: one pending attempt per invoice across
+// BOTH flows (in-process lock + partial unique index), 409 ZAAD_IN_PROGRESS
+// while one is pending, 409 PAYMENT_UNCONFIRMED for 15 minutes after an
+// unknown outcome or a reconciliation-required one, a per-attempt WAAFI
+// reference (<invoice_number>-A<attemptId>), and every unknown outcome is
+// audited + notified to admins.
 router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), async (req, res) => {
   const { invoice_id, phone, amount, currency } = req.body;
   const invoiceId = parseStrictId(String(invoice_id ?? ''));
   if (invoiceId === null) return res.status(400).json({ error: { message: 'invoice_id is required.', code: 'VALIDATION' } });
   const phoneDigits = String(phone || '').replace(/\D/g, '');
-  if (phoneDigits.length < 7) return res.status(400).json({ error: { message: 'A valid phone number is required.', code: 'VALIDATION' } });
+  if (phoneDigits.length < 7 || phoneDigits.length > 15) return res.status(400).json({ error: { message: 'A valid phone number is required.', code: 'VALIDATION' } });
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: { message: 'amount must be a positive number.', code: 'VALIDATION' } });
   const cur = (currency || 'USD').toUpperCase();
   if (!['USD', 'SLSH'].includes(cur)) return res.status(400).json({ error: { message: 'currency must be USD or SLSH.', code: 'VALIDATION' } });
+  const precision = amountPrecisionError(amt, cur);
+  if (precision) return res.status(400).json({ error: { message: precision, code: 'VALIDATION' } });
 
+  let attemptId = null;
+  let locked = false;
   try {
-    // Read-only pre-check (see comment above) — not the authoritative
-    // guard, just avoids pinging WAAFI/the customer for a request
-    // certain to be rejected anyway.
+    // Read-only pre-check — not the authoritative guard, just avoids pinging
+    // WAAFI/the customer for a request certain to be rejected anyway.
     const invRes = await pool.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
     if (invRes.rows.length === 0) return res.status(404).json({ error: { message: 'Invoice not found.', code: 'NOT_FOUND' } });
     const invoice = invRes.rows[0];
     if (invoice.status === 'voided') return res.status(409).json({ error: { message: 'Cannot record a payment against a voided invoice.', code: 'CONFLICT' } });
-    const custRes = await pool.query('SELECT zone_id FROM customers WHERE id = $1', [invoice.customer_id]);
+    const custRes = await pool.query('SELECT zone_id, customer_number FROM customers WHERE id = $1', [invoice.customer_id]);
     const myZoneId = await resolveUserZoneId(req.user);
     if (myZoneId !== null && custRes.rows[0]?.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this invoice.', code: 'FORBIDDEN' } });
@@ -531,26 +579,88 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     const blocked = await precheckPayment(pool, invoice, { amt, cur });
     if (blocked) return res.status(blocked.status).json({ error: { message: blocked.message, code: blocked.code } });
 
-    const r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user });
+    if (zaadAttempts.ZAAD_INFLIGHT.has(invoiceId)) return zaadInProgress(res);
+    zaadAttempts.ZAAD_INFLIGHT.add(invoiceId);
+    locked = true;
+
+    await zaadAttempts.sweepStaleZaadAttempts();
+    const recent = await pool.query(
+      `SELECT 1 FROM portal_zaad_attempts WHERE invoice_id = $1 AND status IN ('unknown', 'reconciliation_required')
+         AND COALESCE(finished_at, created_at) > NOW() - make_interval(mins => $2) LIMIT 1`,
+      [invoiceId, zaadAttempts.ZAAD_UNKNOWN_BLOCK_MIN]
+    );
+    if (recent.rows.length) {
+      return res.status(409).json({ error: { code: 'PAYMENT_UNCONFIRMED', message: `A recent ZAAD payment on this invoice could not be confirmed. Do not send another request: an admin must check the merchant account first (blocked for ${zaadAttempts.ZAAD_UNKNOWN_BLOCK_MIN} minutes).` } });
+    }
+
+    let reference;
+    try {
+      const ins = await pool.query(
+        `INSERT INTO portal_zaad_attempts (customer_id, invoice_id, amount, currency, phone, source, staff_user_id)
+         VALUES ($1,$2,$3,$4,$5,'staff',$6) RETURNING id`,
+        [invoice.customer_id, invoiceId, amt, cur, phoneDigits, req.user.id ?? null]
+      );
+      attemptId = ins.rows[0].id;
+      reference = `${invoice.invoice_number}-A${attemptId}`;
+      await pool.query('UPDATE portal_zaad_attempts SET reference = $2 WHERE id = $1', [attemptId, reference]);
+    } catch (e) {
+      if (e.code === '23505') return zaadInProgress(res);
+      throw e;
+    }
+    const attemptRow = {
+      id: attemptId, invoice_id: invoiceId, amount: amt, currency: cur, phone: phoneDigits, reference, source: 'staff',
+      staff_user_id: req.user.id, staff_username: req.user.username, invoice_number: invoice.invoice_number, customer_number: custRes.rows[0]?.customer_number,
+    };
+    const auditExtra = { target_phone: phoneDigits, attempt_id: attemptId, reference };
+
+    let r;
+    try {
+      r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user, reference, auditExtra });
+    } catch (e) {
+      // Transport error: the request may already have reached WAAFI.
+      await zaadAttempts.finishZaadAttempt(attemptId, 'unknown', { errorCode: 'GATEWAY_ERROR' });
+      await zaadAttempts.flagUnknownAttempt(attemptRow, 'gateway transport error');
+      return res.status(502).json({ error: { message: 'Could not reach ZAAD to process this payment request. The outcome is unknown: do not send another request; an admin must check the merchant account.', code: 'GATEWAY_ERROR' } });
+    }
     if (r.kind === 'unknown') {
-      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.zaad_reconciliation_required', entityType: 'invoice', entityId: invoice.id, before: null,
-        after: { invoice_id: invoice.id, amount: amt, currency: cur, target_phone: phoneDigits, reference: invoice.invoice_number, reason: 'gateway timeout - outcome unknown' } }).catch(() => {});
+      await zaadAttempts.finishZaadAttempt(attemptId, 'unknown', { errorCode: 'UNKNOWN' });
+      await zaadAttempts.flagUnknownAttempt(attemptRow, 'gateway timeout - outcome unknown');
       return res.status(504).json({ error: { message: 'ZAAD did not answer in time, so the outcome is unknown. Check the merchant account before requesting again.', code: 'ZAAD_UNKNOWN' } });
     }
     if (r.kind === 'declined') {
-      return res.status(402).json({
-        error: { message: r.zaadResult.message, code: r.zaadResult.notConfigured ? 'NOT_CONFIGURED' : 'ZAAD_DECLINED' },
-      });
+      const code = r.zaadResult.notConfigured ? 'NOT_CONFIGURED' : 'ZAAD_DECLINED';
+      await zaadAttempts.finishZaadAttempt(attemptId, 'failed', { errorCode: code });
+      return res.status(402).json({ error: { message: r.zaadResult.message, code } });
     }
     if (r.kind === 'reconciliation') {
-      return res.status(409).json({ error: { message: reconciliationMessage(r.zaadResult.transactionId, r.error.message), code: 'RECONCILIATION_REQUIRED' } });
+      const txId = r.zaadResult.transactionId;
+      await zaadAttempts.finishZaadAttempt(attemptId, 'reconciliation_required', { transactionId: txId, errorCode: 'RECONCILIATION_REQUIRED' });
+      await zaadAttempts.notifyAdmins({
+        invoiceId,
+        title: `ZAAD payment needs reconciliation — ${invoice.invoice_number}`,
+        body: `Cashier ${req.user.username} collected ${zaadAttempts.fmtAmt(amt, cur)} via ZAAD (transaction ${txId}, attempt ${attemptId}, phone ${phoneDigits}) on invoice ${invoice.invoice_number}, but it could not be recorded: ${r.error.message}. Review the invoice and record it manually with reference code ${txId}.`,
+      });
+      return res.status(409).json({ error: { message: reconciliationMessage(txId, r.error.message), code: 'RECONCILIATION_REQUIRED', transaction_id: txId } });
     }
     const { payment, recalculated } = r;
-    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
+    await zaadAttempts.finishZaadAttempt(attemptId, 'ok', { transactionId: r.zaadResult.transactionId, paymentId: payment.id });
+    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency, attempt_reference: reference } });
   } catch (err) {
-    res.status(502).json({ error: { message: 'Could not reach ZAAD to process this payment request.', code: 'GATEWAY_ERROR' } });
+    console.error('zaad-request failed:', err && err.message);
+    if (attemptId) {
+      // Unexpected failure after the attempt row exists: never assume nothing
+      // happened at the gateway — treat as unknown so the invoice is blocked.
+      await zaadAttempts.finishZaadAttempt(attemptId, 'unknown', { errorCode: 'INTERNAL' });
+      await zaadAttempts.flagUnknownAttempt({ id: attemptId, invoice_id: invoiceId, amount: amt, currency: cur, phone: phoneDigits, source: 'staff', staff_user_id: req.user.id, staff_username: req.user.username, invoice_number: String(invoiceId) }, 'internal error').catch(() => {});
+      return res.status(502).json({ error: { message: 'The ZAAD request failed unexpectedly. The outcome is unknown: do not send another request; an admin must check the merchant account.', code: 'GATEWAY_ERROR' } });
+    }
+    res.status(500).json({ error: { message: 'Failed to process the ZAAD request.', code: 'INTERNAL' } });
+  } finally {
+    if (locked) zaadAttempts.ZAAD_INFLIGHT.delete(invoiceId);
   }
 });
+
+const zaadInProgress = (res) => res.status(409).json({ error: { code: 'ZAAD_IN_PROGRESS', message: 'A ZAAD request for this invoice is already in progress. Wait for it to finish.' } });
 
 // PUT /:id/reverse — Admin only. Preserves the original row; reversal is a
 // status flip + required actor/reason/timestamp, never a DELETE.
