@@ -6,6 +6,11 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 // customerPortal.js already does for the portal's equivalent view — no
 // new query, no duplicated calculation.
 const { getCollectionHistory } = require('../lib/reportsCalculations');
+const { getInvoiceBalancesBulk, getCurrentExchangeRate, EPSILON } = require('../lib/financialCalculations');
+const { toCsv } = require('../lib/csvImportExport'); // toCsv applies csvFormulaSafe to every cell
+const { validateDr7ForCollector } = require('../lib/collectionValidation');
+const { nationalDigits, formatPhoneLocal } = require('../lib/phone');
+const { hierarchyParts } = require('../lib/hierarchy');
 
 const router = express.Router();
 
@@ -261,97 +266,490 @@ async function assertZoneWritable(user, zoneId) {
   return myZoneId !== null && myZoneId === zoneId;
 }
 
-// GET /api/v2/customers — list, search, filter, paginate. Zone-scoped for
-// gudoomiye/zone_accountant, enforced server-side (closes the IDOR finding
-// from Discovery §25 — every route re-checks scope, not just this one).
+// ---------------------------------------------------------------------------
+// Customers list (GET /, /summary, /export.csv) — one shared query builder so
+// the list, its summary cards and the CSV always apply the same scoping and
+// filters.
+//
+// Scoping is exactly the historical one: gudoomiye/zone_accountant see their
+// own zone, every other authenticated role sees all customers. Money data
+// (balances, owes filter/totals, last payment) follows the invoice module's
+// rules instead (routes/invoices.js VIEW_ROLES + zone scope, which also
+// zone-scopes cashiers): roles outside BALANCE_ROLES never receive it, and a
+// zone-scoped cashier only gets it for customers of their own zone.
+// ---------------------------------------------------------------------------
+const BALANCE_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant'];
+const BALANCE_ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant', 'cashier'];
+const LIST_SORTS = ['customer_number', 'name', 'balance', 'created_at', 'last_payment'];
+const MONEY_SORTS = ['balance', 'last_payment'];
+const PAGE_SIZE_DEFAULT = 25;
+const PAGE_SIZE_MAX = 100;
+const CSV_MAX_ROWS = 20000;
+const BULK_MAX = 500;
+// Same "has a real location" rule as the Map page (routes/map.js).
+const HAS_LOCATION_SQL = 'COALESCE(c.lat IS NOT NULL AND c.lng IS NOT NULL AND NOT (c.lat = 0 AND c.lng = 0), FALSE)';
+// Effective work days: the customer's own override when set, else its Sub Zone's (lib/dailyLists.js rule).
+const WORK_DAYS_SQL = `CASE WHEN jsonb_typeof(c.work_days) = 'array' AND jsonb_array_length(c.work_days) > 0 THEN c.work_days ELSE rt.work_days END`;
+const LAST_PAYMENT_SQL = `(SELECT MAX(p.created_at) FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.customer_id = c.id AND p.status = 'recorded')`;
+const LIST_JOINS = `FROM customers c JOIN zones z ON c.zone_id = z.id
+       LEFT JOIN groups g ON g.id = c.group_id
+       LEFT JOIN routes rt ON rt.id = c.route_id
+       LEFT JOIN group_zones gz ON gz.id = rt.group_zone_id
+       LEFT JOIN v2_users col ON col.id = rt.collector_user_id
+       LEFT JOIN customer_portal_accounts pa ON pa.customer_id = c.id`;
+// Per-customer open balance, set-based, for FILTERING/SORTING/TOTALS only.
+// Same rules as getInvoiceBalancesBulk (lib/financialCalculations.js):
+// non-voided open invoices, recorded payments incl. method 'debt', USD
+// invoice = SUM(amount_usd), SLSH invoice = frozen amount_invoice_currency
+// with the legacy fallback at the payment's own / current rate, open when
+// outstanding > EPSILON. The per-row figures the page DISPLAYS come from
+// getInvoiceBalancesBulk itself (attachBalances below); a test asserts both
+// agree with getInvoiceBalance.
+const balanceLateral = (rateRef) => `LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(x.o) FILTER (WHERE x.cur = 'USD'), 0) AS usd,
+                COALESCE(SUM(x.o) FILTER (WHERE x.cur = 'SLSH'), 0) AS slsh,
+                COUNT(*)::int AS n
+         FROM (
+           SELECT CASE WHEN i.currency = 'SLSH' THEN 'SLSH' ELSE 'USD' END AS cur,
+                  (i.invoice_total - i.discount_amount) - COALESCE((
+                    SELECT SUM(CASE WHEN i.currency = 'SLSH'
+                                    THEN COALESCE(p.amount_invoice_currency,
+                                                  CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, ${rateRef}::numeric) END)
+                                    ELSE p.amount_usd END)
+                    FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
+                    WHERE p.invoice_id = i.id AND p.status = 'recorded'), 0) AS o
+           FROM invoices i WHERE i.customer_id = c.id AND i.status IN ('unpaid', 'partial')
+         ) x WHERE x.o > ${EPSILON}
+       ) bal ON TRUE`;
+
+async function resolveBalanceScope(user) {
+  const role = (user.role || '').toLowerCase();
+  if (!BALANCE_ROLES.includes(role)) return { allowed: false, zoneId: null };
+  // Mirrors routes/invoices.js resolveUserZoneId exactly.
+  if (!BALANCE_ZONE_SCOPED_ROLES.includes(role) || !user.zone) return { allowed: true, zoneId: null };
+  const r = await pool.query('SELECT id FROM zones WHERE name = $1', [user.zone]);
+  return { allowed: true, zoneId: r.rows[0]?.id ?? null };
+}
+
+const qerr = (status, message, code = 'VALIDATION') => ({ error: { status, body: { error: { message, code } } } });
+
+function flag(v) {
+  if (v === undefined || v === '') return null;
+  if (v === '1' || v === 'true') return true;
+  if (v === '0' || v === 'false') return false;
+  return undefined; // invalid
+}
+
+// Builds WHERE/params/joins for the list family. `mode` is 'list', 'summary'
+// or 'csv'. Returns { error } or the query parts.
+async function buildCustomerQuery(req, mode) {
+  const q = req.query;
+  const myZoneId = await resolveUserZoneId(req.user);
+  const bal = await resolveBalanceScope(req.user);
+  const where = [];
+  const params = [];
+  const ph = (v) => { params.push(v); return `$${params.length}`; };
+
+  if (myZoneId !== null) where.push(`c.zone_id = ${ph(myZoneId)}`);
+
+  // status: legacy values keep their meaning ('archived', 'all', anything
+  // else = not archived — e.g. callers passing 'active'); 'active_only' and
+  // 'suspended' are the strict filters used by the redesigned list.
+  const status = q.status;
+  if (status === 'archived') where.push(`c.status = 'archived'`);
+  else if (status === 'all') { /* no filter */ }
+  else if (status === 'active_only') where.push(`c.status = 'active'`);
+  else if (status === 'suspended') where.push(`c.status = 'suspended'`);
+  else where.push(`c.status != 'archived'`);
+
+  if (q.customer_type) {
+    if (!VALID_TYPES.includes(q.customer_type)) return qerr(400, 'Invalid customer_type filter.');
+    where.push(`c.customer_type = ${ph(q.customer_type)}`);
+  }
+  if (q.zone_id) {
+    const zid = parseStrictId(String(q.zone_id));
+    if (zid === null) return qerr(400, 'Invalid zone_id filter.');
+    if (myZoneId !== null && zid !== myZoneId) return qerr(403, 'You do not have access to that zone.', 'FORBIDDEN');
+    where.push(`c.zone_id = ${ph(zid)}`);
+  }
+  const searchTerm = q.q || q.search;
+  if (typeof searchTerm === 'string' && searchTerm.trim()) {
+    const term = searchTerm.trim();
+    const like = ph(`%${term}%`);
+    const conds = [`c.customer_number ILIKE ${like}`, `c.name ILIKE ${like}`, `c.business_name ILIKE ${like}`, `c.phone ILIKE ${like}`, `c.door_number ILIKE ${like}`];
+    // Phone typed in any style (0634..., 634..., +252 63 ...) matches however it was stored.
+    const digits = nationalDigits(term);
+    if (digits) {
+      const d = ph(`%${digits}`);
+      conds.push(`regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') LIKE ${d}`);
+      conds.push(`regexp_replace(COALESCE(c.alternate_phone, ''), '\\D', '', 'g') LIKE ${d}`);
+      conds.push(`regexp_replace(COALESCE(c.whatsapp, ''), '\\D', '', 'g') LIKE ${d}`);
+    }
+    where.push(`(${conds.join(' OR ')})`);
+  }
+  const idFilter = (name, sql) => {
+    if (!q[name]) return null;
+    const id = parseStrictId(String(q[name]));
+    if (id === null) return qerr(400, `Invalid ${name} filter.`);
+    where.push(sql(ph(id)));
+    return null;
+  };
+  for (const [name, sql] of [
+    ['group_id', (p) => `c.group_id = ${p}`],
+    ['group_zone_id', (p) => `c.route_id IN (SELECT id FROM routes WHERE group_zone_id = ${p})`],
+    ['route_id', (p) => `c.route_id = ${p}`],
+    ['collector_id', (p) => `rt.collector_user_id = ${p}`],
+  ]) {
+    const e = idFilter(name, sql);
+    if (e) return e;
+  }
+  if (q.billing_type) {
+    if (!BILLING_TYPES.includes(q.billing_type)) return qerr(400, 'Invalid billing_type filter.');
+    where.push(`c.billing_type = ${ph(q.billing_type)}`);
+  }
+  const hasLocation = flag(q.has_location);
+  if (hasLocation === undefined) return qerr(400, 'has_location must be 0 or 1.');
+  if (hasLocation !== null) where.push(hasLocation ? HAS_LOCATION_SQL : `NOT ${HAS_LOCATION_SQL}`);
+  const noSubzone = flag(q.no_subzone);
+  if (noSubzone === undefined) return qerr(400, 'no_subzone must be 0 or 1.');
+  if (noSubzone === true) where.push('c.route_id IS NULL');
+  const debt = flag(q.suspended_for_debt);
+  if (debt === undefined) return qerr(400, 'suspended_for_debt must be 0 or 1.');
+  if (debt === true) where.push(`c.status = 'suspended' AND c.suspended_reason = 'debt'`);
+  const portal = flag(q.portal);
+  if (portal === undefined) return qerr(400, 'portal must be 0 or 1.');
+  if (portal === true) where.push(`pa.status = 'active'`);
+  if (portal === false) where.push(`(pa.id IS NULL OR pa.status <> 'active')`);
+  const owes = flag(q.owes);
+  if (owes === undefined) return qerr(400, 'owes must be 0 or 1.');
+
+  let sort = null;
+  if (q.sort !== undefined && q.sort !== '') {
+    if (!LIST_SORTS.includes(q.sort)) return qerr(400, `sort must be one of: ${LIST_SORTS.join(', ')}.`);
+    sort = q.sort;
+  }
+  const dir = String(q.dir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const withBalance = mode === 'list' ? flag(q.with_balance) === true : mode === 'csv';
+
+  // Money data is refused (not silently dropped) when explicitly asked for by a role that may not see it.
+  if (!bal.allowed && ((mode === 'list' && withBalance) || owes === true || MONEY_SORTS.includes(sort))) {
+    return qerr(403, 'You do not have access to customer balances.', 'FORBIDDEN');
+  }
+
+  // The balance lateral is only joined when something needs it.
+  const needBal = bal.allowed && (owes !== null || sort === 'balance' || mode === 'summary');
+  // Both values below are server-resolved numbers (a zones.id and the
+  // exchange_rates rate), inlined as literals rather than bound parameters
+  // because not every query built from these parts references them (an
+  // unreferenced bound parameter is a Postgres error).
+  let rateRef = 'NULL';
+  let rateValue = null;
+  let inBalZone = 'TRUE';
+  if (bal.allowed && bal.zoneId !== null) inBalZone = `c.zone_id = ${Number(bal.zoneId)}`;
+  if (needBal) {
+    const rate = await getCurrentExchangeRate();
+    rateValue = rate ? parseFloat(rate.rate) : null;
+    if (Number.isFinite(rateValue)) rateRef = String(rateValue);
+  }
+  if (owes === true) where.push(`bal.n > 0 AND ${inBalZone}`);
+  if (owes === false) where.push(`NOT (bal.n > 0 AND ${inBalZone})`);
+
+  let orderSql = 'c.created_at DESC, c.id DESC';
+  if (sort === 'customer_number') orderSql = `length(c.customer_number) ${dir}, c.customer_number ${dir}, c.id ${dir}`;
+  else if (sort === 'name') orderSql = `lower(c.name) ${dir}, c.id ${dir}`;
+  else if (sort === 'created_at') orderSql = `c.created_at ${dir}, c.id ${dir}`;
+  // Balance: USD-equivalent of both currencies at the current rate (SLSH counts 0 without a rate).
+  else if (sort === 'balance') orderSql = `(CASE WHEN ${inBalZone} THEN bal.usd + CASE WHEN ${rateRef}::numeric > 0 THEN bal.slsh / ${rateRef}::numeric ELSE 0 END ELSE 0 END) ${dir}, c.id ${dir}`;
+  else if (sort === 'last_payment') orderSql = `(CASE WHEN ${inBalZone} THEN ${LAST_PAYMENT_SQL} END) ${dir} NULLS LAST, c.id ${dir}`;
+
+  const joins = `${LIST_JOINS}${needBal ? `\n       ${balanceLateral(rateRef)}` : ''}`;
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  return { where, params, whereSql, joins, orderSql, bal, inBalZone, needBal, withBalance, rateValue };
+}
+
+function listSelect(built) {
+  const { bal, inBalZone } = built;
+  return `c.*, z.name AS zone_name, z.zone_code, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
+              concat_ws(' › ', NULLIF(COALESCE(g.name, g.code), ''), z.name, NULLIF(COALESCE(gz.name, gz.code), ''), NULLIF(COALESCE(rt.name, rt.code), '')) AS path,
+              g.code AS group_code, g.name AS group_name,
+              rt.name AS route_name, rt.code AS route_code, rt.status AS route_status,
+              rt.collector_user_id AS collector_id, COALESCE(col.full_name, col.username) AS collector_name,
+              ${WORK_DAYS_SQL} AS effective_work_days,
+              ${HAS_LOCATION_SQL} AS has_location,
+              pa.status AS portal_status,
+              ${bal.allowed ? `CASE WHEN ${inBalZone} THEN ${LAST_PAYMENT_SQL} END` : 'NULL::timestamp'} AS last_payment_at`;
+}
+
+// Per-row balances for the given customer rows, from getInvoiceBalancesBulk
+// (ONE invoice query + ONE bulk balance query for the whole page — never
+// per-row queries). Adds balance {USD, SLSH}, open_invoice_count and
+// oldest_open_invoice_id; null for rows outside the viewer's balance scope.
+async function attachBalances(rows, bal) {
+  const eligible = [];
+  for (const r of rows) {
+    r.balance = null;
+    r.open_invoice_count = null;
+    r.oldest_open_invoice_id = null;
+    if (bal.allowed && (bal.zoneId === null || r.zone_id === bal.zoneId)) {
+      r.balance = { USD: 0, SLSH: 0 };
+      r.open_invoice_count = 0;
+      eligible.push(r);
+    }
+  }
+  if (!eligible.length) return rows;
+  const byId = new Map(eligible.map((r) => [r.id, r]));
+  const inv = await pool.query(
+    `SELECT id, customer_id FROM invoices WHERE customer_id = ANY($1::int[]) AND status IN ('unpaid', 'partial') ORDER BY created_at, id`,
+    [eligible.map((r) => r.id)]
+  );
+  const balances = await getInvoiceBalancesBulk(inv.rows.map((r) => r.id));
+  for (const i of inv.rows) {
+    const b = balances.get(i.id);
+    if (!b || !(b.outstanding > EPSILON)) continue;
+    const row = byId.get(i.customer_id);
+    row.balance[b.currency] += b.outstanding;
+    row.open_invoice_count += 1;
+    if (row.oldest_open_invoice_id === null) row.oldest_open_invoice_id = i.id;
+  }
+  for (const r of eligible) {
+    r.balance.USD = Math.round(r.balance.USD * 100) / 100;
+    r.balance.SLSH = Math.round(r.balance.SLSH * 100) / 100;
+  }
+  return rows;
+}
+
+const sendQueryError = (res, built) => res.status(built.error.status).json(built.error.body);
+
+// GET /api/v2/customers — list, search, filter, sort, paginate. Zone-scoped
+// for gudoomiye/zone_accountant, enforced server-side (closes the IDOR
+// finding from Discovery §25 — every route re-checks scope, not just this
+// one). Backwards compatible: without `page` it keeps the historical
+// limit/offset behaviour (default 50, max 200) used by the pickers on other
+// pages; with `page` it paginates (page_size default 25, max 100).
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const myZoneId = await resolveUserZoneId(req.user);
-    const where = [];
-    const params = [];
-
-    if (myZoneId !== null) {
-      params.push(myZoneId);
-      where.push(`c.zone_id = $${params.length}`);
-    }
-
-    const status = req.query.status;
-    if (status === 'archived') {
-      where.push(`c.status = 'archived'`);
-    } else if (status === 'all') {
-      // no filter
+    const built = await buildCustomerQuery(req, 'list');
+    if (built.error) return sendQueryError(res, built);
+    const paged = req.query.page !== undefined && req.query.page !== '';
+    let limit;
+    let offset;
+    let page = null;
+    if (paged) {
+      page = parseStrictId(String(req.query.page));
+      if (page === null || page < 1) return res.status(400).json({ error: { message: 'page must be a positive integer.', code: 'VALIDATION' } });
+      limit = Math.min(Math.max(parseInt(req.query.page_size, 10) || PAGE_SIZE_DEFAULT, 1), PAGE_SIZE_MAX);
+      offset = (page - 1) * limit;
     } else {
-      // default: active customer list excludes archived (OD-1)
-      where.push(`c.status != 'archived'`);
+      limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+      offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     }
-
-    if (req.query.customer_type) {
-      if (!VALID_TYPES.includes(req.query.customer_type)) {
-        return res.status(400).json({ error: { message: `Invalid customer_type filter.`, code: 'VALIDATION' } });
-      }
-      params.push(req.query.customer_type);
-      where.push(`c.customer_type = $${params.length}`);
-    }
-    if (req.query.zone_id) {
-      const zid = parseStrictId(req.query.zone_id);
-      if (zid === null) return res.status(400).json({ error: { message: 'Invalid zone_id filter.', code: 'VALIDATION' } });
-      if (myZoneId !== null && zid !== myZoneId) {
-        return res.status(403).json({ error: { message: 'You do not have access to that zone.', code: 'FORBIDDEN' } });
-      }
-      params.push(zid);
-      where.push(`c.zone_id = $${params.length}`);
-    }
-    const searchTerm = req.query.q || req.query.search;
-    if (typeof searchTerm === 'string' && searchTerm.trim()) {
-      params.push(`%${searchTerm.trim()}%`);
-      const i = params.length;
-      where.push(`(c.customer_number ILIKE $${i} OR c.name ILIKE $${i} OR c.business_name ILIKE $${i} OR c.phone ILIKE $${i} OR c.door_number ILIKE $${i})`);
-    }
-    // Group & Group-Based Collection — Change Request, Implementation Spec
-    // §9/§16: reused by the Group-based batch-creation UI (client-side
-    // customer selection filtered by group_id, mirroring the existing
-    // zone_id/customer_type filters already on this endpoint).
-    if (req.query.group_id) {
-      const gid = parseStrictId(req.query.group_id);
-      if (gid === null) return res.status(400).json({ error: { message: 'Invalid group_id filter.', code: 'VALIDATION' } });
-      params.push(gid);
-      where.push(`c.group_id = $${params.length}`);
-    }
-    // Hierarchy filters (Group › District › Zone › Sub Zone).
-    if (req.query.group_zone_id) {
-      const gzid = parseStrictId(req.query.group_zone_id);
-      if (gzid === null) return res.status(400).json({ error: { message: 'Invalid group_zone_id filter.', code: 'VALIDATION' } });
-      params.push(gzid);
-      where.push(`c.route_id IN (SELECT id FROM routes WHERE group_zone_id = $${params.length})`);
-    }
-    if (req.query.route_id) {
-      const rid = parseStrictId(req.query.route_id);
-      if (rid === null) return res.status(400).json({ error: { message: 'Invalid route_id filter.', code: 'VALIDATION' } });
-      params.push(rid);
-      where.push(`c.route_id = $${params.length}`);
-    }
-
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-
-    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM customers c ${whereSql}`, params);
-    params.push(limit, offset);
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total ${built.joins} ${built.whereSql}`, built.params);
+    const params = [...built.params, limit, offset];
     const result = await pool.query(
-      `SELECT c.*, z.name AS zone_name, gz.id AS group_zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
-              concat_ws(' › ', NULLIF(COALESCE(g.name, g.code), ''), z.name, NULLIF(COALESCE(gz.name, gz.code), ''), NULLIF(COALESCE(rt.name, rt.code), '')) AS path
-       FROM customers c JOIN zones z ON c.zone_id = z.id
-       LEFT JOIN groups g ON g.id = c.group_id
-       LEFT JOIN routes rt ON rt.id = c.route_id LEFT JOIN group_zones gz ON gz.id = rt.group_zone_id
-       ${whereSql}
-       ORDER BY c.created_at DESC
+      `SELECT ${listSelect(built)}
+       ${built.joins}
+       ${built.whereSql}
+       ORDER BY ${built.orderSql}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
-    res.json({ data: result.rows, meta: { total: countResult.rows[0].total, limit, offset } });
+    const rows = result.rows;
+    if (built.withBalance) await attachBalances(rows, built.bal);
+    const total = countResult.rows[0].total;
+    const meta = { total, limit, offset };
+    if (paged) Object.assign(meta, { page, page_size: limit, pages: Math.max(1, Math.ceil(total / limit)) });
+    meta.can_see_balance = built.bal.allowed;
+    res.json({ data: rows, meta });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to list customers.', code: 'INTERNAL' } });
   }
+});
+
+// GET /api/v2/customers/summary — counts for the list's summary cards, with
+// the same scoping and filters as the list (pagination/sort ignored).
+// `owing` is null for roles that may not see balances.
+router.get('/summary', authenticateToken, async (req, res) => {
+  try {
+    const built = await buildCustomerQuery(req, 'summary');
+    if (built.error) return sendQueryError(res, built);
+    const owingCols = built.needBal
+      ? `, COUNT(*) FILTER (WHERE bal.n > 0 AND ${built.inBalZone})::int AS owing_count,
+           COALESCE(SUM(bal.usd) FILTER (WHERE ${built.inBalZone}), 0) AS owing_usd,
+           COALESCE(SUM(bal.slsh) FILTER (WHERE ${built.inBalZone}), 0) AS owing_slsh`
+      : '';
+    const r = (await pool.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE c.status = 'active')::int AS active,
+              COUNT(*) FILTER (WHERE c.status = 'suspended')::int AS suspended,
+              COUNT(*) FILTER (WHERE c.status = 'suspended' AND c.suspended_reason = 'debt')::int AS suspended_for_debt,
+              COUNT(*) FILTER (WHERE NOT ${HAS_LOCATION_SQL})::int AS without_location,
+              COUNT(*) FILTER (WHERE c.route_id IS NULL)::int AS without_subzone,
+              COUNT(*) FILTER (WHERE pa.status = 'active')::int AS with_portal
+              ${owingCols}
+       ${built.joins} ${built.whereSql}`,
+      built.params
+    )).rows[0];
+    const round2 = (v) => Math.round(parseFloat(v) * 100) / 100;
+    res.json({ data: {
+      total: r.total, active: r.active, suspended: r.suspended, suspended_for_debt: r.suspended_for_debt,
+      without_location: r.without_location, without_subzone: r.without_subzone, with_portal: r.with_portal,
+      owing: built.needBal ? { count: r.owing_count, USD: round2(r.owing_usd), SLSH: round2(r.owing_slsh) } : null,
+    } });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to load customer summary.', code: 'INTERNAL' } });
+  }
+});
+
+const DAY_LABELS = { sat: 'Sat', sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri' };
+
+// GET /api/v2/customers/export.csv — the list's current filters, scoping and
+// sort, as CSV (formula-safe). Over CSV_MAX_ROWS -> 413, never truncated.
+// Balance columns only for roles that may see balances.
+router.get('/export.csv', authenticateToken, async (req, res) => {
+  try {
+    const built = await buildCustomerQuery(req, 'csv');
+    if (built.error) return sendQueryError(res, built);
+    const rows = (await pool.query(
+      `SELECT ${listSelect(built)} ${built.joins} ${built.whereSql}
+       ORDER BY ${req.query.sort ? built.orderSql : 'length(c.customer_number), c.customer_number, c.id'}
+       LIMIT ${CSV_MAX_ROWS + 1}`,
+      built.params
+    )).rows;
+    if (rows.length > CSV_MAX_ROWS) {
+      return res.status(413).json({ error: { message: `More than ${CSV_MAX_ROWS.toLocaleString('en-US')} customers match — narrow the filters and export again.`, code: 'TOO_MANY_ROWS' } });
+    }
+    if (built.bal.allowed) await attachBalances(rows, built.bal);
+    const columns = [
+      { key: 'customer_number', label: 'Customer #' }, { key: 'name', label: 'Name' }, { key: 'business_name', label: 'Business' },
+      { key: 'customer_type', label: 'Type' }, { key: 'phone_fmt', label: 'Phone' }, { key: 'alternate_fmt', label: 'Alternate phone' },
+      { key: 'whatsapp_fmt', label: 'WhatsApp' }, { key: 'h_group', label: 'Group' }, { key: 'h_district', label: 'District' },
+      { key: 'h_zone', label: 'Zone' }, { key: 'h_subzone', label: 'Sub Zone' }, { key: 'door_number', label: 'Door #' },
+      { key: 'billing_type', label: 'Billing type' }, { key: 'fee_fmt', label: 'Fee' }, { key: 'fee_currency', label: 'Fee currency' },
+      { key: 'collector_name', label: 'Collector' }, { key: 'work_days_fmt', label: 'Work days' }, { key: 'status', label: 'Status' },
+      { key: 'suspended_reason', label: 'Suspended reason' },
+    ];
+    if (built.bal.allowed) columns.push({ key: 'bal_usd', label: 'Balance USD' }, { key: 'bal_slsh', label: 'Balance SLSH' });
+    const csv = toCsv(rows.map((r) => {
+      const h = hierarchyParts(r);
+      const days = Array.isArray(r.effective_work_days) ? r.effective_work_days : [];
+      return {
+        ...r,
+        phone_fmt: formatPhoneLocal(r.phone), alternate_fmt: formatPhoneLocal(r.alternate_phone), whatsapp_fmt: formatPhoneLocal(r.whatsapp),
+        h_group: h.group, h_district: h.district, h_zone: h.zone, h_subzone: h.subZone,
+        fee_fmt: r.fee == null ? '' : (r.fee_currency === 'SLSH' ? String(Math.round(parseFloat(r.fee))) : parseFloat(r.fee).toFixed(2)),
+        work_days_fmt: days.map((d) => DAY_LABELS[d] || d).join(' '),
+        bal_usd: r.balance ? r.balance.USD.toFixed(2) : '',
+        bal_slsh: r.balance ? String(Math.round(r.balance.SLSH)) : '',
+      };
+    }), columns);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="customers-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send('﻿' + csv);
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to export customers.', code: 'INTERNAL' } });
+  }
+});
+
+// POST /api/v2/customers/bulk/assign-subzone {customer_ids (max 500), route_id}
+// admin + gudoomiye (own zone). Moves customers to one Sub Zone (route) and
+// its Group in ONE transaction, with the same hierarchy rules as
+// PUT /:id (group belongs to the customer's district, route belongs to the
+// group) and the same zone scope. Only route_id/group_id change — door /
+// Customer # rules are untouched. Customers that cannot move are skipped
+// with a reason (not_found, out_of_scope, archived, district_mismatch,
+// already_assigned, collector_type_mismatch [DR-7]).
+router.post('/bulk/assign-subzone', authenticateToken, requireRole('admin', 'gudoomiye'), async (req, res) => {
+  const body = req.body || {};
+  const raw = body.customer_ids;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: { message: 'customer_ids must be a non-empty list.', code: 'VALIDATION' } });
+  if (raw.length > BULK_MAX) return res.status(400).json({ error: { message: `At most ${BULK_MAX} customers can be moved at once.`, code: 'TOO_MANY' } });
+  const ids = [];
+  for (const v of raw) {
+    const id = typeof v === 'number' ? (Number.isInteger(v) && v > 0 ? v : null) : parseStrictId(String(v));
+    if (!id) return res.status(400).json({ error: { message: 'customer_ids must contain customer ids only.', code: 'VALIDATION' } });
+    if (!ids.includes(id)) ids.push(id);
+  }
+  const routeId = parseStrictId(String(body.route_id ?? ''));
+  if (routeId === null) return res.status(400).json({ error: { message: 'route_id is required.', code: 'VALIDATION' } });
+
+  const client = await pool.connect();
+  let route;
+  let updatedRows = [];
+  const before = new Map();
+  const skipped = [];
+  try {
+    await client.query('BEGIN');
+    const rr = await client.query(
+      `SELECT r.id, r.code, r.name, r.status, r.group_id, r.collector_user_id, g.zone_id, g.status AS group_status
+       FROM routes r JOIN groups g ON g.id = r.group_id WHERE r.id = $1 FOR SHARE OF r`, [routeId]);
+    route = rr.rows[0];
+    if (!route) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Sub Zone not found.', code: 'NOT_FOUND' } }); }
+    if (!(await assertZoneWritable(req.user, route.zone_id))) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: { message: 'You cannot assign customers to a Sub Zone outside your zone.', code: 'FORBIDDEN' } });
+    }
+    if (route.status !== 'active' || route.group_status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: 'The selected Sub Zone (or its Group) is not active.', code: 'INACTIVE' } });
+    }
+    // DR-7: the Sub Zone's collector (same employee lookup as lib/dailyLists.js).
+    const emp = route.collector_user_id
+      ? (await client.query(`SELECT id FROM employees WHERE user_id = $1 AND status <> 'archived' ORDER BY id LIMIT 1`, [route.collector_user_id])).rows[0]
+      : null;
+    const myZoneId = ZONE_SCOPED_ROLES.includes((req.user.role || '').toLowerCase()) ? await resolveUserZoneId(req.user) : null;
+    const scoped = myZoneId !== null || ZONE_SCOPED_ROLES.includes((req.user.role || '').toLowerCase());
+    const custs = new Map((await client.query(
+      `SELECT id, customer_number, zone_id, status, customer_type, commercial_shift, route_id, group_id
+       FROM customers WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE`, [ids])).rows.map((c) => [c.id, c]));
+    const dr7Cache = new Map();
+    const toMove = [];
+    for (const id of ids) {
+      const c = custs.get(id);
+      if (!c) { skipped.push({ id, reason: 'not_found' }); continue; }
+      if (scoped && c.zone_id !== myZoneId) { skipped.push({ id, reason: 'out_of_scope' }); continue; }
+      if (c.status === 'archived') { skipped.push({ id, reason: 'archived' }); continue; }
+      if (c.zone_id !== route.zone_id) { skipped.push({ id, reason: 'district_mismatch' }); continue; }
+      if (c.route_id === route.id && c.group_id === route.group_id) { skipped.push({ id, reason: 'already_assigned' }); continue; }
+      if (emp) {
+        const shift = c.customer_type === 'commercial' ? (c.commercial_shift || 'day') : null;
+        const key = `${c.customer_type}:${shift}`;
+        if (!dr7Cache.has(key)) dr7Cache.set(key, await validateDr7ForCollector(emp.id, { customer_type: c.customer_type, commercial_shift: shift }));
+        const dr7 = dr7Cache.get(key);
+        if (!dr7.ok && dr7.code === 'DR7_BLOCK') { skipped.push({ id, reason: 'collector_type_mismatch', message: dr7.error }); continue; }
+      }
+      before.set(id, { route_id: c.route_id, group_id: c.group_id });
+      toMove.push(id);
+    }
+    if (toMove.length) {
+      updatedRows = (await client.query(
+        `UPDATE customers SET route_id = $1, group_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($3::int[]) RETURNING id, route_id, group_id`,
+        [route.id, route.group_id, toMove])).rows;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    return res.status(500).json({ error: { message: 'Failed to assign Sub Zone.', code: 'INTERNAL' } });
+  }
+  client.release();
+
+  try {
+    const actor = { actorId: req.user.id, actorUsername: req.user.username };
+    for (const u of updatedRows) {
+      const b = before.get(u.id);
+      await logAudit({ ...actor, action: 'customer.update', entityType: 'customer', entityId: u.id,
+        before: b, after: { route_id: u.route_id, group_id: u.group_id, via: 'bulk_assign_subzone' } });
+      if (b.route_id !== u.route_id) await logAudit({ ...actor, action: 'customer.route_change', entityType: 'customer', entityId: u.id, before: { route_id: b.route_id }, after: { route_id: u.route_id } });
+      if (b.group_id !== u.group_id) await logAudit({ ...actor, action: 'customer.group_change', entityType: 'customer', entityId: u.id, before: { group_id: b.group_id }, after: { group_id: u.group_id } });
+    }
+    await logAudit({ ...actor, action: 'customer.bulk_assign_subzone', entityType: 'route', entityId: route.id, before: null,
+      after: { route_id: route.id, group_id: route.group_id, requested: ids.length, updated_ids: updatedRows.map((u) => u.id), skipped } });
+  } catch (err) {
+    // The move is committed; an audit write failure must not misreport it as failed.
+    console.error('bulk assign-subzone audit failed:', err && err.message);
+  }
+
+  res.json({ data: { updated: updatedRows.length, updated_ids: updatedRows.map((u) => u.id), skipped } });
 });
 
 // GET /api/v2/customers/check-duplicate — advisory only (OD-2: warning, not

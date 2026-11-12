@@ -46,6 +46,7 @@ const TAXONOMY = {
   'customer.number_change':    { category: 'Customer', severity: 'INFO' },
   'customer.group_change':     { category: 'Customer', severity: 'INFO' },
   'customer.route_change':     { category: 'Customer', severity: 'INFO' },
+  'customer.bulk_assign_subzone': { category: 'Customer', severity: 'INFO' },
   'customer.zone_change':      { category: 'Customer', severity: 'INFO' },
   'customer.debt_suspend':     { category: 'Customer', severity: 'WARNING' },
   'customer.debt_reactivate':  { category: 'Customer', severity: 'INFO' },
