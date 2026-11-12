@@ -8,6 +8,8 @@ import { useCustomers } from '../../hooks/useCustomers.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import AutoBillingCard from './AutoBillingCard.jsx';
 import { fmtMoney } from '../../lib/money.js';
+import { fmtDate, ageDays, ageLabel, periodLabel } from './financeUtils.js';
+import './finance.css';
 
 const STATUS_MAP = { unpaid: 'danger', partial: 'warning', paid: 'success', voided: 'info' };
 
@@ -65,15 +67,24 @@ export default function InvoicesListPage() {
         isEmpty={!isLoading && !error && invoices.length === 0}
         emptyTitle={t('portal.invoices.empty')}
         emptySubtitle={t('fin.create_the_first_invoice_to')}
-        columns={[{ label: t('portal.col.invoice') }, { label: t('fin.customer') }, { label: t('common.total') }, { label: t('common.status') }, { label: t('fin.created') }]}
+        columns={[{ label: t('portal.col.invoice') }, { label: t('fin.customer') }, { label: t('common.total'), align: 'right' }, { label: t('common.status') }, { label: t('fin.created') }]}
       >
         {invoices.map((inv) => (
-          <tr key={inv.id} onClick={() => navigate(`/financial/invoices/${inv.id}`)} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
-            <td style={cellStyle}><strong>{inv.invoice_number}</strong></td>
-            <td style={cellStyle}>{inv.customer_name} <span style={{ color: 'var(--text-muted)' }}>({inv.customer_number})</span></td>
-            <td style={cellStyle} className="tabular-nums">{fmtMoney(inv.invoice_total, inv.currency)}</td>
+          <tr key={inv.id} className="fin-tx-row" onClick={() => navigate(`/financial/invoices/${inv.id}`)} tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/financial/invoices/${inv.id}`); }}>
+            <td style={cellStyle}>
+              <strong>{inv.invoice_number}</strong>
+              {inv.auto_generated && <div className="fin-note">{inv.billing_period ? periodLabel(inv.billing_period) : t('inv.auto_badge_daily')}</div>}
+            </td>
+            <td style={cellStyle}>
+              <span style={{ fontWeight: 700 }}>{inv.customer_name}</span> <span style={{ color: 'var(--brand)', fontWeight: 700, fontSize: '12px' }}>{inv.customer_number}</span>
+              {inv.customer_path && <div className="fin-note" style={{ fontSize: '12px' }}>{inv.customer_path}</div>}
+            </td>
+            <td style={{ ...cellStyle, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700 }} className="tabular-nums">
+              {fmtMoney(inv.invoice_total, inv.currency)} <span className="fin-pill">{inv.currency === 'SLSH' ? 'SLSH' : 'USD'}</span>
+            </td>
             <td style={cellStyle}><StatusBadge status={inv.status} map={STATUS_MAP} /></td>
-            <td style={cellStyle}>{new Date(inv.created_at).toLocaleDateString()}</td>
+            <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>{fmtDate(inv.created_at)}<div className="fin-note" style={{ fontSize: '12px' }}>{ageLabel(t, ageDays(inv.created_at))}</div></td>
           </tr>
         ))}
       </DataTable>
