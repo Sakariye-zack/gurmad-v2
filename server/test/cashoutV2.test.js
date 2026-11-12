@@ -51,19 +51,19 @@ async function preview(w, cashierId, start, end) {
   return r.data;
 }
 
-// Exact count + confirmations from a preview; `adjust` changes single lines.
-function exact(p, adjust = {}) {
+// Exact count + every manually recorded electronic payment ticked as found
+// on the statement, except `untick` (payment ids) — with optional notes.
+function exact(p, { untick = [], notes = {}, cash = {} } = {}) {
   const b = p.breakdown.currencies;
   const cash_count = {};
   const electronic_confirm = {};
-  for (const cur of ['USD', 'SLSH']) {
-    cash_count[cur] = { mode: 'manual', total: adjust[`${cur}.cash`] ?? b[cur].cash.expected, remark: 'counted' };
-    for (const m of ['zaad', 'edahab']) {
-      if (b[cur][m].manual_expected > 0 || adjust[`${cur}.${m}`] !== undefined) {
-        electronic_confirm[cur] = electronic_confirm[cur] || {};
-        electronic_confirm[cur][m] = { total: adjust[`${cur}.${m}`] ?? b[cur][m].manual_expected, confirmed: true };
-      }
-    }
+  for (const cur of ['USD', 'SLSH']) cash_count[cur] = { mode: 'manual', total: cash[cur] ?? b[cur].cash.expected, remark: 'counted' };
+  for (const e of p.electronic || []) {
+    if (e.gateway_verified) continue;
+    const cur = e.currency === 'SLSH' ? 'SLSH' : 'USD';
+    electronic_confirm[cur] = electronic_confirm[cur] || {};
+    const line = (electronic_confirm[cur][e.method] = electronic_confirm[cur][e.method] || { confirmed_ids: [], notes: {} });
+    if (untick.includes(e.id)) { if (notes[e.id]) line.notes[e.id] = notes[e.id]; } else line.confirmed_ids.push(e.id);
   }
   return { cash_count, electronic_confirm };
 }
@@ -85,9 +85,17 @@ test('pure: cash count + electronic confirmation validation', () => {
   assert.deepEqual(calc.normalizeCashCount({}).totals, { USD: 0, SLSH: 0 });
   assert.deepEqual(calc.DENOMINATIONS.USD, [100, 50, 20, 10, 5, 1]);
   assert.deepEqual(calc.DENOMINATIONS.SLSH, [50000, 20000, 10000, 5000, 1000, 500]);
-  assert.equal(calc.normalizeElectronicConfirm({ USD: { zaad: { total: 3 } } }).code, 'ELECTRONIC_CONFIRM_REQUIRED', 'must be explicitly confirmed');
-  assert.ok(calc.normalizeElectronicConfirm({ USD: { cash: { total: 3, confirmed: true } } }).error, 'electronic methods only');
-  assert.deepEqual(calc.normalizeElectronicConfirm({ USD: { edahab: { total: 4.5, confirmed: true } } }).totals, { USD: { edahab: 4.5 } });
+  assert.equal(calc.normalizeElectronicConfirm({ USD: { zaad: { total: 3 } } }).code, 'ELECTRONIC_CONFIRM_REQUIRED', 'per-payment ids required');
+  assert.ok(calc.normalizeElectronicConfirm({ USD: { cash: { confirmed_ids: [] } } }).error, 'electronic methods only');
+  assert.equal(calc.normalizeElectronicConfirm({ USD: { zaad: { confirmed_ids: [4, 4] } } }).code, 'DUPLICATE_CONFIRM');
+  const manual = { USD: { zaad: [{ id: 1, amount: 2 }, { id: 2, amount: 3 }] } };
+  const ok2 = calc.resolveElectronicConfirm(calc.normalizeElectronicConfirm({ USD: { zaad: { confirmed_ids: [2], notes: { 1: 'refunded' } } } }).entries, manual);
+  assert.equal(ok2.totals.USD.zaad, 3, 'statement total derived from ticked rows');
+  assert.deepEqual([ok2.detail.USD.zaad.unconfirmed_ids, ok2.detail.USD.zaad.unexplained_ids], [[1], []]);
+  assert.equal(calc.resolveElectronicConfirm({}, manual).code, 'ELECTRONIC_CONFIRM_REQUIRED', 'nothing confirmed explicitly');
+  assert.equal(calc.resolveElectronicConfirm(calc.normalizeElectronicConfirm({ USD: { zaad: { confirmed_ids: [9] } } }).entries, manual).code, 'FOREIGN_PAYMENT');
+  assert.equal(calc.resolveElectronicConfirm(calc.normalizeElectronicConfirm({ USD: { zaad: { confirmed_ids: [1], notes: { 1: 'x' } } } }).entries, manual).code, 'VALIDATION', 'note only on an unticked row');
+  assert.equal(calc.resolveElectronicConfirm(calc.normalizeElectronicConfirm({ USD: { zaad: { confirmed_ids: [1, 2] }, edahab: { confirmed_ids: [1] } } }).entries, manual).code, 'FOREIGN_PAYMENT', 'id from another line');
 });
 
 test('pure: only gateway ZAAD is auto-verified; manual electronic needs a statement total and differences count', () => {
@@ -206,19 +214,34 @@ test('breakdown: gateway ZAAD auto-verified, manual ZAAD/eDahab need statement t
   assert.equal(Buffer.from(await res.arrayBuffer()).slice(0, 2).toString(), 'PK');
 });
 
-test('electronic statement short -> counted as a shortage under the same rules', async () => {
+test('statement step: unticked payments are a shortage; ids validated; explained rows supply the reason; snapshot of ticks stored', async () => {
   const w = await setupWorld();
   const c = await mkCashier('t_co2_eshort', w.zoneA.name);
   const start = iso(Date.now() - 60 * 1000);
-  await pay(c, w.custA, 8, 'USD', 'edahab');
+  const keep = await pay(c, w.custA, 5, 'USD', 'edahab');
+  const miss = await pay(c, w.custA, 3, 'USD', 'edahab');
   const end = soon();
   const p = await preview(w, c.id, start, end);
-  const noReason = await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, exact(p, { 'USD.edahab': 5 })) });
-  assert.equal(noReason.status, 400, '$3 statement shortfall > tolerance needs a reason');
-  const r = await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, exact(p, { 'USD.edahab': 5 }), { shortage_reason: 'not on statement' }) });
+  const foreign = exact(p);
+  foreign.electronic_confirm.USD.edahab.confirmed_ids.push(999999);
+  assert.equal((await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, foreign) })).body.error.code, 'FOREIGN_PAYMENT');
+  const dup = exact(p);
+  dup.electronic_confirm.USD.edahab.confirmed_ids.push(keep.id);
+  assert.equal((await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, dup) })).body.error.code, 'DUPLICATE_CONFIRM');
+  const none = exact(p);
+  delete none.electronic_confirm.USD;
+  assert.equal((await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, none) })).body.error.code, 'ELECTRONIC_CONFIRM_REQUIRED');
+  const noReason = await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, exact(p, { untick: [miss.id] })) });
+  assert.equal(noReason.status, 400, 'an unticked, unexplained $3 payment is a shortage that needs a reason');
+  const r = await api('POST', '/cashouts', { token: w.tokens.head, body: v2Body(w, c.id, start, end, exact(p, { untick: [miss.id], notes: { [miss.id]: 'customer charged back' } })) });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  assert.ok(close(r.data.shortage, 3));
+  assert.ok(close(r.data.shortage, 3), 'still counted as a shortage');
   assert.equal(r.data.variance_status, 'shortage');
+  assert.match(r.data.shortage_reason, /charged back/, 'the row note became the reason');
+  const line = r.data.breakdown.currencies.USD.edahab;
+  assert.deepEqual([line.confirmed_ids, line.unconfirmed_ids, line.statement_total], [[keep.id], [miss.id], 5]);
+  const audit = await db.query(`SELECT 1 FROM v2_audit_log WHERE action = 'cashout.statement_missing' AND entity_id = $1`, [r.data.id]);
+  assert.equal(audit.rows.length, 1, 'missing statement file audited, creation not blocked');
 });
 
 test('eDahab payments require a unique reference code', async () => {

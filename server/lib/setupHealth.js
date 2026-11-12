@@ -82,23 +82,38 @@ async function subzoneIssues(zoneId, db = pool) {
     .filter((row) => row.issues.length > 0);
 }
 
+// Active Sub Zones (in an active Group) with no cashier assigned (Cashout
+// V2). Recommended only: cashouts still work without it, but the cashier's
+// assignment panel ("sent to the cashier") stays empty.
+async function subzonesWithoutCashier(zoneId, db = pool) {
+  const s = scopeParams(zoneId, 'g.zone_id');
+  return (await db.query(
+    `SELECT r.id AS route_id, COALESCE(r.name, r.code) AS name, r.group_id, ${PATH_SQL} AS path
+     FROM routes r JOIN groups g ON g.id = r.group_id JOIN zones z ON z.id = g.zone_id
+     LEFT JOIN group_zones gz ON gz.id = r.group_zone_id
+     WHERE r.status = 'active' AND g.status = 'active' AND r.cashier_user_id IS NULL ${s.sql}
+     ORDER BY path, r.id`, s.params)).rows;
+}
+
 async function getSetupHealth(zoneId, db = pool) {
-  const [subzones, noSubzone, noLocation] = await Promise.all([
+  const [subzones, noSubzone, noLocation, noCashier] = await Promise.all([
     subzoneIssues(zoneId, db),
     customersWithoutSubzone(zoneId, { limit: 0 }, db),
     customersWithoutLocation(zoneId, db),
+    subzonesWithoutCashier(zoneId, db),
   ]);
   const counts = Object.fromEntries(ISSUE_KEYS.map((k) => [k, subzones.filter((s) => s.issues.includes(k)).length]));
   counts.customers_without_subzone = noSubzone.total;
   counts.customers_without_location = noLocation;
-  return { ...classify(counts), counts, subzones };
+  counts.subzones_without_cashier = noCashier.length;
+  return { ...classify(counts), counts, subzones, subzones_without_cashier: noCashier };
 }
 
 // BLOCKING gaps keep a Sub Zone / customer off the automatic daily lists;
 // RECOMMENDED ones only weaken them (no truck on the list, no visit-order
 // start, no map pin). "All set" depends on blocking only.
 const BLOCKING_KEYS = ['no_collector', 'collector_no_employee', 'collector_type_mismatch', 'no_work_days', 'customers_without_subzone'];
-const RECOMMENDED_KEYS = ['no_truck', 'no_start_point', 'customers_without_location'];
+const RECOMMENDED_KEYS = ['no_truck', 'no_start_point', 'customers_without_location', 'subzones_without_cashier'];
 
 function classify(counts) {
   const pick = (keys) => keys.filter((k) => (counts[k] || 0) > 0).map((k) => ({ key: k, count: counts[k] }));
@@ -110,10 +125,11 @@ function emptySetupHealth() {
   const counts = Object.fromEntries(ISSUE_KEYS.map((k) => [k, 0]));
   counts.customers_without_subzone = 0;
   counts.customers_without_location = 0;
-  return { ...classify(counts), counts, subzones: [] };
+  counts.subzones_without_cashier = 0;
+  return { ...classify(counts), counts, subzones: [], subzones_without_cashier: [] };
 }
 
 module.exports = {
-  PATH_SQL, ISSUE_KEYS, BLOCKING_KEYS, RECOMMENDED_KEYS, subzonesWithoutDays, customersWithoutSubzone, customersWithoutLocation, subzoneIssues,
+  PATH_SQL, ISSUE_KEYS, BLOCKING_KEYS, RECOMMENDED_KEYS, subzonesWithoutDays, customersWithoutSubzone, customersWithoutLocation, subzoneIssues, subzonesWithoutCashier,
   getSetupHealth, emptySetupHealth,
 };

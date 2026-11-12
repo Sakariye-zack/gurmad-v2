@@ -8,8 +8,10 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const {
   computeExpectedForPeriod, hasOverlappingCashout, EPSILON, DENOMINATIONS, CURRENCIES,
   getCashoutControls, getCurrentRate, computeBreakdownForPeriod, listElectronicPayments, normalizeCashCount,
-  normalizeElectronicConfirm, buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit, listUncoveredPayments,
+  normalizeElectronicConfirm, resolveElectronicConfirm, buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit,
+  listUncoveredPayments,
 } = require('../lib/cashoutCalculations');
+const { computeAssignment } = require('../lib/cashierAssignment');
 const { getTimezone } = require('../lib/autoBilling');
 const { buildCashoutDocx } = require('../lib/documentGenerators');
 const { rejectIfInfected } = require('../lib/virusScan');
@@ -51,7 +53,15 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB — signed slips/photos, not a general DMS
   fileFilter: (req, file, cb) => cb(null, ALLOWED_MIME.includes(file.mimetype)),
 });
-const DOCUMENT_TYPES = ['signed_cashout_form', 'deposit_slip', 'cash_handover_evidence', 'receipt', 'shortage_explanation', 'approval_document', 'other'];
+const DOCUMENT_TYPES = ['signed_cashout_form', 'deposit_slip', 'cash_handover_evidence', 'receipt', 'shortage_explanation', 'approval_document', 'other', 'merchant_statement'];
+const kindOf = (documentType) => (documentType === 'merchant_statement' ? 'statement' : documentType === 'signed_cashout_form' ? 'signed' : 'other');
+// True when the cashout holds manually recorded ZAAD/eDahab money, i.e. a
+// merchant statement should back it.
+function needsStatement(cashout) {
+  const c = cashout.breakdown && cashout.breakdown.currencies;
+  if (!c) return false;
+  return ['USD', 'SLSH'].some((cur) => ['zaad', 'edahab'].some((m) => Number(c[cur] && c[cur][m] && c[cur][m].manual_expected) > 0));
+}
 
 function parseStrictId(raw) {
   if (!/^\d+$/.test(raw)) return null;
@@ -394,6 +404,25 @@ router.get('/cashiers', authenticateToken, requireRole(...CREATE_ROLES), async (
 // uses, never a second independently-derived copy. Registered BEFORE
 // '/:id' — Express matches routes in declaration order, and ':id' would
 // otherwise swallow this literal path.
+// GET /assignment-preview — the cashier's assignment panel: his Sub Zones
+// and what was "sent" to him (open invoices of those customers) vs what he
+// and other channels collected in the period. INFORMATION ONLY — never part
+// of the expected/actual/shortage figures. Same roles as the preview.
+router.get('/assignment-preview', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
+  const cashierId = parseStrictId(req.query.cashier_id || '');
+  if (cashierId === null) return res.status(400).json({ error: { message: 'cashier_id is required.', code: 'VALIDATION' } });
+  const periodStart = new Date(req.query.period_start);
+  const periodEnd = new Date(req.query.period_end);
+  if (isNaN(periodStart) || isNaN(periodEnd) || periodStart >= periodEnd) {
+    return res.status(400).json({ error: { message: 'A valid period_start before period_end is required.', code: 'VALIDATION' } });
+  }
+  try {
+    res.json({ data: await computeAssignment(cashierId, periodStart, periodEnd) });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to compute the assignment panel.', code: 'INTERNAL' } });
+  }
+});
+
 router.get('/reconciliation-preview', authenticateToken, requireRole(...CREATE_ROLES), async (req, res) => {
   const cashierId = parseStrictId(req.query.cashier_id || '');
   if (cashierId === null) return res.status(400).json({ error: { message: 'cashier_id is required.', code: 'VALIDATION' } });
@@ -464,6 +493,7 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     const { covered_payment_ids: coveredIds, ...rest } = cashout;
     res.json({ data: {
       ...rest, covered_payment_count: coveredIds ? coveredIds.length : null,
+      statement_required: needsStatement(cashout), statement_count: attachments.rows.filter((a) => a.kind === 'statement').length,
       debt: debt.rows[0] || null, shortage_record: shortage.rows[0] || null, attachments: attachments.rows, reconciliation: recon,
       deposits, ...depositInfo(cashout, deposits, rates.get(id)), electronic, timeline,
     } });
@@ -495,7 +525,10 @@ router.get('/:id/document.docx', authenticateToken, requireRole(...VIEW_ROLES), 
     const deposits = (await loadDeposits([id])).get(id) || [];
     const electronic = await listElectronicPayments(cashout.cashier_id, cashout.period_start, cashout.period_end, pool, cashout.created_at, scope);
     const rates = await loadLegacyRates([cashout]);
-    const buffer = await buildCashoutDocx(cashout, recon, shortageRes.rows[0] || null, { deposits, ...depositInfo(cashout, deposits, rates.get(id)), electronic });
+    const st = await pool.query(`SELECT COUNT(*)::int AS n FROM cashout_attachments WHERE cashout_id = $1 AND kind = 'statement' AND voided_at IS NULL`, [id]);
+    const buffer = await buildCashoutDocx(cashout, recon, shortageRes.rows[0] || null, {
+      deposits, ...depositInfo(cashout, deposits, rates.get(id)), electronic, statement_count: st.rows[0].n, statement_required: needsStatement(cashout),
+    });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${cashout.cashout_number}.docx"`);
     res.send(buffer);
@@ -622,7 +655,22 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     const coveredIds = expectedLines.paymentIds;
     const recon = await computeExpectedForPeriod(cashierId, periodStart, periodEnd, client, null, { paymentIds: coveredIds });
     const controls = await getCashoutControls(client);
-    const built = buildBreakdown(expectedLines, { cashTotals: cashCount.totals, electronicTotals: confirm.totals, rate: await getCurrentRate(client) });
+    // Manually recorded electronic payments of exactly the covered set: the
+    // head ticks each one found on the merchant statement.
+    const electronicRows = await listElectronicPayments(cashierId, periodStart, periodEnd, client, null, { paymentIds: coveredIds });
+    const manual = {};
+    for (const row of electronicRows) {
+      if (row.gateway_verified) continue;
+      const cur = row.currency === 'SLSH' ? 'SLSH' : 'USD';
+      manual[cur] = manual[cur] || {};
+      (manual[cur][row.method] = manual[cur][row.method] || []).push({ id: row.id, amount: row.amount });
+    }
+    const resolved = resolveElectronicConfirm(confirm.entries, manual);
+    if (resolved.error) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: { message: resolved.error, code: resolved.code || 'VALIDATION' } });
+    }
+    const built = buildBreakdown(expectedLines, { cashTotals: cashCount.totals, electronicTotals: resolved.totals, electronicDetail: resolved.detail, rate: await getCurrentRate(client) });
     if (built.error) {
       await client.query('ROLLBACK');
       return res.status(built.error.code === 'NO_EXCHANGE_RATE' ? 409 : 400).json({ error: built.error });
@@ -637,11 +685,29 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     const { shortage, surplus } = variance;
 
     // Tolerance rule: a shortage above the tolerance needs a reason; within
-    // it the cashout is "balanced" and the reason optional.
-    if (variance.reasonRequired && !reasonText) {
+    // it the cashout is "balanced" and the reason optional. When the whole
+    // shortage comes from electronic payments not found on the statement
+    // (no cash short) and the head explained every one of them, those
+    // notes are the reason.
+    let effectiveReason = reasonText;
+    if (variance.reasonRequired && !effectiveReason) {
+      const cashShort = ['USD', 'SLSH'].some((cur) => Number(built.breakdown.currencies[cur].cash.diff) < 0);
+      const lines = [];
+      let allExplained = true;
+      for (const cur of ['USD', 'SLSH']) for (const m of ['zaad', 'edahab']) {
+        const d = resolved.detail[cur] && resolved.detail[cur][m];
+        if (!d || !d.unconfirmed_ids.length) continue;
+        if (d.unexplained_ids.length) allExplained = false;
+        lines.push(`${m.toUpperCase()} ${cur}: ${[d.note, ...d.unconfirmed_ids.map((id) => d.notes[id] && `#${id} ${d.notes[id]}`)].filter(Boolean).join('; ')}`);
+      }
+      if (!cashShort && allExplained && lines.length) effectiveReason = `Not found on the merchant statement — ${lines.join(' | ')}`.slice(0, 1000);
+    }
+    if (variance.reasonRequired && !effectiveReason) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: { message: 'A shortage_reason is required when there is a shortage.', code: 'VALIDATION' } });
     }
+    // Assignment panel snapshot (information only).
+    const assignment = await computeAssignment(cashierId, periodStart, periodEnd, client);
     const breakdown = {
       ...built.breakdown,
       control: {
@@ -656,12 +722,12 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
       `INSERT INTO cashouts (cashout_number, zone_id, cashier_id, head_of_cashiers_id, period_start, period_end,
         expected_amount, actual_amount, cash_amount, zaad_amount, edahab_amount, slsh_amount, shortage, surplus,
         shortage_reason, remarks, status, created_by,
-        breakdown, count_detail, needs_admin, variance_status, control_shortage_usd, tolerance_usd, admin_threshold_usd, covered_payment_ids)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
+        breakdown, count_detail, needs_admin, variance_status, control_shortage_usd, tolerance_usd, admin_threshold_usd, covered_payment_ids, assignment_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING *`,
       [cashoutNumber, zoneId, cashierId, headOfCashiersId, periodStart, periodEnd, expected, actual, cash, zaad, edahab, slsh,
-        shortage, surplus, reasonText || null, remarksText || null, req.user.id,
+        shortage, surplus, effectiveReason || null, remarksText || null, req.user.id,
         JSON.stringify(breakdown), JSON.stringify(cashCount.detail), variance.needsAdmin, variance.status,
-        variance.controlShortage, controls.tolerance_usd, controls.admin_threshold_usd, coveredIds]
+        variance.controlShortage, controls.tolerance_usd, controls.admin_threshold_usd, coveredIds, JSON.stringify(assignment)]
     );
     const { covered_payment_ids: storedIds, ...cashout } = inserted.rows[0];
 
@@ -670,7 +736,7 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     // tolerance is still recorded — with an explicit system reason.
     let shortageRecord = null;
     if (shortage > 0) {
-      const reasonForRecord = reasonText || `Within tolerance ($${controls.tolerance_usd.toFixed(2)}) — no reason required.`;
+      const reasonForRecord = effectiveReason || `Within tolerance ($${controls.tolerance_usd.toFixed(2)}) — no reason required.`;
       const shortageInsert = await client.query(
         `INSERT INTO cashout_shortages (cashout_id, cashier_id, expected_amount, actual_amount, shortage_amount, currency, reason, status, created_by)
          VALUES ($1,$2,$3,$4,$5,'USD',$6,'unpaid',$7) RETURNING *`,
@@ -683,6 +749,13 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.create', entityType: 'cashout', entityId: cashout.id, before: null, after: { ...cashout, covered_payment_count: storedIds.length } });
     if (shortageRecord) {
       await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout_shortage.create', entityType: 'cashout_shortage', entityId: shortageRecord.id, before: null, after: shortageRecord });
+    }
+    // Manually recorded electronic money and (necessarily, at creation) no
+    // merchant statement file yet: audited, never blocking. The statement is
+    // uploaded right after creation (kind 'statement').
+    if (needsStatement(cashout)) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.statement_missing', entityType: 'cashout', entityId: cashout.id, before: null,
+        after: { stage: 'create', manual_electronic_payments: Object.values(manual).reduce((a, byM) => a + Object.values(byM).reduce((b, l) => b + l.length, 0), 0) } });
     }
     // Escalation: tell every active admin. Best-effort: a notification
     // failure never undoes the cashout.
@@ -867,6 +940,12 @@ router.put('/:id/approve', authenticateToken, requireRole(...APPROVE_ROLES, 'hea
     );
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.approve', entityType: 'cashout', entityId: id, before: cashout, after: updated.rows[0] });
+    if (needsStatement(cashout)) {
+      const st = await pool.query(`SELECT COUNT(*)::int AS n FROM cashout_attachments WHERE cashout_id = $1 AND kind = 'statement' AND voided_at IS NULL`, [id]);
+      if (st.rows[0].n === 0) {
+        await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.statement_missing', entityType: 'cashout', entityId: id, before: null, after: { stage: 'approve' } });
+      }
+    }
     const { covered_payment_ids: _ids, ...out } = updated.rows[0];
     res.json({ data: out });
   } catch (err) {
@@ -989,9 +1068,9 @@ router.post('/:id/attachments', authenticateToken, requireRole(...VIEW_ROLES), u
       return res.status(403).json({ error: { message: 'You do not have access to this cashout.', code: 'FORBIDDEN' } });
     }
     const inserted = await pool.query(
-      `INSERT INTO cashout_attachments (cashout_id, document_type, original_filename, storage_path, mime_type, file_size, uploaded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [id, documentType, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id]
+      `INSERT INTO cashout_attachments (cashout_id, document_type, original_filename, storage_path, mime_type, file_size, uploaded_by, kind)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [id, documentType, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, kindOf(documentType)]
     );
     const attachment = inserted.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'cashout.attachment_upload', entityType: 'cashout_attachment', entityId: attachment.id, before: null, after: { ...attachment, storage_path: '(redacted from audit log)' } });

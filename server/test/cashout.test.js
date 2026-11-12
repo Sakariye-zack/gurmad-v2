@@ -29,9 +29,13 @@ function countFrom(rec, usdShort = 0) {
     USD: { mode: 'manual', total: Number((b.USD.cash.expected - usdShort).toFixed(2)), remark: 'test count' },
     SLSH: { mode: 'manual', total: b.SLSH.cash.expected, remark: 'test count' },
   };
+  // tick every manually recorded electronic payment as found on the statement
   const electronic_confirm = {};
-  for (const cur of ['USD', 'SLSH']) for (const m of ['zaad', 'edahab']) {
-    if (b[cur][m].manual_expected > 0) { electronic_confirm[cur] = electronic_confirm[cur] || {}; electronic_confirm[cur][m] = { total: b[cur][m].manual_expected, confirmed: true }; }
+  for (const e of rec.electronic || []) {
+    if (e.gateway_verified) continue;
+    const cur = e.currency === 'SLSH' ? 'SLSH' : 'USD';
+    electronic_confirm[cur] = electronic_confirm[cur] || {};
+    (electronic_confirm[cur][e.method] = electronic_confirm[cur][e.method] || { confirmed_ids: [] }).confirmed_ids.push(e.id);
   }
   return { cash_count, electronic_confirm };
 }

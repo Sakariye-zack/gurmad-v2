@@ -2272,6 +2272,42 @@ async function runCashoutV2Migrations() {
     END $$;
   `);
 
+  // ---- Cashier ↔ Sub Zone assignment, assignment snapshot, statements ----
+  // One cashier per Sub Zone (a cashier may hold many). FK-less on purpose,
+  // validated in routes/routesEntity.js (active cashier of the same district).
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS cashier_user_id INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_routes_cashier_user_id ON routes(cashier_user_id) WHERE cashier_user_id IS NOT NULL;`);
+  // What the assignment panel showed when the cashout was created.
+  await pool.query(`ALTER TABLE cashouts ADD COLUMN IF NOT EXISTS assignment_snapshot JSONB;`);
+  // Merchant statements are a new attachment document type; `kind` groups
+  // attachments: statement | signed | other (derived from document_type).
+  const dt = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_attachments'::regclass AND conname = 'cashout_attachments_document_type_check'`);
+  if (!dt.rows.length || !dt.rows[0].def.includes('merchant_statement')) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE cashout_attachments IN SHARE ROW EXCLUSIVE MODE');
+      const again = await c.query(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'cashout_attachments'::regclass AND conname = 'cashout_attachments_document_type_check'`);
+      if (!again.rows.length || !again.rows[0].def.includes('merchant_statement')) {
+        await c.query('ALTER TABLE cashout_attachments DROP CONSTRAINT IF EXISTS cashout_attachments_document_type_check');
+        await c.query(`ALTER TABLE cashout_attachments ADD CONSTRAINT cashout_attachments_document_type_check CHECK (document_type IN (
+          'signed_cashout_form', 'deposit_slip', 'cash_handover_evidence', 'receipt', 'shortage_explanation', 'approval_document', 'other', 'merchant_statement'))`);
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+  await pool.query(`ALTER TABLE cashout_attachments ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'other';`);
+  await addCheckIfMissing('cashout_attachments', 'cashout_attachments_kind_check', `kind IN ('statement', 'signed', 'other')`);
+  await pool.query(`UPDATE cashout_attachments SET kind = 'signed' WHERE document_type = 'signed_cashout_form' AND kind <> 'signed';`);
+  await pool.query(`UPDATE cashout_attachments SET kind = 'statement' WHERE document_type = 'merchant_statement' AND kind <> 'statement';`);
+
   // Monitor dedupe: one row per alert already sent (kind, item, local day).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cashout_alerts_sent (

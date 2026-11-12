@@ -268,6 +268,9 @@ test('setup-health: detects each issue, zone-scoped, and "all set" when nothing 
   const ct = await mkTruck(clean);
   const cr = await mkRoute(cg, { collector: cu, truck: ct.id });
   await mkCust(w, clean, { group: cg, route: cr });
+  // Cashout V2: a cashier on the Sub Zone (otherwise a recommended item).
+  const cashierUid = await insertUser('op_k_' + uniq(), 'cashier', clean.name);
+  await db.query('UPDATE routes SET cashier_user_id = $1 WHERE id = $2', [cashierUid, cr.id]);
   const gudClean = await gudoomiyeFor(clean);
   const okRes = await health(gudClean);
   assert.equal(okRes.status, 200, JSON.stringify(okRes.body));
@@ -288,7 +291,8 @@ test('setup-health: detects each issue, zone-scoped, and "all set" when nothing 
   assert.equal(softRes.data.all_set, true, JSON.stringify(softRes.data));
   assert.deepEqual(softRes.data.blocking, []);
   assert.deepEqual(softRes.data.recommended, [
-    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 }]);
+    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 },
+    { key: 'subzones_without_cashier', count: 1 }]);
 
   // A district with one of each problem.
   const d = await mkDistrict(w);
@@ -342,7 +346,9 @@ test('setup-health: detects each issue, zone-scoped, and "all set" when nothing 
     { key: 'no_collector', count: 1 }, { key: 'collector_no_employee', count: 1 }, { key: 'collector_type_mismatch', count: 1 },
     { key: 'no_work_days', count: 1 }, { key: 'customers_without_subzone', count: 1 }]);
   assert.deepEqual(data.recommended, [
-    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 }]);
+    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 },
+    { key: 'subzones_without_cashier', count: 6 }]);
+  assert.equal(data.counts.subzones_without_cashier, 6);
 
   // Scoping: the clean district's gudoomiye still sees nothing of this one,
   // gudoomiye A never sees it, admin sees it.

@@ -235,9 +235,26 @@ function cashoutV2Sections(cashout, extras) {
   }
   const el = extras.electronic || [];
   if (el.length) {
+    // Statement check per payment: gateway-verified, ticked on the merchant
+    // statement, or NOT found on it (with the head's note).
+    const ticked = new Set();
+    const unticked = new Map();
+    for (const cur of ['USD', 'SLSH']) for (const m of ['zaad', 'edahab']) {
+      const l = b && b.currencies && b.currencies[cur] && b.currencies[cur][m];
+      if (!l) continue;
+      for (const id of l.confirmed_ids || []) ticked.add(Number(id));
+      for (const id of l.unconfirmed_ids || []) unticked.set(Number(id), (l.notes && l.notes[id]) || l.note || '');
+    }
+    const status = (p) => (p.gateway_verified ? 'ZAAD gateway' : ticked.has(Number(p.id)) ? 'On statement' : unticked.has(Number(p.id)) ? `NOT on statement${unticked.get(Number(p.id)) ? ` — ${unticked.get(Number(p.id))}` : ''}` : 'Statement (head)');
     out.push(sectionTitle('Electronic payments'));
-    out.push(gridTable(['Transaction / reference', 'Method', 'Verified by', 'Amount'],
-      el.map((p) => [p.reference_code || '—', String(p.method).toUpperCase(), p.gateway_verified ? 'ZAAD gateway' : 'Statement (head)', money(p.amount, p.currency)]), [36, 16, 24, 24]));
+    out.push(gridTable(['Transaction / reference', 'Method', 'Statement check', 'Amount'],
+      el.map((p) => [p.reference_code || '—', String(p.method).toUpperCase(), { text: status(p), color: unticked.has(Number(p.id)) ? 'C0392B' : INK, bold: unticked.has(Number(p.id)) }, money(p.amount, p.currency)]), [30, 14, 36, 20]));
+    const nTicked = el.filter((p) => ticked.has(Number(p.id))).length;
+    const nUnticked = el.filter((p) => unticked.has(Number(p.id))).length;
+    out.push(new Paragraph({ spacing: { before: 80 }, children: [new TextRun({ text: `Found on the statement: ${nTicked} · Not found: ${nUnticked} · Statement files attached: ${extras.statement_count ?? 0}`, size: 17, bold: true })] }));
+    if (extras.statement_required && !extras.statement_count) {
+      out.push(new Paragraph({ children: [new TextRun({ text: 'No merchant statement file attached.', size: 17, bold: true, color: 'C0392B' })] }));
+    }
   }
   if (cashout.status === 'approved') {
     out.push(sectionTitle('Deposit'));

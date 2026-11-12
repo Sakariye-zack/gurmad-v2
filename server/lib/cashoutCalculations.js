@@ -270,29 +270,87 @@ function normalizeCashCount(input) {
 }
 
 // Head's confirmation of the manually recorded electronic payments against
-// the merchant statement: { USD: { zaad: { total, confirmed: true }, edahab:
-// {...} }, SLSH: {...} }. Returns { totals } where totals[cur][method] is the
-// confirmed amount or undefined (not sent), or { error }. Pure.
+// the merchant statement, payment by payment:
+//   { USD: { zaad: { confirmed_ids: [12, 15], notes: { "13": "refund" }, note: "..." }, edahab: {...} }, SLSH: {...} }
+// Shape validation only (ids are checked against the expected set by
+// resolveElectronicConfirm). Returns { entries } or { error, code }. Pure.
 function normalizeElectronicConfirm(input) {
-  if (input === undefined || input === null) return { totals: {} };
+  if (input === undefined || input === null) return { entries: {} };
   if (typeof input !== 'object' || Array.isArray(input)) return { error: 'electronic_confirm must be an object with USD / SLSH entries.' };
-  const totals = {};
+  const entries = {};
   for (const [cur, byMethod] of Object.entries(input)) {
     if (!CURRENCIES.includes(cur)) return { error: `electronic_confirm has an unknown currency "${cur}".` };
-    if (!byMethod || typeof byMethod !== 'object') return { error: `electronic_confirm.${cur} must be an object.` };
-    totals[cur] = {};
+    if (!byMethod || typeof byMethod !== 'object' || Array.isArray(byMethod)) return { error: `electronic_confirm.${cur} must be an object.` };
+    entries[cur] = {};
     for (const [m, e] of Object.entries(byMethod)) {
       if (!ELECTRONIC_METHODS.includes(m)) return { error: `electronic_confirm.${cur} has an unknown method "${m}".` };
-      if (!e || typeof e !== 'object') return { error: `electronic_confirm.${cur}.${m} must be an object.` };
-      if (e.confirmed !== true) return { error: `Confirm the ${m.toUpperCase()} ${cur} statement total before saving.`, code: 'ELECTRONIC_CONFIRM_REQUIRED' };
-      if (e.total === '' || e.total === null || e.total === undefined) return { error: `electronic_confirm.${cur}.${m}.total is required.` };
-      const v = Number(e.total);
-      const me = moneyError(cur, v, `electronic_confirm.${cur}.${m}.total`);
-      if (me) return { error: me };
-      totals[cur][m] = round(v, 2);
+      if (!e || typeof e !== 'object' || !Array.isArray(e.confirmed_ids)) {
+        return { error: `electronic_confirm.${cur}.${m}.confirmed_ids must list the payments found on the merchant statement.`, code: 'ELECTRONIC_CONFIRM_REQUIRED' };
+      }
+      const ids = [];
+      for (const raw of e.confirmed_ids) {
+        const id = Number(raw);
+        if (!Number.isInteger(id) || id <= 0) return { error: `electronic_confirm.${cur}.${m}.confirmed_ids must be payment ids.` };
+        if (ids.includes(id)) return { error: `Payment ${id} is listed twice in electronic_confirm.${cur}.${m}.`, code: 'DUPLICATE_CONFIRM' };
+        ids.push(id);
+      }
+      const notes = {};
+      if (e.notes !== undefined && e.notes !== null) {
+        if (typeof e.notes !== 'object' || Array.isArray(e.notes)) return { error: `electronic_confirm.${cur}.${m}.notes must be an object of payment id -> note.` };
+        for (const [k, v] of Object.entries(e.notes)) {
+          const id = Number(k);
+          const text = typeof v === 'string' ? v.trim() : '';
+          if (!Number.isInteger(id) || id <= 0) return { error: `electronic_confirm.${cur}.${m}.notes keys must be payment ids.` };
+          if (text.length > 500) return { error: 'A statement note can be at most 500 characters.' };
+          if (text) notes[id] = text;
+        }
+      }
+      const note = typeof e.note === 'string' ? e.note.trim() : '';
+      if (note.length > 1000) return { error: 'A statement note can be at most 1000 characters.' };
+      entries[cur][m] = { confirmed_ids: ids, notes, note };
     }
   }
-  return { totals };
+  return { entries };
+}
+
+// Checks the confirmation against the manually recorded payments of each
+// line (manual[cur][method] = [{ id, amount }]): every line with manual
+// payments must be confirmed explicitly; confirmed ids and note ids must
+// belong to that line (no foreign ids); a note may only explain an UNticked
+// payment. Returns { totals, detail } — totals[cur][method] = sum of the
+// ticked payments (the derived statement total) — or { error, code }. Pure.
+function resolveElectronicConfirm(entries, manual) {
+  const totals = {};
+  const detail = {};
+  for (const cur of CURRENCIES) {
+    for (const m of ELECTRONIC_METHODS) {
+      const list = (manual[cur] && manual[cur][m]) || [];
+      const e = entries[cur] && entries[cur][m];
+      if (!e) {
+        if (list.length) return { code: 'ELECTRONIC_CONFIRM_REQUIRED', error: `Tick the ${m.toUpperCase()} ${cur} payments found on the merchant statement.` };
+        continue;
+      }
+      const known = new Map(list.map((p) => [Number(p.id), Number(p.amount)]));
+      for (const id of e.confirmed_ids) {
+        if (!known.has(id)) return { code: 'FOREIGN_PAYMENT', error: `Payment ${id} is not a manually recorded ${m.toUpperCase()} ${cur} payment of this cashout.` };
+      }
+      for (const k of Object.keys(e.notes)) {
+        const id = Number(k);
+        if (!known.has(id)) return { code: 'FOREIGN_PAYMENT', error: `Note for payment ${id}, which is not a manually recorded ${m.toUpperCase()} ${cur} payment of this cashout.` };
+        if (e.confirmed_ids.includes(id)) return { code: 'VALIDATION', error: `Payment ${id} is ticked — a note only explains a payment not found on the statement.` };
+      }
+      const confirmed = e.confirmed_ids.slice().sort((a, b) => a - b);
+      const unconfirmed = [...known.keys()].filter((id) => !e.confirmed_ids.includes(id)).sort((a, b) => a - b);
+      totals[cur] = totals[cur] || {};
+      totals[cur][m] = round(confirmed.reduce((s, id) => s + known.get(id), 0), 2);
+      detail[cur] = detail[cur] || {};
+      detail[cur][m] = {
+        confirmed_ids: confirmed, unconfirmed_ids: unconfirmed, notes: e.notes, note: e.note,
+        unexplained_ids: unconfirmed.filter((id) => !e.notes[id] && !e.note),
+      };
+    }
+  }
+  return { totals, detail };
 }
 
 // Builds the stored breakdown from the expected figures and (optionally)
@@ -304,7 +362,7 @@ function normalizeElectronicConfirm(input) {
 // `rate` (current SLSH per USD) for the legacy USD-equivalent columns; an
 // exact SLSH match needs no rate.
 // Returns { breakdown, legacy } or { error: { code, message } }. Pure.
-function buildBreakdown(expected, { cashTotals = null, electronicTotals = {}, rate = null } = {}) {
+function buildBreakdown(expected, { cashTotals = null, electronicTotals = {}, electronicDetail = {}, rate = null } = {}) {
   const counted = cashTotals !== null;
   const currencies = {};
   const totals = {};
@@ -338,6 +396,8 @@ function buildBreakdown(expected, { cashTotals = null, electronicTotals = {}, ra
             confirmed = 0;
           } else confirmed = sent;
           line.statement_total = confirmed;
+          const d = electronicDetail[cur] && electronicDetail[cur][m];
+          if (d) Object.assign(line, d);
         }
         const diff = confirmed - manualExpected;
         line.actual = round(confirmed + (electronic ? e.gateway_expected : 0), 2);
@@ -554,6 +614,6 @@ module.exports = {
   computeExpectedForPeriod, hasOverlappingCashout, EPSILON,
   CURRENCIES, METHODS, ELECTRONIC_METHODS, CURRENCY_EPS, DENOMINATIONS, DEFAULT_CONTROLS,
   bucketForMethod, getCashoutControls, getCurrentRate, foldExpected, computeBreakdownForPeriod, listElectronicPayments,
-  normalizeCashCount, normalizeElectronicConfirm, buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit,
+  normalizeCashCount, normalizeElectronicConfirm, resolveElectronicConfirm, buildBreakdown, classifyVariance, computeDepositStatus, requiredDeposit,
   getCashoutV2Since, listUncoveredPayments, planCashoutAlerts, PENDING_OVERDUE_HOURS, UNCOVERED_STALE_DAYS, DEPOSIT_UNVERIFIED_HOURS,
 };
