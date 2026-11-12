@@ -4,10 +4,11 @@ import {
   LayoutDashboard, Users, Users2, MapPinned, Boxes, Truck, ClipboardList, Receipt, Wallet, HandCoins, Wallet2,
   BarChart3, MessageSquareWarning, ShieldCheck, ShieldAlert, History, Database, Settings as SettingsIcon, LogOut,
   CalendarDays, Map, ChevronDown, Building2, DollarSign, Warehouse, ShoppingCart, FolderClosed, UserCircle2,
-  ListChecks, Gauge, UserPlus,
+  ListChecks, Gauge, UserPlus, SlidersHorizontal,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import RoleGate from '../components/RoleGate.jsx';
+import { usePermissions } from '../hooks/usePermissions.js';
 import BrandMark from '../components/BrandMark.jsx';
 import { useCompanyName } from '../hooks/useSettings.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
@@ -32,6 +33,7 @@ export const NAV_LABEL_KEYS = {
   'Users & Access': 'nav.usersAccess', 'Roles & Permissions': 'nav.rolesPermissions', 'Audit & Security': 'nav.auditSecurity', Backups: 'nav.backups',
   'System Settings': 'nav.systemSettings', 'Account Security': 'nav.accountSecurity', 'My HR': 'nav.myHr', Tasks: 'nav.tasks',
 };
+const SUBGROUP_LABEL_KEYS = { Advanced: 'nav.group.advanced' };
 const GROUP_LABEL_KEYS = {
   Operations: 'nav.group.operations', Financial: 'nav.group.financial', 'HR & Payroll': 'nav.group.hr',
   Fleet: 'nav.group.fleet', Procurement: 'nav.group.procurement', Inventory: 'nav.group.inventory',
@@ -64,10 +66,13 @@ export const NAV = [
   { to: '/customers/signup-requests', label: 'Signup requests', icon: UserPlus, roles: ['admin', 'gudoomiye'], group: 'Operations' },
   { to: '/zones', label: 'Zones', icon: MapPinned, group: 'Operations' },
   { to: '/groups', label: 'Groups', icon: Boxes, group: 'Operations' },
-  { to: '/collection-cycles', label: 'Collection Cycles', icon: ClipboardList, permission: 'collection_cycles.view', group: 'Operations' },
-  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, permission: 'batches.view', group: 'Operations' },
-  { to: '/calendar', label: 'Calendar', icon: CalendarDays, permission: 'calendar.view', group: 'Operations' },
   { to: '/map', label: 'Map', icon: Map, permission: 'map.view', group: 'Operations' },
+  // Manual/advanced collection pages — daily work is done from Today's list.
+  // `subgroup` only nests them in a collapsed "Advanced" block inside
+  // Operations; routes/roles/permissions are unchanged.
+  { to: '/collection-cycles', end: true, label: 'Collection Cycles', icon: ClipboardList, permission: 'collection_cycles.view', group: 'Operations', subgroup: 'Advanced' },
+  { to: '/collection-cycles/batches', label: 'Batches', icon: Boxes, permission: 'batches.view', group: 'Operations', subgroup: 'Advanced' },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, permission: 'calendar.view', group: 'Operations', subgroup: 'Advanced' },
 
   // ---- Financial ----
   { to: '/billing', label: 'Billing', icon: Wallet, permission: 'billing.view', group: 'Financial' },
@@ -247,10 +252,71 @@ function NavGroup({ name, items, currentPath }) {
       </button>
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '14px', marginTop: '1px', marginBottom: '4px' }}>
-          {items.map((item) => <NavItemLink key={item.to} item={item} />)}
+          {items.filter((i) => !i.subgroup).map((item) => <NavItemLink key={item.to} item={item} />)}
+          {subgroupNames(items).map((sg) => (
+            <NavSubGroup key={sg} name={sg} items={items.filter((i) => i.subgroup === sg)} currentPath={currentPath} />
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+function subgroupNames(items) {
+  return [...new Set(items.filter((i) => i.subgroup).map((i) => i.subgroup))];
+}
+
+const isActivePath = (currentPath, to) => currentPath === to || currentPath.startsWith(to + '/');
+
+// Shows its children when at least one of `items` passes RoleGate's own
+// rule (admin always; otherwise permission + roles) — so a sub-group header
+// never appears with nothing under it.
+function AnyGate({ items, children }) {
+  const { user } = useAuth();
+  const { permissions, loading } = usePermissions();
+  if (!user) return null;
+  const role = (user.role || '').toLowerCase();
+  if (role === 'admin') return children;
+  const passes = (item) => {
+    if (item.permission && (loading || !permissions.includes(item.permission))) return false;
+    if (item.roles && item.roles.length > 0 && !item.roles.map((r) => r.toLowerCase()).includes(role)) return false;
+    return true;
+  };
+  return items.some(passes) ? children : null;
+}
+
+// Nested collapsible block inside a module (e.g. Operations › Advanced),
+// collapsed by default unless the current page is one of its items.
+function NavSubGroup({ name, items, currentPath }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(items.some((i) => isActivePath(currentPath, i.to)));
+  const displayName = SUBGROUP_LABEL_KEYS[name] ? t(SUBGROUP_LABEL_KEYS[name], name) : name;
+  const header = (
+    <button
+      onClick={() => setOpen((o) => !o)}
+      aria-expanded={open}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px',
+        background: 'none', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius-sm)',
+        fontWeight: 700, fontSize: '12px', color: 'var(--text-muted)',
+      }}
+    >
+      <SlidersHorizontal size={15} />
+      <span style={{ flex: 1, textAlign: 'left' }}>{displayName}</span>
+      <ChevronDown size={13} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+    </button>
+  );
+  return (
+    <AnyGate items={items}>
+      <div>
+        {header}
+        {open && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '12px' }}>
+            {items.map((item) => <NavItemLink key={item.to} item={item} />)}
+          </div>
+        )}
+      </div>
+    </AnyGate>
   );
 }
 

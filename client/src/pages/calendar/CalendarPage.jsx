@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
+import LegacyOpsBanner from '../../components/collection/LegacyOpsBanner.jsx';
 import { useCalendarBatches } from '../../hooks/useCalendar.js';
 import { useZonesList } from '../../hooks/useCustomers.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
@@ -69,6 +70,7 @@ export default function CalendarPage() {
           subtitle={t('cal.read_only_view_of_collection')}
         />
       </div>
+      <LegacyOpsBanner />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
