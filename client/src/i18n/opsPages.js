@@ -41,7 +41,8 @@ export const OPS_PAGES = {
 
   // Setup checklist
   'opsp.setup.title': { en: 'Setup checklist', so: 'Liiska diyaarinta' },
-  'opsp.setup.allSet': { en: 'All set — every active Sub Zone is ready for automatic daily lists.', so: 'Wax walba waa diyaar — Sub Zone kasta oo firfircoon wuxuu diyaar u yahay liisaska tooska ah.' },
+  'opsp.setup.allSet': { en: 'All set — daily lists can run.', so: 'Wax walba waa diyaar — liisaska maalinlaha way shaqayn karaan.' },
+  'opsp.setup.recommended': { en: 'Recommended improvements ({n})', so: 'Hagaajinno lagu talinayo ({n})' },
   'opsp.setup.intro': { en: 'These gaps keep Sub Zones or customers off the automatic daily lists:', so: 'Cilladahan ayaa Sub Zone-yo ama macaamiil ka reebaya liisaska tooska ah:' },
   'opsp.setup.loadFailed': { en: 'Could not load the setup checklist.', so: 'Liiska diyaarinta lama soo rari karin.' },
   'opsp.setup.no_collector': { en: 'Sub Zones without a collector', so: 'Sub Zone-yo aan ururiye lahayn' },

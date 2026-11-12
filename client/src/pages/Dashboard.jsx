@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2, RefreshCw, Clock, Receipt, ListChecks, MapPin, Truck, HardDrive, AlertTriangle, CheckCircle2, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Users, ClipboardList, Wallet, Plus, TrendingUp, Wallet2, RefreshCw, Clock, Receipt, ListChecks, MapPin, Truck, HardDrive, AlertTriangle, CheckCircle2, ClipboardCheck, ChevronDown } from 'lucide-react';
 import { PageHeader, StatCard, Button, DataTable, LoadingState, ErrorState, Card } from '../components/ui/index.js';
 import RoleGate from '../components/RoleGate.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -92,60 +92,85 @@ function OperationsToday({ navigate }) {
 }
 
 // Setup checklist — GET /v2/dashboard/setup-health (admin company-wide,
-// gudoomiye own district). Read-only: lists what keeps Sub Zones or
-// customers off the automatic daily lists, each linking to where it is
-// fixed (a Sub Zone -> its Group page; customers -> Today's list warnings /
-// Customers). Green "All set" when nothing is missing.
+// gudoomiye own district). Read-only. BLOCKING gaps keep Sub Zones or
+// customers off the automatic daily lists (amber, always shown); RECOMMENDED
+// ones only weaken them and sit in a collapsed section. Green "All set" as
+// soon as nothing is blocking. Each row links to where it is fixed (a Sub
+// Zone -> its Group page; customers -> Today's list warnings / Customers).
 const SUBZONE_ISSUES = ['no_collector', 'collector_no_employee', 'collector_type_mismatch', 'no_work_days', 'no_truck', 'no_start_point'];
 const SHOW_SUBZONES = 4;
 
 function SetupChecklist({ navigate }) {
   const { t } = useI18n();
   const { data, error } = useSetupHealth();
+  const [showRecommended, setShowRecommended] = useState(false);
   if (error) {
     return <div style={{ marginBottom: '20px', fontSize: '13px', color: 'var(--text-muted)' }}>{t('opsp.setup.loadFailed')}</div>;
   }
   const d = data?.data;
   if (!d) return null;
-  const counts = d.counts || {};
   const subzones = d.subzones || [];
+  const blocking = d.blocking || [];
+  const recommended = d.recommended || [];
+  const recommendedTotal = recommended.reduce((a, r) => a + r.count, 0);
+
+  const renderIssue = ({ key, count }, tone) => (
+    <IssueRow key={key} label={t('opsp.setup.' + key)} count={count} tone={tone}>
+      {SUBZONE_ISSUES.includes(key) && (() => {
+        const list = subzones.filter((s) => s.issues.includes(key));
+        return (
+          <>
+            {list.slice(0, SHOW_SUBZONES).map((s) => (
+              <button key={s.route_id} type="button" onClick={() => navigate(`/groups/${s.group_id}`)} style={linkChipStyle} title={s.path}>
+                {s.name}
+              </button>
+            ))}
+            {list.length > SHOW_SUBZONES && (
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('opsp.setup.more', undefined, { n: list.length - SHOW_SUBZONES })}</span>
+            )}
+          </>
+        );
+      })()}
+      {key === 'customers_without_subzone' && (
+        <button type="button" onClick={() => navigate('/operations/today')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
+      )}
+      {key === 'customers_without_location' && (
+        <button type="button" onClick={() => navigate('/customers')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
+      )}
+    </IssueRow>
+  );
+
   return (
     <div style={{ marginBottom: '24px' }}>
       <span style={sectionLabelStyle}>{t('opsp.setup.title')}</span>
-      <Card style={{ padding: '14px 16px' }}>
+      <Card style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {d.all_set ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--success)', fontWeight: 700, fontSize: '13px' }}>
             <CheckCircle2 size={18} /> {t('opsp.setup.allSet')}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
               <ClipboardCheck size={16} style={{ color: 'var(--warning)' }} /> {t('opsp.setup.intro')}
             </div>
-            {SUBZONE_ISSUES.filter((k) => (counts[k] || 0) > 0).map((k) => {
-              const list = subzones.filter((s) => s.issues.includes(k));
-              return (
-                <IssueRow key={k} label={t('opsp.setup.' + k)} count={counts[k]}>
-                  {list.slice(0, SHOW_SUBZONES).map((s) => (
-                    <button key={s.route_id} type="button" onClick={() => navigate(`/groups/${s.group_id}`)} style={linkChipStyle} title={s.path}>
-                      {s.name}
-                    </button>
-                  ))}
-                  {list.length > SHOW_SUBZONES && (
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('opsp.setup.more', undefined, { n: list.length - SHOW_SUBZONES })}</span>
-                  )}
-                </IssueRow>
-              );
-            })}
-            {(counts.customers_without_subzone || 0) > 0 && (
-              <IssueRow label={t('opsp.setup.customers_without_subzone')} count={counts.customers_without_subzone}>
-                <button type="button" onClick={() => navigate('/operations/today')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
-              </IssueRow>
-            )}
-            {(counts.customers_without_location || 0) > 0 && (
-              <IssueRow label={t('opsp.setup.customers_without_location')} count={counts.customers_without_location}>
-                <button type="button" onClick={() => navigate('/customers')} style={linkChipStyle}>{t('opsp.setup.open')} →</button>
-              </IssueRow>
+            {blocking.map((i) => renderIssue(i, 'warning'))}
+          </>
+        )}
+        {recommended.length > 0 && (
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setShowRecommended((o) => !o)}
+              aria-expanded={showRecommended}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}
+            >
+              <ChevronDown size={14} style={{ transform: showRecommended ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+              {t('opsp.setup.recommended', undefined, { n: recommendedTotal })}
+            </button>
+            {showRecommended && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                {recommended.map((i) => renderIssue(i, 'muted'))}
+              </div>
             )}
           </div>
         )}
@@ -154,10 +179,11 @@ function SetupChecklist({ navigate }) {
   );
 }
 
-function IssueRow({ label, count, children }) {
+function IssueRow({ label, count, tone = 'warning', children }) {
+  const color = tone === 'warning' ? 'var(--warning)' : 'var(--text-muted)';
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
-      <span style={{ minWidth: '28px', textAlign: 'center', fontSize: '12px', fontWeight: 800, padding: '1px 8px', borderRadius: '999px', color: 'var(--warning)', border: '1px solid var(--warning)' }} className="tabular-nums">{count}</span>
+      <span style={{ minWidth: '28px', textAlign: 'center', fontSize: '12px', fontWeight: 800, padding: '1px 8px', borderRadius: '999px', color, border: `1px solid ${color === 'var(--warning)' ? color : 'var(--border)'}` }} className="tabular-nums">{count}</span>
       <span style={{ fontSize: '13px', fontWeight: 700, flex: '1 1 200px' }}>{label}</span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>{children}</div>
     </div>

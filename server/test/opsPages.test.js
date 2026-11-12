@@ -252,6 +252,8 @@ test('setup-health: RBAC admin + gudoomiye only', async () => {
   assert.equal(noZone.status, 200);
   assert.equal(noZone.data.zone_id, null);
   assert.equal(noZone.data.all_set, true);
+  assert.deepEqual(noZone.data.blocking, []);
+  assert.deepEqual(noZone.data.recommended, []);
   assert.deepEqual(noZone.data.subzones, []);
 });
 
@@ -271,7 +273,22 @@ test('setup-health: detects each issue, zone-scoped, and "all set" when nothing 
   assert.equal(okRes.status, 200, JSON.stringify(okRes.body));
   assert.equal(okRes.data.zone_id, clean.id);
   assert.equal(okRes.data.all_set, true, JSON.stringify(okRes.data));
+  assert.deepEqual(okRes.data.blocking, []);
+  assert.deepEqual(okRes.data.recommended, []);
   assert.deepEqual(okRes.data.subzones, []);
+
+  // Only RECOMMENDED gaps (no truck, no start point, unlocated customer):
+  // still "all set" — daily lists can run.
+  const soft = await mkDistrict(w);
+  const sg = await mkGroup(w, soft, 'Soft');
+  const sr = await mkRoute(sg, { collector: cu, start: false });
+  await mkCust(w, soft, { group: sg, route: sr, located: false });
+  const softRes = await health(await gudoomiyeFor(soft));
+  assert.equal(softRes.status, 200);
+  assert.equal(softRes.data.all_set, true, JSON.stringify(softRes.data));
+  assert.deepEqual(softRes.data.blocking, []);
+  assert.deepEqual(softRes.data.recommended, [
+    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 }]);
 
   // A district with one of each problem.
   const d = await mkDistrict(w);
@@ -321,6 +338,11 @@ test('setup-health: detects each issue, zone-scoped, and "all set" when nothing 
   assert.equal(data.counts.no_start_point, 1);
   assert.equal(data.counts.customers_without_subzone, 1);
   assert.equal(data.counts.customers_without_location, 1);
+  assert.deepEqual(data.blocking, [
+    { key: 'no_collector', count: 1 }, { key: 'collector_no_employee', count: 1 }, { key: 'collector_type_mismatch', count: 1 },
+    { key: 'no_work_days', count: 1 }, { key: 'customers_without_subzone', count: 1 }]);
+  assert.deepEqual(data.recommended, [
+    { key: 'no_truck', count: 1 }, { key: 'no_start_point', count: 1 }, { key: 'customers_without_location', count: 1 }]);
 
   // Scoping: the clean district's gudoomiye still sees nothing of this one,
   // gudoomiye A never sees it, admin sees it.

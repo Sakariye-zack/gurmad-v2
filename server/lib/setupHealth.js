@@ -91,18 +91,29 @@ async function getSetupHealth(zoneId, db = pool) {
   const counts = Object.fromEntries(ISSUE_KEYS.map((k) => [k, subzones.filter((s) => s.issues.includes(k)).length]));
   counts.customers_without_subzone = noSubzone.total;
   counts.customers_without_location = noLocation;
-  const allSet = Object.values(counts).every((n) => n === 0);
-  return { all_set: allSet, counts, subzones };
+  return { ...classify(counts), counts, subzones };
+}
+
+// BLOCKING gaps keep a Sub Zone / customer off the automatic daily lists;
+// RECOMMENDED ones only weaken them (no truck on the list, no visit-order
+// start, no map pin). "All set" depends on blocking only.
+const BLOCKING_KEYS = ['no_collector', 'collector_no_employee', 'collector_type_mismatch', 'no_work_days', 'customers_without_subzone'];
+const RECOMMENDED_KEYS = ['no_truck', 'no_start_point', 'customers_without_location'];
+
+function classify(counts) {
+  const pick = (keys) => keys.filter((k) => (counts[k] || 0) > 0).map((k) => ({ key: k, count: counts[k] }));
+  const blocking = pick(BLOCKING_KEYS);
+  return { all_set: blocking.length === 0, blocking, recommended: pick(RECOMMENDED_KEYS) };
 }
 
 function emptySetupHealth() {
   const counts = Object.fromEntries(ISSUE_KEYS.map((k) => [k, 0]));
   counts.customers_without_subzone = 0;
   counts.customers_without_location = 0;
-  return { all_set: true, counts, subzones: [] };
+  return { ...classify(counts), counts, subzones: [] };
 }
 
 module.exports = {
-  PATH_SQL, ISSUE_KEYS, subzonesWithoutDays, customersWithoutSubzone, customersWithoutLocation, subzoneIssues,
+  PATH_SQL, ISSUE_KEYS, BLOCKING_KEYS, RECOMMENDED_KEYS, subzonesWithoutDays, customersWithoutSubzone, customersWithoutLocation, subzoneIssues,
   getSetupHealth, emptySetupHealth,
 };
