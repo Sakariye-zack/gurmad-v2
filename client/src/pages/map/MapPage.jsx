@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { MapPin, ListFilter, Route as RouteIcon, Layers, Search, CalendarCheck, ChevronDown, ChevronUp, MapPinOff, Crosshair, Truck, Radio, X } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, useToast } from '../../components/ui/index.js';
 import { useMapCustomers, useMapMissingLocation, useMapTrucks, useTruckTrail } from '../../hooks/useMap.js';
@@ -26,7 +26,9 @@ export default function MapPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [zoneId, setZoneId] = useState(''); // District
-  const [groupId, setGroupId] = useState('');
+  // ?group=<id> (Group detail "Open on Map") preselects the Group filter.
+  const [searchParams] = useSearchParams();
+  const [groupId, setGroupId] = useState(() => (/^\d+$/.test(searchParams.get('group') || '') ? searchParams.get('group') : ''));
   const [groupZoneId, setGroupZoneId] = useState('');
   const [routeId, setRouteId] = useState('');
   const [showToday, setShowToday] = useState(false);
@@ -48,6 +50,12 @@ export default function MapPage() {
   // district); a chosen District narrows the list, choosing a Group sets it.
   const { data: groupsData } = useGroups({ limit: 200 });
   const groups = (groupsData?.data || []).filter((g) => !zoneId || String(g.zone_id) === String(zoneId) || String(g.id) === String(groupId));
+
+  // Groups V2: a selected Group with a map center -> the map flies there.
+  const selectedGroup = (groupsData?.data || []).find((g) => String(g.id) === String(groupId));
+  const groupCenter = selectedGroup && selectedGroup.center_lat != null && selectedGroup.center_lng != null
+    ? { lat: Number(selectedGroup.center_lat), lng: Number(selectedGroup.center_lng), key: String(selectedGroup.id) }
+    : null;
 
   const { data: gzData } = useGroupZones(groupId || undefined);
   const groupZones = gzData?.data || [];
@@ -241,6 +249,7 @@ export default function MapPage() {
               trailEmployeeId={trailEmployeeId}
               onToggleTrail={toggleTrail}
               fitKey={[filters.zoneId, filters.groupId, filters.groupZoneId, filters.routeId].map((v) => v || '').join('|')}
+              flyTarget={groupCenter}
             />
             {points.length === 0 && trucks.length === 0 && (
               <div style={{
