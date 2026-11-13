@@ -172,7 +172,7 @@ function existingLayers(map, ids) {
 export default function MapCanvas({
   points, trucks, showToday, focus, onOpenCustomer,
   canEditLocation, pickTarget, onRequestMove, onPickConfirm, onPickCancel,
-  trail, trailEmployeeId, onToggleTrail, fitKey,
+  trail, trailEmployeeId, onToggleTrail, fitKey, flyTarget,
 }) {
   const { t } = useI18n();
   const wrapRef = useRef(null);
@@ -414,6 +414,21 @@ export default function MapCanvas({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trucks, status, t, trailEmployeeId]);
+
+  // Groups V2: a Group filter whose group has a map center flies there (once
+  // per selected group). That filter set then skips the automatic pin fit so
+  // the two don't fight; choosing a Zone / Sub Zone fits pins as before.
+  const flyKey = flyTarget ? `${flyTarget.key}|${flyTarget.lat}|${flyTarget.lng}` : '';
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || status !== 'ready' || !flyTarget) return;
+    const ll = finiteLngLat(flyTarget);
+    if (!ll) return;
+    fitRef.current.key = fitKey;
+    fitRef.current.fitted = true;
+    map.flyTo({ center: ll, zoom: Math.max(map.getZoom(), 15), duration: 900 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flyKey, status]);
 
   // Search result: fly to the house and open its popup.
   useEffect(() => {

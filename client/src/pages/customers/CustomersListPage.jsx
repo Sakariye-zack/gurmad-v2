@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Users, Plus, Search, X, Download, Wallet, MapPinOff, Route, Ban, KeyRound, Phone, MessageCircle,
   MoreVertical, ExternalLink, Pencil, CreditCard, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ListChecks,
@@ -8,7 +8,7 @@ import { PageHeader, Button, Card, LoadingState, ErrorState, useToast } from '..
 import RoleGate from '../../components/RoleGate.jsx';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { useCustomersPage, useCustomersSummary, exportCustomersCsv, useNumberRequests, useZonesList } from '../../hooks/useCustomers.js';
-import { useGroups, useRoutesForGroup } from '../../hooks/useGroups.js';
+import { useGroups, useRoutesForGroup, useAllRoutes } from '../../hooks/useGroups.js';
 import { useGroupZones } from '../../hooks/useGroupZones.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { fmtMoney } from '../../lib/money.js';
@@ -28,6 +28,8 @@ const PAGE_SIZES = [25, 50, 100];
 const BALANCE_ROLES = ['admin', 'cashier', 'gudoomiye', 'zone_accountant'];
 const PAY_ROLES = ['admin', 'cashier'];
 const EDIT_ROLES = ['admin', 'gudoomiye'];
+// Roles GET /v2/routes allows (routes/routesEntity.js).
+const ROUTE_VIEW_ROLES = ['admin', 'gudoomiye', 'zone_accountant', 'collector'];
 
 export default function CustomersListPage() {
   const { t } = useI18n();
@@ -39,7 +41,18 @@ export default function CustomersListPage() {
   const canEdit = EDIT_ROLES.includes(role);
   const canPay = PAY_ROLES.includes(role);
 
-  const [baseFilters, setFiltersRaw] = useState(EMPTY_FILTERS);
+  // Deep links (e.g. Group detail "customers without Sub Zone"):
+  // ?group_id=&route_id=&zone_id=&no_subzone=1 seed the first filters.
+  const [searchParams] = useSearchParams();
+  const [baseFilters, setFiltersRaw] = useState(() => {
+    const f = { ...EMPTY_FILTERS };
+    for (const k of ['group_id', 'route_id', 'zone_id']) {
+      const v = searchParams.get(k);
+      if (v && /^\d+$/.test(v)) f[k] = v;
+    }
+    if (searchParams.get('no_subzone') === '1') f.no_subzone = '1';
+    return f;
+  });
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -89,13 +102,26 @@ export default function CustomersListPage() {
   const { data: gzData } = useGroupZones(filters.group_id || undefined);
   const groupZones = filters.group_id ? (gzData?.data || []) : [];
   const { data: routesData } = useRoutesForGroup(filters.group_id || undefined);
-  const subZones = filters.group_id ? (routesData?.data || []).filter((r) => !filters.group_zone_id || String(r.group_zone_id) === filters.group_zone_id) : [];
+  // The Sub Zone filter is always available: the chosen Group's Sub Zones, or
+  // every Sub Zone in scope (labelled with its Group) when no Group is chosen
+  // — picking one then selects its Group (and district) too.
+  const { data: allRoutesData } = useAllRoutes(ROUTE_VIEW_ROLES.includes(role));
+  const allRoutes = allRoutesData?.data || [];
+  const subZones = filters.group_id
+    ? (routesData?.data || []).filter((r) => !filters.group_zone_id || String(r.group_zone_id) === filters.group_zone_id)
+    : allRoutes.filter((r) => !filters.zone_id || String(r.zone_id) === filters.zone_id);
+  const subZoneLabel = (r) => (filters.group_id ? (r.name || r.code) : `${r.name || r.code} — ${groupLabel(r.group_code, r.group_name)}`);
 
   function onGroup(v) {
     const g = allGroups.find((x) => String(x.id) === v);
     set({ group_id: v, group_zone_id: '', route_id: '', ...(g ? { zone_id: String(g.zone_id) } : {}) });
   }
   const onDistrict = (v) => set({ zone_id: v, group_id: '', group_zone_id: '', route_id: '' });
+  function onSubZone(v) {
+    if (!v || filters.group_id) { set({ route_id: v }); return; }
+    const r = allRoutes.find((x) => String(x.id) === v);
+    set({ route_id: v, group_zone_id: '', ...(r ? { group_id: String(r.group_id), zone_id: String(r.zone_id) } : {}) });
+  }
 
   const anyFilter = Object.entries(filters).some(([, v]) => v);
   const clearAll = () => { setSearch(''); setDebouncedQ(''); setFilters(EMPTY_FILTERS); };
@@ -110,7 +136,7 @@ export default function CustomersListPage() {
   if (filters.zone_id) chips.push({ k: 'zone_id', label: nameOf(districts, filters.zone_id, (z) => districtLabel(z.name)), clear: () => onDistrict('') });
   if (filters.group_id) chips.push({ k: 'group_id', label: nameOf(allGroups, filters.group_id, (g) => groupLabel(g.code, g.name)), clear: () => set({ group_id: '', group_zone_id: '', route_id: '' }) });
   if (filters.group_zone_id) chips.push({ k: 'group_zone_id', label: nameOf(groupZones, filters.group_zone_id, (z) => z.name || z.code), clear: () => set({ group_zone_id: '', route_id: '' }) });
-  if (filters.route_id) chips.push({ k: 'route_id', label: nameOf(subZones, filters.route_id, (r) => r.name || r.code) });
+  if (filters.route_id) chips.push({ k: 'route_id', label: nameOf([...subZones, ...allRoutes], filters.route_id, (r) => r.name || r.code) });
   if (filters.billing_type) chips.push({ k: 'billing_type', label: t('cl.billing.' + filters.billing_type) });
   if (filters.owes) chips.push({ k: 'owes', label: filters.owes === '1' ? t('cl.owing') : t('cl.notOwing') });
   if (filters.has_location) chips.push({ k: 'has_location', label: filters.has_location === '1' ? t('cl.hasLocation') : t('cl.noLocation') });
@@ -213,13 +239,16 @@ export default function CustomersListPage() {
             {districts.map((z) => <option key={z.id} value={String(z.id)}>{districtLabel(z.name)}</option>)}
           </select>
         )}
-        <select className="cl-input" value={filters.group_zone_id} onChange={(e) => set({ group_zone_id: e.target.value, route_id: '' })} disabled={!filters.group_id} aria-label={t('map.f.zone')} title={!filters.group_id ? t('cl.pickGroupFirst') : undefined}>
+        <select className="cl-input" value={filters.group_zone_id} onChange={(e) => set({ group_zone_id: e.target.value, route_id: '' })} disabled={!filters.group_id} aria-label={t('map.f.zone')} title={!filters.group_id ? t('gv.cl.zoneHint') : undefined}>
           <option value="">{t('map.f.all_zones')}</option>
           {groupZones.map((z) => <option key={z.id} value={String(z.id)}>{z.name || z.code}</option>)}
         </select>
-        <select className="cl-input" value={filters.route_id} onChange={(e) => set({ route_id: e.target.value })} disabled={!filters.group_id} aria-label={t('map.f.subzone')} title={!filters.group_id ? t('cl.pickGroupFirst') : undefined}>
+        <select className="cl-input" value={filters.route_id} onChange={(e) => onSubZone(e.target.value)} aria-label={t('map.f.subzone')} title={!filters.group_id ? t('gv.cl.subZoneHint') : undefined}>
           <option value="">{t('map.f.all_subzones')}</option>
-          {subZones.map((r) => <option key={r.id} value={String(r.id)}>{r.name || r.code}</option>)}
+          {filters.route_id && !subZones.some((r) => String(r.id) === filters.route_id) && (
+            <option value={filters.route_id}>{nameOf(allRoutes, filters.route_id, (r) => r.name || r.code)}</option>
+          )}
+          {subZones.map((r) => <option key={r.id} value={String(r.id)}>{subZoneLabel(r)}</option>)}
         </select>
         <select className="cl-input" value={filters.billing_type} onChange={(e) => set({ billing_type: e.target.value })} aria-label={t('cl.billingType')}>
           <option value="">{t('cl.billing.any')}</option>

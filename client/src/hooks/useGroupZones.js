@@ -22,9 +22,9 @@ export function useCreateGroupZone() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data) => apiClient.post('/v2/group-zones', data),
-    onSuccess: (_res, vars) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['v2', 'group-zones'] });
-      qc.invalidateQueries({ queryKey: ['v2', 'groups', vars.group_id] });
+      qc.invalidateQueries({ queryKey: ['v2', 'groups'] });
     },
   });
 }
