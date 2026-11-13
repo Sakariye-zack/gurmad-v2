@@ -64,6 +64,8 @@ function CustomerFormModalContent({ onClose, customer }) {
   const [duplicateMatches, setDuplicateMatches] = useState(null);
   const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [touched, setTouched] = useState({});
+  const [prefilled, setPrefilled] = useState({});
   const toast = useToast();
   const createCustomer = useCreateCustomer();
   const updateCustomer = useUpdateCustomer(customer?.id);
@@ -91,7 +93,34 @@ function CustomerFormModalContent({ onClose, customer }) {
   const busy = createCustomer.isPending || updateCustomer.isPending;
   const isCommercial = form.customer_type === 'commercial';
 
+  // Groups V2: on create, choosing a Group pre-fills billing type / currency /
+  // fee from the Group's defaults — only fields the user has not typed in
+  // (still empty, or holding a previous Group's pre-fill). Never on edit.
+  function groupDefaultsPatch(f, g) {
+    const patch = {};
+    const filled = { ...prefilled };
+    const apply = (field, value, empty) => {
+      if (touched[field]) return;
+      if (!(f[field] === empty || prefilled[field])) return;
+      if (value !== null && value !== undefined && value !== '') { patch[field] = value; filled[field] = true; }
+      else if (prefilled[field]) { patch[field] = empty; filled[field] = false; }
+    };
+    apply('billing_type', g?.default_billing_type, '');
+    apply('fee_currency', g?.default_fee_currency, 'USD');
+    apply('fee', g?.default_fee != null ? String(Number(g.default_fee)) : null, '');
+    return { patch, filled };
+  }
+
   function set(field, value) {
+    if (['billing_type', 'fee_currency', 'fee'].includes(field)) {
+      setTouched((tt) => ({ ...tt, [field]: true }));
+      setPrefilled((p) => ({ ...p, [field]: false }));
+    }
+    if (field === 'group_id' && !isEdit) {
+      const { patch, filled } = groupDefaultsPatch(form, groups.find((x) => String(x.id) === String(value)));
+      setPrefilled(filled);
+      if (Object.keys(patch).length) setForm((f) => ({ ...f, ...patch }));
+    }
     setForm((f) => {
       const next = { ...f, [field]: value };
       // Changing Zone invalidates any previously-selected Group/Route;
@@ -358,6 +387,7 @@ function CustomerFormModalContent({ onClose, customer }) {
               <option value="monthly">{t('cust.billing_monthly')}</option>
               <option value="daily">{t('cust.billing_daily')}</option>
             </select>
+            {prefilled.billing_type && <GroupDefaultHint />}
           </Field>
         </div>
 
@@ -367,9 +397,11 @@ function CustomerFormModalContent({ onClose, customer }) {
               <option value="USD">USD ($)</option>
               <option value="SLSH">SLSH (Somaliland shilling)</option>
             </select>
+            {prefilled.fee_currency && <GroupDefaultHint />}
           </Field>
           <Field label={t('cust.fee_fixed')} hint={t('cust.fee_fixed_hint')}>
             <input type="number" min="0" step={form.fee_currency === 'SLSH' ? '1' : '0.01'} value={form.fee} onChange={(e) => set('fee', e.target.value)} style={inputStyle} placeholder={form.fee_currency === 'SLSH' ? '30000' : '5'} />
+            {prefilled.fee && <GroupDefaultHint />}
           </Field>
         </div>
 
@@ -414,6 +446,11 @@ function CustomerFormModalContent({ onClose, customer }) {
       </form>
     </Modal>
   );
+}
+
+function GroupDefaultHint() {
+  const { t } = useI18n();
+  return <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--info)' }}>{t('gv.fromGroupDefaults')}</span>;
 }
 
 function Field({ label, error, hint, children }) {
