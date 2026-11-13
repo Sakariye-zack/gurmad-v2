@@ -17,6 +17,7 @@ const VALID_STATUSES = ['active', 'inactive'];
 const CODE_RE = /^.{1,30}$/;
 // Sub Zone work days (same vocabulary/order as customers.work_days).
 const WEEK_DAYS = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
+const TEXT_MAX = 1000;
 
 function parseStrictId(raw) {
   if (!/^\d+$/.test(raw)) return null;
@@ -69,7 +70,7 @@ router.get('/', authenticateToken, requireRole(...VIEW_ROLES), async (req, res) 
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT r.*, g.code AS group_code, g.zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
+      `SELECT r.*, g.code AS group_code, g.name AS group_name, g.zone_id, gz.name AS group_zone_name, gz.code AS group_zone_code,
         u.full_name AS collector_name, u.is_active AS collector_active, tk.plate_number AS truck_plate,
         COALESCE(cu.full_name, cu.username) AS cashier_name, cu.is_active AS cashier_active,
         (SELECT COUNT(*)::int FROM customers c WHERE c.route_id = r.id AND c.status = 'active') AS customer_count
@@ -185,6 +186,15 @@ function validateRouteInput(body, { partial = false } = {}) {
       else out.group_zone_id = zid;
     }
   }
+  // Groups V2: free-text description + notes (optional, up to 1000 chars).
+  for (const f of ['description', 'notes']) {
+    if (body[f] === undefined) continue;
+    if (body[f] === null) { out[f] = null; continue; }
+    if (typeof body[f] !== 'string') { errors.push(`${f} must be text.`); continue; }
+    const v = body[f].trim();
+    if (v.length > TEXT_MAX) errors.push(`${f} must be at most ${TEXT_MAX} characters.`);
+    else out[f] = v || null;
+  }
   return { errors, data: out };
 }
 
@@ -246,10 +256,17 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
   const { errors, data } = validateRouteInput(req.body, { partial: false });
   if (errors.length) return res.status(400).json({ error: { message: errors.join(' '), code: 'VALIDATION' } });
   try {
-    const groupRes = await pool.query('SELECT zone_id, status FROM groups WHERE id = $1', [data.group_id]);
+    const groupRes = await pool.query('SELECT zone_id, status, default_work_days FROM groups WHERE id = $1', [data.group_id]);
     if (groupRes.rows.length === 0) return res.status(400).json({ error: { message: 'group_id does not reference an existing group.', code: 'VALIDATION' } });
     if (!(await assertZoneAccess(req.user, groupRes.rows[0].zone_id))) {
       return res.status(403).json({ error: { message: 'You cannot create a route under a group outside your assigned zone.', code: 'FORBIDDEN' } });
+    }
+    // Groups V2: a new Sub Zone inherits the group's default work days when
+    // the request does not send work_days at all (an explicit value —
+    // including null/[] — is always kept as sent).
+    if (req.body.work_days === undefined) {
+      const inherited = groupRes.rows[0].default_work_days;
+      if (Array.isArray(inherited) && inherited.length) data.work_days = JSON.stringify(WEEK_DAYS.filter((d) => inherited.includes(d)));
     }
     const cErr = await collectorError(data.collector_user_id, groupRes.rows[0].zone_id);
     if (cErr) return res.status(400).json({ error: { message: cErr, code: 'VALIDATION' } });
@@ -268,8 +285,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     if (dup.rows.length) return res.status(409).json({ error: { message: `Route code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
 
     const result = await pool.query(
-      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id, start_lat, start_lng, cashier_user_id) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null, data.start_lat ?? null, data.start_lng ?? null, data.cashier_user_id ?? null]
+      `INSERT INTO routes (group_id, code, name, status, created_by, collector_user_id, group_zone_id, work_days, truck_id, start_lat, start_lng, cashier_user_id, description, notes) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.collector_user_id ?? null, data.group_zone_id ?? null, data.work_days ?? null, data.truck_id ?? null, data.start_lat ?? null, data.start_lng ?? null, data.cashier_user_id ?? null, data.description ?? null, data.notes ?? null]
     );
     const route = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'route.create', entityType: 'route', entityId: route.id, before: null, after: route });

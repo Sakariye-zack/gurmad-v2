@@ -11,6 +11,7 @@ const WRITE_ROLES = ['admin', 'gudoomiye'];
 const ZONE_SCOPED_ROLES = ['gudoomiye', 'zone_accountant'];
 const VALID_STATUSES = ['active', 'inactive'];
 const CODE_RE = /^.{1,30}$/;
+const TEXT_MAX = 1000;
 
 function parseStrictId(raw) {
   if (!/^\d+$/.test(raw)) return null;
@@ -116,6 +117,15 @@ function validateInput(body, { partial = false } = {}) {
     if (!VALID_STATUSES.includes(body.status)) errors.push(`status must be one of: ${VALID_STATUSES.join(', ')}.`);
     else out.status = body.status;
   }
+  // Groups V2: free-text description + notes (optional, up to 1000 chars).
+  for (const f of ['description', 'notes']) {
+    if (body[f] === undefined) continue;
+    if (body[f] === null) { out[f] = null; continue; }
+    if (typeof body[f] !== 'string') { errors.push(`${f} must be text.`); continue; }
+    const v = body[f].trim();
+    if (v.length > TEXT_MAX) errors.push(`${f} must be at most ${TEXT_MAX} characters.`);
+    else out[f] = v || null;
+  }
   return { errors, data: out };
 }
 
@@ -132,8 +142,8 @@ router.post('/', authenticateToken, requireRole(...WRITE_ROLES), async (req, res
     const dup = await pool.query('SELECT id FROM group_zones WHERE group_id = $1 AND code = $2', [data.group_id, data.code]);
     if (dup.rows.length) return res.status(409).json({ error: { message: `Zone code "${data.code}" is already in use in this group.`, code: 'DUPLICATE' } });
     const result = await pool.query(
-      `INSERT INTO group_zones (group_id, code, name, status, created_by) VALUES ($1,$2,$3,COALESCE($4,'active'),$5) RETURNING *`,
-      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id]
+      `INSERT INTO group_zones (group_id, code, name, status, created_by, description, notes) VALUES ($1,$2,$3,COALESCE($4,'active'),$5,$6,$7) RETURNING *`,
+      [data.group_id, data.code, data.name ?? null, data.status ?? null, req.user.id, data.description ?? null, data.notes ?? null]
     );
     const gz = result.rows[0];
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'group_zone.create', entityType: 'group_zone', entityId: gz.id, before: null, after: gz });

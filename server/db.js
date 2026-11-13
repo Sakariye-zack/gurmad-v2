@@ -2545,6 +2545,25 @@ async function runFleetUpgradeMigrations() {
   await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS proof_enforced_from TIMESTAMPTZ DEFAULT NOW();`);
   // GPS accuracy (m) the phone reported with a Serviced mark.
   await pool.query(`ALTER TABLE batch_customers ADD COLUMN IF NOT EXISTS proof_accuracy_m INTEGER;`);
+  // Groups V2: richer Group / Zone / Sub Zone master data. All additive,
+  // nullable, no defaults — existing rows keep NULL and behave exactly as
+  // before. Hierarchy/daily-list/billing logic does not read these columns
+  // (except default_work_days, which only seeds a NEW Sub Zone's work_days
+  // when the create request omits them).
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS leader_user_id INTEGER REFERENCES v2_users(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS description TEXT;`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS center_lat NUMERIC(10,6);`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS center_lng NUMERIC(10,6);`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS default_work_days JSONB;`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS default_billing_type VARCHAR(10) CHECK (default_billing_type IN ('monthly', 'daily'));`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS default_fee_currency VARCHAR(4) CHECK (default_fee_currency IN ('USD', 'SLSH'));`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS default_fee NUMERIC CHECK (default_fee >= 0);`);
+  await pool.query(`ALTER TABLE groups ADD COLUMN IF NOT EXISTS notes TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_groups_leader_user_id ON groups(leader_user_id) WHERE leader_user_id IS NOT NULL;`);
+  await pool.query(`ALTER TABLE group_zones ADD COLUMN IF NOT EXISTS description TEXT;`);
+  await pool.query(`ALTER TABLE group_zones ADD COLUMN IF NOT EXISTS notes TEXT;`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS description TEXT;`);
+  await pool.query(`ALTER TABLE routes ADD COLUMN IF NOT EXISTS notes TEXT;`);
   // Open auto lists for today or later generated before visit_order existed
   // get a visit order now (lazy require: lib/dailyLists requires this module).
   try {
