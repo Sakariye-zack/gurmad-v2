@@ -54,6 +54,12 @@ export default function CashoutAssignmentCard({ data, snapshot = false, compact 
             {t('co2.asg.outside', undefined, { amount: fmtMoney(data.outside_area.usd_equiv, 'USD'), n: data.outside_area.payment_count })}
           </div>
         )}
+        {Number(data.debt_collections?.payment_count) > 0 && (
+          <div className="co-note">
+            <Info size={12} style={{ verticalAlign: '-2px' }} />{' '}
+            {t('dv.asg.debtCollections', undefined, { amount: CURRENCIES.filter((c) => Number(data.debt_collections[c]) > 0).map((c) => fmtMoney(data.debt_collections[c], c)).join(' + '), n: data.debt_collections.payment_count })}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -13,7 +13,7 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../lib/apiClient.js';
 import { appLocale } from '../../lib/dateLocale.js';
-import { fmtByCurrency } from '../../lib/money.js';
+import { fmtByCurrency, fmtMoney } from '../../lib/money.js';
 
 // P1 Functional Gaps — Customer Detail: Invoices, Debts, Collection
 // History only (no Cashout, no Payments aggregate, no Outstanding
@@ -214,7 +214,8 @@ function CustomerInvoicesSection({ customerId, navigate }) {
 
 function CustomerDebtsSection({ customerId }) {
   const { t } = useI18n();
-  const { data, isLoading, error } = useDebts({ customer_id: customerId });
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useDebts({ customer_id: customerId, page_size: 100 });
   const debts = data?.data || [];
   return (
     <Card style={{ ...cardPad, marginTop: '16px' }}>
@@ -227,10 +228,10 @@ function CustomerDebtsSection({ customerId }) {
       {!isLoading && !error && debts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {debts.map((d) => (
-            <RowLink key={d.id}>
-              <span className="tabular-nums">{d.currency} {parseFloat(d.amount).toFixed(2)}</span>
-              <span>{d.invoice_id ? t('cust.m.linkedTo', undefined, { id: d.invoice_id }) : t('cust.standalone')}</span>
-              <StatusBadge status={d.status} map={{ unpaid: 'danger', paid: 'success' }} />
+            <RowLink key={d.id} onClick={() => navigate(`/financial/debts?debt=${d.id}`)}>
+              <span className="tabular-nums">{fmtMoney(d.state === 'unpaid' || d.state === 'partial' ? d.remaining : d.amount, d.currency)}</span>
+              <span>{d.invoice_id ? (d.invoice_number || t('cust.m.linkedTo', undefined, { id: d.invoice_id })) : t('cust.standalone')}</span>
+              <StatusBadge status={d.state || d.status} map={{ unpaid: 'danger', partial: 'warning', paid: 'success', written_off: 'info' }} />
             </RowLink>
           ))}
         </div>
