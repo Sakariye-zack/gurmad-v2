@@ -9,6 +9,8 @@ const debtSuspension = require('../lib/debtSuspension');
 const autoBilling = require('../lib/autoBilling');
 const { toCsv } = require('../lib/csvImportExport');
 const zaadAttempts = require('../lib/zaadAttempts');
+const { PaymentError, amountPrecisionError, sizePayment, fmtMoney } = require('../lib/paymentRules');
+const debtPayments = require('../lib/debtPayments');
 
 const router = express.Router();
 
@@ -34,57 +36,12 @@ async function resolveUserZoneId(user) {
   return r.rows[0]?.id ?? null;
 }
 
-// Structured, expected rejection (404/409/403/...) — distinct from an
-// unexpected 500, so both POST / and POST /zaad-request below can map it
-// straight back to the right HTTP status without duplicating the
-// if/else chain that used to live inline in POST / alone.
-class PaymentError extends Error {
-  constructor(status, code, message) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-// Amount precision (finance redesign fix round): SLSH has no subunit, USD
-// has cents. Returns an error message or null.
-function amountPrecisionError(amt, cur) {
-  if (cur === 'SLSH') return Number.isInteger(amt) ? null : 'SLSH amounts must be whole numbers.';
-  return Math.abs(amt * 100 - Math.round(amt * 100)) < 1e-6 ? null : 'USD amounts can have at most 2 decimals.';
-}
-
-const SLSH_TOLERANCE_USD = 0.005; // half a cent, expressed in SLSH via the rate
-
-const fmtMoney = (cur, n) => cur === 'SLSH' ? `${Math.round(n).toLocaleString('en-US')} SLSH` : `$${n.toFixed(2)}`;
-
-// Size one payment in the invoice's own currency and check it against the
-// outstanding balance. A USD payment on an SLSH invoice is converted at the
-// current rate and tolerates half a cent (rate x 0.005 SLSH): within that
-// band of the outstanding it is accepted and SNAPPED to exactly the
-// outstanding, so a whole-cent USD amount can always close an SLSH invoice.
-// Returns { error } (status/code/outstanding/attempted/invCur) or
-// { attempted, aic, conversionRateId }.
-function sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate }) {
-  if (invCur !== 'SLSH') {
-    if (amountUsd > outstanding + EPSILON) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted: amountUsd, invCur } };
-    return { attempted: amountUsd, aic: amountUsd, conversionRateId: null };
-  }
-  if (cur === 'SLSH') {
-    if (amt > outstanding + EPSILON) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted: amt, invCur } };
-    return { attempted: amt, aic: amt, conversionRateId: null };
-  }
-  if (!rate) return { error: { status: 409, code: 'NO_EXCHANGE_RATE', message: 'No exchange rate is configured — cannot apply a USD payment to a SLSH invoice.' } };
-  const r = parseFloat(rate.rate);
-  const attempted = amt * r;
-  const tol = r * SLSH_TOLERANCE_USD;
-  if (attempted > outstanding + tol) return { error: { status: 409, code: 'OVERPAYMENT', outstanding, attempted, invCur } };
-  const aic = attempted >= outstanding - tol ? outstanding : attempted;
-  return { attempted, aic, conversionRateId: rate.id };
-}
-
 // Read-only pre-check shared with POST /zaad-request (runs BEFORE any
 // gateway call). Returns null when OK, else { status, code, message }.
-async function precheckPayment(client, invoice, { amt, cur }) {
+// collectDebt (Debts V2): the payment is a collection against the invoice's
+// auto-tracked debt, so it is sized against the TRUE outstanding (debt-marked
+// payments excluded) — see recordPaymentCore's collectDebt comment.
+async function precheckPayment(client, invoice, { amt, cur, collectDebt = false }) {
   const invCur = invoice.currency === 'SLSH' ? 'SLSH' : 'USD';
   // A cross-currency payment needs the current rate in both directions: USD
   // on a SLSH invoice is sized in SLSH; SLSH on a USD invoice is converted to
@@ -96,7 +53,7 @@ async function precheckPayment(client, invoice, { amt, cur }) {
   }
   const amountUsd = cur === 'SLSH' && invCur === 'USD' ? amt / parseFloat(rate.rate) : amt;
   const netTotal = parseFloat(invoice.invoice_total) - parseFloat(invoice.discount_amount);
-  const outstanding = netTotal - await paidInInvoiceCurrency(invoice.id, invCur, client, { rate: invCur === 'SLSH' ? rate : undefined });
+  const outstanding = netTotal - await paidInInvoiceCurrency(invoice.id, invCur, client, { rate: invCur === 'SLSH' ? rate : undefined, excludeDebt: collectDebt });
   const sized = sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate });
   if (sized.error) {
     return { status: 409, code: sized.error.code, message: sized.error.message || `Amount exceeds outstanding balance. Outstanding: ${fmtMoney(invCur, outstanding)}.` };
@@ -112,7 +69,22 @@ async function precheckPayment(client, invoice, { amt, cur }) {
 // 10) so POST /zaad-request below can reuse the EXACT same rules after
 // a WAAFI-confirmed payment, instead of a second, drift-prone copy.
 // Caller owns the transaction (BEGIN/COMMIT/ROLLBACK) and audit logging.
-async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, referenceCode, channel = null }) {
+//
+// collectDebt (Debts V2 — "Collect payment" on an auto-tracked debt): the
+// payment is REAL money collected against the debt-marked part of the
+// invoice. It is sized against the TRUE outstanding (net - real payments,
+// debt-marked rows excluded — the same figure the auto debt mirrors), not
+// the invoice outstanding (which already counts debt-marked rows as paid
+// and would block the collection as an overpayment). When it exceeds the
+// invoice outstanding, the excess is CONVERTED: debt-marked rows are
+// reversed oldest first (reason "Converted to real payment #N") and, when
+// the last one is only partly used, a new debt-marked row for the leftover
+// is recorded by the collecting user — the same "paid X, rest stays debt"
+// shape the Billing panel records in one action. The invoice's paid total
+// therefore never exceeds its net total, nothing is counted twice, and the
+// unchanged auto-debt sync below reduces / settles the debt.
+// viaDebtId only tags the payment row (payments.collected_via_debt_id).
+async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, referenceCode, channel = null, collectDebt = false, viaDebtId = null }) {
   // Lock the invoice FIRST — deterministic lock order across every
   // Module 6 route (OD-7 / non-negotiable rule #7), so two concurrent
   // payment attempts against the same invoice can never both read a
@@ -150,8 +122,15 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   const alreadyPaid = await paidInInvoiceCurrency(invoiceId, invCur, client, { rate: currentRate });
   const outstanding = netTotal - alreadyPaid;
 
+  // Debt collection: size against the true outstanding (see header).
+  let sizingOutstanding = outstanding;
+  if (collectDebt) {
+    if (method === 'debt') throw new PaymentError(400, 'VALIDATION', 'A debt collection must be real money (cash, ZAAD, eDahab or SLSH cash).');
+    sizingOutstanding = netTotal - await paidInInvoiceCurrency(invoiceId, invCur, client, { excludeDebt: true, rate: currentRate });
+  }
+
   // This payment's size in the invoice's currency (frozen on the row).
-  const sized = sizePayment({ invCur, cur, amt, amountUsd, outstanding, rate: currentRate });
+  const sized = sizePayment({ invCur, cur, amt, amountUsd, outstanding: sizingOutstanding, rate: currentRate });
   if (sized.error) {
     const e = sized.error;
     throw new PaymentError(e.status, e.code, e.message ||
@@ -159,11 +138,16 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
   }
 
   const inserted = await client.query(
-    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id, channel)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded',$9,$10,$11) RETURNING *`,
-    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id ?? null, referenceCode || null, sized.aic, sized.conversionRateId, channel]
+    `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id, channel, collected_via_debt_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'recorded',$9,$10,$11,$12) RETURNING *`,
+    [invoiceId, amt, cur, method, amountUsd, exchangeRateId, user.id ?? null, referenceCode || null, sized.aic, sized.conversionRateId, channel, viaDebtId]
   );
   const payment = inserted.rows[0];
+
+  let conversion = null;
+  if (collectDebt && sized.aic > outstanding + EPSILON) {
+    conversion = await convertDebtMarked(client, user, { invoice, invCur, currentRate, room: sized.aic - Math.max(outstanding, 0), paymentId: payment.id });
+  }
 
   const recalculated = await recalculateInvoiceStatus(invoiceId, client);
 
@@ -205,7 +189,85 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
     );
   }
 
-  return { payment, recalculated, invoice };
+  return { payment, recalculated, invoice, conversion };
+}
+
+// Audit trail of a debt-marked -> real conversion (one entry per collection).
+async function auditConversion(actor, payment, conversion) {
+  await logAudit({
+    actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.debt_conversion', entityType: 'payment', entityId: payment.id,
+    before: { debt_marked_payments: conversion.reversed },
+    after: { real_payment_id: payment.id, converted: conversion.converted, leftover_debt_marked: conversion.leftover, replacement_payment_id: conversion.replacement_payment_id },
+  });
+}
+
+// Frees `room` (invoice currency) of debt-marked value on one invoice for a
+// real debt collection: reverses recorded method='debt' rows oldest first
+// (converted_by_payment_id = the real payment) and re-records any partly used
+// remainder as ONE new debt-marked row (leftover_of_payment_id = the real
+// payment). Date / cashier choice for that row: it carries the ORIGINAL row's
+// cashier_id (who marked the debt) but is dated NOW — a back-dated row would
+// break every "as of" computation (pre-V2 cashout re-display, the cashier
+// assignment panel's opening balance), while a debt-marked row never has a
+// cash effect: it is excluded from revenue and from Transactions totals
+// (leftover rows), and in a cashout it is "accounted for, no money". The
+// leftover is rounded UP to whole cents (USD invoice) / whole shillings (SLSH
+// invoice); the residue (< 1 unit) stays in the leftover, so the invoice's
+// paid total is never below its net total (status stays 'paid'). Runs inside recordPaymentCore's transaction, invoice row
+// already locked. Each row's value uses exactly paidInInvoiceCurrency's
+// per-row rule (USD invoice: amount_usd; SLSH invoice: frozen
+// amount_invoice_currency, legacy fallback), so the invoice's paid total is
+// unchanged by the conversion except for the real payment itself.
+async function convertDebtMarked(client, user, { invoice, invCur, currentRate, room, paymentId }) {
+  const curRate = currentRate ? parseFloat(currentRate.rate) : null;
+  const rows = (await client.query(
+    `SELECT p.id, p.amount, p.currency, p.amount_usd, p.cashier_id,
+            CASE WHEN $2 = 'SLSH' THEN COALESCE(p.amount_invoice_currency,
+                   CASE WHEN p.currency = 'SLSH' THEN p.amount ELSE p.amount_usd * COALESCE(er.rate, $3::numeric) END)
+                 ELSE p.amount_usd END AS value
+     FROM payments p LEFT JOIN exchange_rates er ON er.id = p.exchange_rate_id
+     WHERE p.invoice_id = $1 AND p.status = 'recorded' AND p.method = 'debt'
+     ORDER BY p.created_at ASC, p.id ASC
+     FOR UPDATE OF p`,
+    [invoice.id, invCur, curRate]
+  )).rows;
+  const reason = `Converted to real payment #${paymentId} (debt collection)`;
+  let freed = 0;
+  const reversed = [];
+  for (const r of rows) {
+    if (freed >= room - 1e-9) break;
+    await client.query(
+      `UPDATE payments SET status = 'reversed', reversed_at = NOW(), reversed_by = $1, reversed_reason = $2, converted_by_payment_id = $4 WHERE id = $3`,
+      [user.id, reason, r.id, paymentId]
+    );
+    freed += parseFloat(r.value || 0);
+    reversed.push({ id: r.id, amount: r.amount, currency: r.currency, value: parseFloat(r.value || 0), cashier_id: r.cashier_id });
+  }
+  if (freed < room - EPSILON) {
+    // Cannot happen when sizing used the true outstanding; never record a
+    // collection the ledger cannot absorb.
+    throw new PaymentError(409, 'CONFLICT', 'The debt-marked part of this invoice changed — reload and try again.');
+  }
+  const exact = freed - room;
+  const unit = invCur === 'SLSH' ? 1 : 100;
+  const leftover = exact > 0.000001 ? Math.ceil(exact * unit - 1e-6) / unit : 0;
+  const lastCashier = reversed.length ? reversed[reversed.length - 1].cashier_id : null;
+  let replacement = null;
+  if (leftover > 0) {
+    let exchangeRateId = null;
+    let leftoverUsd = leftover;
+    if (invCur === 'SLSH') {
+      if (!currentRate) throw new PaymentError(409, 'NO_EXCHANGE_RATE', 'No exchange rate is configured — cannot re-record the remaining debt-marked SLSH amount.');
+      exchangeRateId = currentRate.id;
+      leftoverUsd = leftover / curRate;
+    }
+    replacement = (await client.query(
+      `INSERT INTO payments (invoice_id, amount, currency, method, amount_usd, exchange_rate_id, cashier_id, reference_code, status, amount_invoice_currency, conversion_rate_id, channel, leftover_of_payment_id)
+       VALUES ($1,$2,$3,'debt',$4,$5,$6,NULL,'recorded',$2,NULL,NULL,$7) RETURNING *`,
+      [invoice.id, leftover, invCur, leftoverUsd, exchangeRateId, lastCashier ?? user.id ?? null, paymentId]
+    )).rows[0];
+  }
+  return { converted: Math.round(room * 1e6) / 1e6, reversed, replacement_payment_id: replacement ? replacement.id : null, leftover };
 }
 
 // Shared ZAAD collect flow (staff POST /zaad-request and the customer
@@ -219,7 +281,7 @@ async function recordPaymentCore(client, user, { invoiceId, amt, cur, method, re
 //   { kind: 'ok', payment, recalculated, zaadResult }
 //   { kind: 'reconciliation', zaadResult, error }  (WAAFI approved, record failed)
 // Throws only on a gateway transport error.
-async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel = null, reference = null, auditExtra = {} }) {
+async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel = null, reference = null, auditExtra = {}, collectDebt = false, viaDebtId = null }) {
   const zaadResult = await zaadService.requestZaadPayment({ phone: phoneDigits, amount: amt, currency: cur, reference: reference || invoice.invoice_number });
   // A gateway timeout is an UNKNOWN outcome, not a decline.
   if (!zaadResult.ok && zaadResult.timedOut) return { kind: 'unknown', zaadResult };
@@ -230,7 +292,7 @@ async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel =
   try {
     await client.query('BEGIN');
     recorded = await recordPaymentCore(client, actor, {
-      invoiceId: invoice.id, amt, cur, method: 'zaad', referenceCode: zaadResult.transactionId, channel,
+      invoiceId: invoice.id, amt, cur, method: 'zaad', referenceCode: zaadResult.transactionId, channel, collectDebt, viaDebtId,
     });
     await client.query('COMMIT');
   } catch (err) {
@@ -247,13 +309,18 @@ async function runZaadCollect({ invoice, amt, cur, phoneDigits, actor, channel =
   } finally {
     client.release();
   }
-  const { payment, recalculated } = recorded;
+  const { payment, recalculated, conversion } = recorded;
   await debtSuspension.afterPayment(invoice.customer_id);
   await logAudit({ actorId: actor.id ?? null, actorUsername: actor.username, action: 'payment.create', entityType: 'payment', entityId: payment.id, before: null, after: { ...payment, ...auditExtra, zaad_raw: zaadResult.raw } })
     .catch((e) => console.error('payment.create audit failed:', e && e.message));
-  return { kind: 'ok', payment, recalculated, zaadResult };
+  if (conversion) await auditConversion(actor, payment, conversion).catch((e) => console.error('debt conversion audit failed:', e && e.message));
+  return { kind: 'ok', payment, recalculated, zaadResult, conversion };
 }
 
+// Debt collection (debt_id given): the payment must be recorded through the
+// Debts page so the auto debt is collected (and debt-marked parts converted).
+const reconciliationMessageForDebt = (txId, reason, debtId) =>
+  `ZAAD approved this payment (transaction ${txId}) but it could not be recorded against the debt: ${reason}. The money has already been received into the merchant account — record it manually with POST /debts/${debtId}/collect (Debts page → Collect payment), method ZAAD, reference code ${txId}, once resolved.`;
 const reconciliationMessage = (txId, reason) =>
   `ZAAD approved this payment (transaction ${txId}) but it could not be recorded against the invoice: ${reason}. The money has already been received into the merchant account — record it manually with reference code ${txId} once resolved.`;
 
@@ -345,16 +412,28 @@ async function buildTxQuery(req, { withFilters = true } = {}) {
       where.push(`(i.invoice_number ILIKE $${i} OR c.name ILIKE $${i} OR c.customer_number ILIKE $${i} OR i.customer_number_snapshot ILIKE $${i} OR p.reference_code ILIKE $${i})`);
     }
   }
+  // Debts V2: target filter — invoice payments vs standalone-debt payments.
+  if (q.target) {
+    if (q.target === 'debt') where.push('p.debt_id IS NOT NULL');
+    else if (q.target === 'invoice') where.push('p.invoice_id IS NOT NULL');
+    else return { error: 'target must be invoice or debt.' };
+  }
   return { tz, params, where };
 }
 
+// Debts V2: a payment targets an invoice OR a standalone debt (never both —
+// payments_target_check), so the customer comes from whichever is set. A
+// standalone-debt payment is a real payment and is listed / totalled here
+// like any other; invoice_number is NULL and debt_id identifies the debt.
 const TX_FROM = `FROM payments p
-  JOIN invoices i ON i.id = p.invoice_id
-  JOIN customers c ON c.id = i.customer_id
+  LEFT JOIN invoices i ON i.id = p.invoice_id
+  LEFT JOIN debts pd ON pd.id = p.debt_id
+  JOIN customers c ON c.id = COALESCE(i.customer_id, pd.customer_id)
   LEFT JOIN v2_users u ON u.id = p.cashier_id`;
-const TX_COLS = `p.id, p.invoice_id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.channel,
+const TX_COLS = `p.id, p.invoice_id, p.debt_id, p.collected_via_debt_id, p.converted_by_payment_id, p.leftover_of_payment_id,
+  CASE WHEN p.converted_by_payment_id IS NOT NULL THEN 'converted' WHEN p.leftover_of_payment_id IS NOT NULL THEN 'leftover' END AS conversion, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.channel,
   p.cashier_id, p.created_at, p.reversed_at, p.reversed_reason,
-  i.invoice_number, i.currency AS invoice_currency, i.customer_id,
+  i.invoice_number, COALESCE(i.currency, pd.currency) AS invoice_currency, c.id AS customer_id,
   c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number,
   COALESCE(u.full_name, u.username) AS cashier_name`;
 const whereSql = (where) => (where.length ? `WHERE ${where.join(' AND ')}` : '');
@@ -381,12 +460,18 @@ router.get('/transactions', authenticateToken, requireRole(...VIEW_ROLES), async
 
 // One aggregate block: received (recorded, non-debt) split by currency,
 // method and channel; plus debt-marked and reversed totals for context.
+// Debts V2 conversion rows never move a period's figures: a debt-marked row
+// reversed because a debt collection CONVERTED it still counts as
+// debt-marked in its own period (it is not a real reversal), and the
+// leftover debt-marked row a conversion re-records is never counted (its
+// value is already in the original row).
 async function aggregate(params, where) {
   const w = whereSql(where);
   const rows = (await pool.query(
     `SELECT p.status, p.method, p.currency, (p.channel = 'portal_zaad') AS portal,
+            (p.converted_by_payment_id IS NOT NULL) AS conv, (p.leftover_of_payment_id IS NOT NULL) AS lo,
             COUNT(*)::int AS n, COALESCE(SUM(p.amount), 0) AS amount, COALESCE(SUM(p.amount_usd), 0) AS usd
-     ${TX_FROM} ${w} GROUP BY 1, 2, 3, 4`, params)).rows;
+     ${TX_FROM} ${w} GROUP BY 1, 2, 3, 4, 5, 6`, params)).rows;
   const out = {
     count: 0, total_usd: 0, by_currency: { USD: 0, SLSH: 0 },
     by_method: { cash: 0, zaad: 0, edahab: 0, slsh: 0 }, by_channel: { staff: 0, portal: 0 },
@@ -394,6 +479,8 @@ async function aggregate(params, where) {
   };
   for (const r of rows) {
     const usd = parseFloat(r.usd);
+    if (r.lo) continue;
+    if (r.conv) { out.debt_usd += usd; continue; }
     if (r.status === 'reversed') { out.reversed_usd += usd; out.reversed_count += r.n; continue; }
     if (r.method === 'debt') { out.debt_usd += usd; continue; }
     out.count += r.n;
@@ -437,7 +524,7 @@ router.get('/transactions.csv', authenticateToken, requireRole(...VIEW_ROLES), a
       return res.status(413).json({ error: { message: `More than ${TX_CSV_MAX_ROWS.toLocaleString('en-US')} transactions match — narrow the date range or filters and export again.`, code: 'TOO_MANY_ROWS' } });
     }
     const columns = [
-      { key: 'local_time', label: 'Date' }, { key: 'invoice_number', label: 'Invoice' },
+      { key: 'local_time', label: 'Date' }, { key: 'target_label', label: 'Invoice' },
       { key: 'customer_number', label: 'Customer #' }, { key: 'customer_name', label: 'Customer' },
       { key: 'method', label: 'Method' }, { key: 'reference_code', label: 'Reference / ZAAD transaction' },
       { key: 'channel_label', label: 'Channel' }, { key: 'amount', label: 'Amount' }, { key: 'currency', label: 'Currency' },
@@ -446,6 +533,7 @@ router.get('/transactions.csv', authenticateToken, requireRole(...VIEW_ROLES), a
     ];
     const csv = toCsv(rows.map((r) => ({
       ...r,
+      target_label: r.invoice_number || (r.debt_id ? `Debt #${r.debt_id}` : ''),
       channel_label: r.channel === 'portal_zaad' ? 'Customer portal' : 'Staff',
       amount_usd_fmt: parseFloat(r.amount_usd).toFixed(2),
       recorded_by: r.channel === 'portal_zaad' ? 'Customer portal (ZAAD)' : (r.cashier_name || (r.cashier_id ? `#${r.cashier_id}` : '')),
@@ -553,9 +641,16 @@ router.post('/', authenticateToken, requireRole(...RECORD_ROLES), async (req, re
 // reference (<invoice_number>-A<attemptId>), and every unknown outcome is
 // audited + notified to admins.
 router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), async (req, res) => {
-  const { invoice_id, phone, amount, currency } = req.body;
+  const { invoice_id, phone, amount, currency, debt_id } = req.body;
   const invoiceId = parseStrictId(String(invoice_id ?? ''));
   if (invoiceId === null) return res.status(400).json({ error: { message: 'invoice_id is required.', code: 'VALIDATION' } });
+  // Debts V2: debt_id = this push collects the invoice's auto-tracked debt
+  // (sized against the true outstanding, debt-marked rows converted).
+  let viaDebtId = null;
+  if (debt_id !== undefined && debt_id !== null && debt_id !== '') {
+    viaDebtId = parseStrictId(String(debt_id));
+    if (viaDebtId === null) return res.status(400).json({ error: { message: 'Invalid debt_id.', code: 'VALIDATION' } });
+  }
   const phoneDigits = String(phone || '').replace(/\D/g, '');
   if (phoneDigits.length < 7 || phoneDigits.length > 15) return res.status(400).json({ error: { message: 'A valid phone number is required.', code: 'VALIDATION' } });
   const amt = parseFloat(amount);
@@ -579,7 +674,11 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
     if (myZoneId !== null && custRes.rows[0]?.zone_id !== myZoneId) {
       return res.status(403).json({ error: { message: 'You do not have access to this invoice.', code: 'FORBIDDEN' } });
     }
-    const blocked = await precheckPayment(pool, invoice, { amt, cur });
+    if (viaDebtId !== null) {
+      const bad = debtPayments.checkAutoDebtForCollection((await pool.query('SELECT * FROM debts WHERE id = $1', [viaDebtId])).rows[0], invoiceId);
+      if (bad) return res.status(bad.status).json({ error: { message: bad.message, code: bad.code } });
+    }
+    const blocked = await precheckPayment(pool, invoice, { amt, cur, collectDebt: viaDebtId !== null });
     if (blocked) return res.status(blocked.status).json({ error: { message: blocked.message, code: blocked.code } });
 
     if (zaadAttempts.ZAAD_INFLIGHT.has(invoiceId)) return zaadInProgress(res);
@@ -614,11 +713,11 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
       id: attemptId, invoice_id: invoiceId, amount: amt, currency: cur, phone: phoneDigits, reference, source: 'staff',
       staff_user_id: req.user.id, staff_username: req.user.username, invoice_number: invoice.invoice_number, customer_number: custRes.rows[0]?.customer_number,
     };
-    const auditExtra = { target_phone: phoneDigits, attempt_id: attemptId, reference };
+    const auditExtra = { target_phone: phoneDigits, attempt_id: attemptId, reference, ...(viaDebtId !== null ? { collected_via_debt_id: viaDebtId } : {}) };
 
     let r;
     try {
-      r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user, reference, auditExtra });
+      r = await runZaadCollect({ invoice, amt, cur, phoneDigits, actor: req.user, reference, auditExtra, collectDebt: viaDebtId !== null, viaDebtId });
     } catch (e) {
       // Transport error: the request may already have reached WAAFI.
       await zaadAttempts.finishZaadAttempt(attemptId, 'unknown', { errorCode: 'GATEWAY_ERROR' });
@@ -641,13 +740,17 @@ router.post('/zaad-request', authenticateToken, requireRole(...RECORD_ROLES), as
       await zaadAttempts.notifyAdmins({
         invoiceId,
         title: `ZAAD payment needs reconciliation — ${invoice.invoice_number}`,
-        body: `Cashier ${req.user.username} collected ${zaadAttempts.fmtAmt(amt, cur)} via ZAAD (transaction ${txId}, attempt ${attemptId}, phone ${phoneDigits}) on invoice ${invoice.invoice_number}, but it could not be recorded: ${r.error.message}. Review the invoice and record it manually with reference code ${txId}.`,
+        body: viaDebtId !== null
+          ? `Cashier ${req.user.username} collected ${zaadAttempts.fmtAmt(amt, cur)} via ZAAD (transaction ${txId}, attempt ${attemptId}, phone ${phoneDigits}) for debt #${viaDebtId} on invoice ${invoice.invoice_number}, but it could not be recorded: ${r.error.message}. Record it with Collect payment on debt #${viaDebtId} (method ZAAD, reference code ${txId}).`
+          : `Cashier ${req.user.username} collected ${zaadAttempts.fmtAmt(amt, cur)} via ZAAD (transaction ${txId}, attempt ${attemptId}, phone ${phoneDigits}) on invoice ${invoice.invoice_number}, but it could not be recorded: ${r.error.message}. Review the invoice and record it manually with reference code ${txId}.`,
       });
-      return res.status(409).json({ error: { message: reconciliationMessage(txId, r.error.message), code: 'RECONCILIATION_REQUIRED', transaction_id: txId } });
+      const msg = viaDebtId !== null ? reconciliationMessageForDebt(txId, r.error.message, viaDebtId) : reconciliationMessage(txId, r.error.message);
+      return res.status(409).json({ error: { message: msg, code: 'RECONCILIATION_REQUIRED', transaction_id: txId } });
     }
     const { payment, recalculated } = r;
     await zaadAttempts.finishZaadAttempt(attemptId, 'ok', { transactionId: r.zaadResult.transactionId, paymentId: payment.id });
-    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency, attempt_reference: reference } });
+    const debtAfter = viaDebtId !== null ? await debtPayments.autoDebtStateForInvoice(invoiceId).catch(() => null) : undefined;
+    res.status(201).json({ data: { ...payment, invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency, attempt_reference: reference, ...(debtAfter !== undefined ? { debt: debtAfter } : {}) } });
   } catch (err) {
     console.error('zaad-request failed:', err && err.message);
     if (attemptId) {
@@ -676,30 +779,85 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const payRes = await client.query('SELECT * FROM payments WHERE id = $1 FOR UPDATE', [id]);
-    if (payRes.rows.length === 0) {
+    // Lock order (fix round): the TARGET first (invoice, or standalone debt),
+    // then the payment row — the same order recordPaymentCore and the
+    // debt-marked conversion use, so a reversal racing a collection on the
+    // same invoice can never deadlock. Read unlocked to find the target,
+    // then re-select the payment FOR UPDATE and re-check it.
+    const peek = await client.query('SELECT invoice_id, debt_id FROM payments WHERE id = $1', [id]);
+    if (peek.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'Payment not found.', code: 'NOT_FOUND' } });
     }
+    let lockedInvoice = null;
+    if (peek.rows[0].invoice_id !== null) {
+      lockedInvoice = (await client.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [peek.rows[0].invoice_id])).rows[0];
+    } else {
+      await client.query('SELECT id FROM debts WHERE id = $1 FOR UPDATE', [peek.rows[0].debt_id]);
+    }
+    const payRes = await client.query('SELECT * FROM payments WHERE id = $1 FOR UPDATE', [id]);
     const payment = payRes.rows[0];
     if (payment.status === 'reversed') {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: { message: 'This payment is already reversed.', code: 'CONFLICT' } });
     }
-    // Lock order: invoice first, then payment — consistent across every
-    // Module 6 route (§11 of the Implementation Spec) to prevent a
-    // deadlock between concurrent operations on the same invoice. The
-    // invoice was not yet locked above, so lock it now before writing.
-    // (full row, not just id — the auto-debt sync below needs
-    // customer_id/invoice_total/discount_amount/invoice_number.)
-    const invLockRes = await client.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [payment.invoice_id]);
-    const lockedInvoice = invLockRes.rows[0];
+    // Debts V2: a payment on a STANDALONE debt (invoice_id NULL) touches no
+    // invoice — reverse it and re-open the debt when it is no longer covered.
+    if (payment.debt_id !== null && payment.debt_id !== undefined) {
+      const out = await debtPayments.reverseDebtPayment(client, req.user, payment, reason);
+      await client.query('COMMIT');
+      const auditFail = (e) => console.error('reverse audit failed:', e && e.message);
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.reverse', entityType: 'payment', entityId: id, before: payment, after: out.payment }).catch(auditFail);
+      if (out.reopened) {
+        await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.reopen', entityType: 'debt', entityId: payment.debt_id, before: out.debtBefore, after: out.debt }).catch(auditFail);
+      }
+      const response = { data: { ...out.payment, invoice_status: null, outstanding: null, outstanding_currency: null, debt_status: out.debt.status, debt_remaining: out.remaining, debt_currency: out.debt.currency } };
+      if (out.warning) response.warnings = [out.warning];
+      return res.json(response);
+    }
+    // (invoice already locked above — full row: the auto-debt sync below
+    // needs customer_id/invoice_total/discount_amount/invoice_number.)
+
+    // Debts V2 fix round: reversing the real payment of a debt collection
+    // that CONVERTED debt-marked rows undoes the conversion exactly — the
+    // converted rows are restored to 'recorded' and the leftover row it
+    // created is reversed — so the invoice returns to its pre-collection
+    // state (debt-marked part intact). Refused (409) when anything happened
+    // on the invoice after that payment (a later collection, a re-converted
+    // leftover), because then an exact undo is not provable.
+    const converted = (await client.query('SELECT id FROM payments WHERE converted_by_payment_id = $1 FOR UPDATE', [id])).rows;
+    const leftovers = (await client.query('SELECT id, status FROM payments WHERE leftover_of_payment_id = $1 FOR UPDATE', [id])).rows;
+    if (converted.length || leftovers.length) {
+      const later = await client.query(
+        `SELECT 1 FROM payments WHERE invoice_id = $1 AND id > $2 AND status = 'recorded' AND leftover_of_payment_id IS DISTINCT FROM $2 LIMIT 1`,
+        [payment.invoice_id, id]);
+      if (later.rows.length || leftovers.some((l) => l.status !== 'recorded')) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: { code: 'CONVERSION_NOT_REVERSIBLE', message: 'This payment converted debt-marked amounts and the invoice has changed since (a later payment or collection). It cannot be undone automatically: reverse the later payments first, or adjust / void the invoice.' } });
+      }
+    }
 
     const updated = await client.query(
       `UPDATE payments SET status = 'reversed', reversed_at = NOW(), reversed_by = $1, reversed_reason = $2 WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id]
     );
+    let restored = [];
+    if (converted.length || leftovers.length) {
+      restored = (await client.query(
+        `UPDATE payments SET status = 'recorded', reversed_at = NULL, reversed_by = NULL, reversed_reason = NULL, converted_by_payment_id = NULL
+         WHERE converted_by_payment_id = $1 RETURNING id`, [id])).rows.map((r) => r.id);
+      await client.query(
+        `UPDATE payments SET status = 'reversed', reversed_at = NOW(), reversed_by = $1, reversed_reason = $2 WHERE leftover_of_payment_id = $3 AND status = 'recorded'`,
+        [req.user.id, `Conversion undone (payment #${id} reversed)`, id]);
+    }
     const recalculated = await recalculateInvoiceStatus(payment.invoice_id, client);
+    if (lockedInvoice.status === 'voided') {
+      // P2-2: a voided invoice is owed by nobody — no auto-debt upkeep.
+      await client.query('COMMIT');
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.reverse', entityType: 'payment', entityId: id, before: payment, after: updated.rows[0] })
+        .catch((e) => console.error('payment.reverse audit failed:', e && e.message));
+      return res.json({ data: { ...updated.rows[0], invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } });
+    }
 
     // Keep the auto-tracked debt (source='auto_invoice') in sync after a
     // reversal too — same rule as POST / above, see its own comment.
@@ -744,8 +902,8 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
     }
 
     await client.query('COMMIT');
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.reverse', entityType: 'payment', entityId: id, before: payment, after: updated.rows[0] });
-    const response = { data: { ...updated.rows[0], invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency } };
+    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.reverse', entityType: 'payment', entityId: id, before: payment, after: { ...updated.rows[0], ...(restored.length ? { conversion_undone: true, restored_debt_marked_payment_ids: restored } : {}) } });
+    const response = { data: { ...updated.rows[0], invoice_status: recalculated.status, outstanding: recalculated.outstanding, outstanding_currency: recalculated.currency, ...(restored.length ? { restored_debt_marked_payment_ids: restored } : {}) } };
     if (warning) response.warnings = [warning];
     res.json(response);
   } catch (err) {
@@ -757,6 +915,10 @@ router.put('/:id/reverse', authenticateToken, requireRole('admin'), async (req, 
 });
 
 router.precheckPayment = precheckPayment;
+router.recordPaymentCore = recordPaymentCore;
+router.auditConversion = auditConversion;
+router.PaymentError = PaymentError;
 router.runZaadCollect = runZaadCollect;
 router.reconciliationMessage = reconciliationMessage;
+router.reconciliationMessageForDebt = reconciliationMessageForDebt;
 module.exports = router;

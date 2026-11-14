@@ -29,6 +29,7 @@ import { FINANCE_REDESIGN } from './financeRedesign.js';
 import { CASHOUT_V2 } from './cashoutV2.js';
 import { CUSTOMERS_LIST } from './customersList.js';
 import { GROUPS_V2 } from './groupsV2.js';
+import { DEBTS_V2 } from './debtsV2.js';
 
 export const TRANSLATIONS = {
   ...COMMON,
@@ -50,6 +51,7 @@ export const TRANSLATIONS = {
   ...CASHOUT_V2,
   ...CUSTOMERS_LIST,
   ...GROUPS_V2,
+  ...DEBTS_V2,
   // Sidebar — top-level + group names
   'nav.dashboard': { en: 'Dashboard', so: 'Guriga' },
   'nav.group.operations': { en: 'Operations', so: 'Hawlaha' },

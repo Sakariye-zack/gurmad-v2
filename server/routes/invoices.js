@@ -382,8 +382,20 @@ router.put('/:id/void', authenticateToken, requireRole('admin'), async (req, res
       `UPDATE invoices SET status = 'voided', voided_at = NOW(), voided_by = $1, voided_reason = $2 WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id]
     );
+    // Debts V2: the auto-tracked debt mirrors this invoice's unpaid part — a
+    // voided invoice is owed by nobody, so its open auto debt is closed as
+    // written off (the Debts page tells users to void / adjust the invoice
+    // instead of writing such a debt off by hand). Manual debts untouched.
+    const closedDebts = await client.query(
+      `UPDATE debts SET status = 'written_off', written_off_at = NOW(), written_off_by = $1, written_off_reason = $2, updated_at = NOW()
+       WHERE invoice_id = $3 AND source = 'auto_invoice' AND status = 'unpaid' RETURNING *`,
+      [req.user.id, `Invoice ${inv.invoice_number} voided: ${reason}`, id]
+    );
     await client.query('COMMIT');
     await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'invoice.void', entityType: 'invoice', entityId: id, before: inv, after: updated.rows[0] });
+    for (const d of closedDebts.rows) {
+      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.write_off', entityType: 'debt', entityId: d.id, before: { status: 'unpaid', amount: d.amount, currency: d.currency }, after: { status: 'written_off', reason: d.written_off_reason, via: 'invoice.void' } });
+    }
     // F3: voiding may clear a debt-suspended customer's balance (best-effort, never fails the void).
     await debtSuspension.afterPayment(inv.customer_id);
     res.json({ data: updated.rows[0] });

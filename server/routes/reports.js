@@ -300,7 +300,8 @@ const EXPORTABLE = {
     { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
   ] },
   'debts-summary': { roles: FINANCIAL_ROLES, fn: 'debts', columns: [
-    { key: 'customer_name', label: 'Customer' }, { key: 'amount', label: 'Amount' }, { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
+    { key: 'customer_name', label: 'Customer' }, { key: 'amount', label: 'Amount' }, { key: 'currency', label: 'Currency' },
+    { key: 'remaining', label: 'Remaining' }, { key: 'status', label: 'Status' }, { key: 'created_at', label: 'Date' },
   ] },
   // Added (Phase 10 — user-reported: 'si isla xisaabtanku u hagaago' —
   // so the accounting itself reconciles): the Collection History tab

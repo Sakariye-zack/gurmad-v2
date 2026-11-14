@@ -561,11 +561,12 @@ router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), a
     const result = await pool.query(
       `SELECT payments.id, payments.amount, payments.currency, payments.method, payments.amount_usd, payments.created_at,
               payments.reference_code, payments.channel, payments.status,
-              invoices.invoice_number, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
+              invoices.invoice_number, payments.debt_id, customers.name AS customer_name, COALESCE(invoices.customer_number_snapshot, customers.customer_number) AS customer_number
        FROM payments
-       JOIN invoices ON payments.invoice_id = invoices.id
-       JOIN customers ON invoices.customer_id = customers.id
-       WHERE ${byIds ? 'payments.id = ANY($1::int[])' : `payments.cashier_id = $1 AND payments.status = 'recorded'
+       LEFT JOIN invoices ON payments.invoice_id = invoices.id
+       LEFT JOIN debts ON debts.id = payments.debt_id
+       JOIN customers ON customers.id = COALESCE(invoices.customer_id, debts.customer_id)
+       WHERE ${byIds ? 'payments.id = ANY($1::int[])' : `payments.cashier_id = $1 AND (payments.status = 'recorded' OR (payments.converted_by_payment_id IS NOT NULL AND payments.reversed_at >= $4))
          AND payments.created_at >= $2 AND payments.created_at < $3 AND payments.created_at < $4`}
        ORDER BY payments.created_at ASC`,
       byIds ? [cashout.covered_payment_ids] : [cashout.cashier_id, cashout.period_start, cashout.period_end, cashout.created_at]

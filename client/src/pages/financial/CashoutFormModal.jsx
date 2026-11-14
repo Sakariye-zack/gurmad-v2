@@ -283,7 +283,7 @@ function StatementGroup({ g, ticked, onToggle, onTickAll, rowNotes, setRowNote, 
             <input type="checkbox" checked={on} onChange={() => onToggle(x.id)} aria-label={t('co2.stmt.found', undefined, { code: x.reference_code || x.id })} />
             <div style={{ minWidth: 0 }}>
               <div><span className="co-code">{x.reference_code || '—'}</span></div>
-              <div className="who">{x.customer_name} · {x.customer_number} · {x.invoice_number} · {fmtDateTime(x.created_at)}</div>
+              <div className="who">{x.customer_name} · {x.customer_number} · {x.invoice_number || t('dv.debtRef', undefined, { id: x.debt_id })} · {fmtDateTime(x.created_at)}</div>
             </div>
             <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(x.amount, x.currency)}</span>
             {!on && (

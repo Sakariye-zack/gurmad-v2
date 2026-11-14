@@ -16,6 +16,9 @@ const PAGE_SIZE = 25;
 const METHOD_COLORS = { cash: '#4caf3f', slsh: '#2e7d32', zaad: '#f5a623', edahab: '#2563a8' };
 const EMPTY = { date_from: '', date_to: '', method: '', currency: '', channel: '', status: '' };
 
+// Debts V2: a payment on a standalone debt has no invoice — open the debt instead.
+const txTarget = (p) => (p.invoice_id ? `/financial/invoices/${p.invoice_id}` : `/financial/debts?debt=${p.debt_id}`);
+
 export default function TransactionsPage() {
   const { t } = useI18n();
   const { user } = useAuth();
@@ -147,10 +150,10 @@ export default function TransactionsPage() {
         ]}
       >
         {rows.map((p) => (
-          <tr key={p.id} className={`fin-tx-row${p.status === 'reversed' ? ' reversed' : ''}`} onClick={() => navigate(`/financial/invoices/${p.invoice_id}`)}
-            tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/financial/invoices/${p.invoice_id}`); }}>
+          <tr key={p.id} className={`fin-tx-row${p.status === 'reversed' ? ' reversed' : ''}`} onClick={() => navigate(txTarget(p))}
+            tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') navigate(txTarget(p)); }}>
             <td style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(p.created_at)}</td>
-            <td><strong>{p.invoice_number}</strong></td>
+            <td><strong>{p.invoice_number || t('dv.debtRef', undefined, { id: p.debt_id })}</strong>{p.debt_id && <div className="fin-note">{t('dv.tx.standalone')}</div>}{p.conversion && <div className="fin-note">{t(`dv.tx.${p.conversion}`)}</div>}</td>
             <td>{p.customer_name}<div className="fin-note">{p.customer_number}</div></td>
             <td>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}>

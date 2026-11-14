@@ -109,8 +109,18 @@ test('debts: create/settle role gates and validation', async () => {
   assert.equal(d.status, 201);
   assert.equal((await api('POST', '/debts', { token: tokens.admin, body: { customer_id: custA.id, amount: -1, currency: 'USD' } })).status, 400);
   assert.equal((await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.gudoomiye, body: { status: 'paid' } })).status, 403, 'gudoomiye cannot settle');
-  assert.equal((await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 200);
-  assert.equal((await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 409, 'cannot settle twice');
+  // Debts V2 fix round: a standalone debt can no longer be marked settled
+  // without money (Collect payment or Write off instead); only a manual debt
+  // linked to an invoice is settled here.
+  const standalone = await api('PUT', `/debts/${d.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } });
+  assert.equal(standalone.status, 409);
+  assert.equal(standalone.body.error.code, 'USE_COLLECT');
+  const inv = await createInvoice(tokens.admin, custA, 7);
+  assert.equal((await api('POST', '/payments', { token: tokens.cashier, body: { invoice_id: inv.id, amount: 7, currency: 'USD', method: 'cash' } })).status, 201);
+  const linked = await api('POST', '/debts', { token: tokens.gudoomiye, body: { customer_id: custA.id, invoice_id: inv.id, amount: 7, currency: 'USD' } });
+  assert.equal(linked.status, 201);
+  assert.equal((await api('PUT', `/debts/${linked.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 200);
+  assert.equal((await api('PUT', `/debts/${linked.data.id}/status`, { token: tokens.cashier, body: { status: 'paid' } })).status, 409, 'cannot settle twice');
 });
 
 // ---- SLSH invoices: balances are computed in the invoice's own currency ----

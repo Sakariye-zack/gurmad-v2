@@ -329,7 +329,7 @@ function ElectronicCard({ cashout }) {
                       : <Chip tone="warning">{t('co2.viaStatement')}</Chip>}
               </div>
               {missing.get(Number(p.id)) && <div className="ref co-neg">{missing.get(Number(p.id))}</div>}
-              <div className="ref">{p.invoice_number} · {p.customer_name} · {fmtDateTime(p.created_at)}</div>
+              <div className="ref">{p.invoice_number || t('dv.debtRef', undefined, { id: p.debt_id })} · {p.customer_name} · {fmtDateTime(p.created_at)}</div>
             </div>
             <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(p.amount, p.currency)}</span>
           </div>
@@ -555,7 +555,7 @@ function TransactionsList({ cashoutId, enabled }) {
       {rows.map((r) => (
         <div key={r.id}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700 }}>{r.invoice_number} <span className="co-muted" style={{ fontWeight: 400 }}>— {r.customer_name} ({r.customer_number})</span></div>
+            <div style={{ fontWeight: 700 }}>{r.invoice_number || t('dv.debtRef', undefined, { id: r.debt_id })} <span className="co-muted" style={{ fontWeight: 400 }}>— {r.customer_name} ({r.customer_number})</span></div>
             <div className="ref">{fmtDateTime(r.created_at)} · {t(`co2.m.${r.method}`, String(r.method).toUpperCase())}{r.reference_code ? <> · <span className="co-code">{r.reference_code}</span></> : null}</div>
           </div>
           <span className="co-money" style={{ fontWeight: 800 }}>{fmtMoney(r.amount, r.currency)}</span>

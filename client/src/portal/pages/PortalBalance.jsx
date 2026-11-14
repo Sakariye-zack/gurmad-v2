@@ -4,7 +4,7 @@ import { Wallet, AlertTriangle } from 'lucide-react';
 import PortalPageHeader from '../components/PortalPageHeader.jsx';
 import { portalApiClient } from '../apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
-import { fmtByCurrency } from '../../lib/money.js';
+import { fmtByCurrency, fmtMoney } from '../../lib/money.js';
 
 // Gap-audit sweep (Phase 10, continuation): GET /v2/customer-portal/balance
 // was fully built server-side (outstanding invoice balance + the itemized
@@ -15,7 +15,7 @@ import { fmtByCurrency } from '../../lib/money.js';
 // customer could see they owed money but not why. Reached via a click on
 // that stat card / banner (not a 7th top-level nav tab — the existing
 // 6-item PortalShell nav is already tight at mobile widths).
-const DEBT_STATUS_MAP = { unpaid: 'danger', paid: 'success', waived: 'info' };
+const DEBT_STATUS_MAP = { unpaid: 'danger', paid: 'success', waived: 'info', written_off: 'info' };
 
 export default function PortalBalance() {
   const { t } = useI18n();
@@ -45,7 +45,7 @@ export default function PortalBalance() {
           <StatCard label={t('portal.dash.invoiceBalance')} value={fmtByCurrency(data.outstandingByCurrency)} icon={Wallet} accent="#2563EB" />
           <StatCard
             label={t('portal.dash.debt')}
-            value={fmtByCurrency(debts.filter((d) => d.status === 'unpaid').reduce((acc, d) => { const k = d.currency === 'SLSH' ? 'SLSH' : 'USD'; acc[k] += parseFloat(d.amount); return acc; }, { USD: 0, SLSH: 0 }))}
+            value={fmtByCurrency(debts.filter((d) => d.status === 'unpaid').reduce((acc, d) => { const k = d.currency === 'SLSH' ? 'SLSH' : 'USD'; acc[k] += parseFloat(d.remaining ?? d.amount); return acc; }, { USD: 0, SLSH: 0 }))}
             icon={AlertTriangle}
             accent="#DC2626"
           />
@@ -65,7 +65,7 @@ export default function PortalBalance() {
         ) : debts.map((d) => (
           <tr key={d.id} style={{ borderTop: '1px solid var(--border)' }}>
             <td style={tdStyle}>{d.description || '—'}</td>
-            <td className="tabular-nums" style={{ ...tdStyle, textAlign: 'right' }}>{d.currency} {parseFloat(d.amount).toFixed(2)}</td>
+            <td className="tabular-nums" style={{ ...tdStyle, textAlign: 'right' }}>{fmtMoney(d.status === 'unpaid' ? (d.remaining ?? d.amount) : d.amount, d.currency)}</td>
             <td style={tdStyle}><StatusBadge status={d.status} map={DEBT_STATUS_MAP} /></td>
             <td style={tdStyle}>{new Date(d.created_at).toLocaleDateString()}</td>
           </tr>

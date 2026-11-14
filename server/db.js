@@ -2135,6 +2135,118 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_signup_phone_created ON customer_signup_requests(phone_canonical, created_at DESC);`);
 
   await runCashoutV2Migrations();
+  await runDebtsV2Migrations();
+}
+
+// ============================================================
+// Debts V2 — real payments on standalone debts, write-off, follow-ups.
+// Additive and idempotent. Existing payment rows keep invoice_id NOT NULL
+// in practice; the column becomes nullable so a payment can target a
+// STANDALONE debt (debt_id) instead. payments_target_check makes the two
+// targets mutually exclusive — a payment is on exactly one invoice OR
+// exactly one debt — so no payment can ever count against an invoice
+// balance AND a debt balance. amount_debt_currency is that payment's value
+// FROZEN in the debt's own currency (same principle as
+// amount_invoice_currency for invoices).
+// ============================================================
+async function runDebtsV2Migrations() {
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS debt_id INTEGER REFERENCES debts(id) ON DELETE RESTRICT;`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount_debt_currency NUMERIC;`);
+  const nn = await pool.query(
+    `SELECT is_nullable FROM information_schema.columns WHERE table_name = 'payments' AND column_name = 'invoice_id' AND table_schema = current_schema()`);
+  if (nn.rows[0] && nn.rows[0].is_nullable === 'NO') {
+    await pool.query(`ALTER TABLE payments ALTER COLUMN invoice_id DROP NOT NULL;`);
+  }
+  await addCheckIfMissing('payments', 'payments_target_check', `(invoice_id IS NULL) <> (debt_id IS NULL)`);
+  await addCheckIfMissing('payments', 'payments_debt_amount_check', `debt_id IS NULL OR (amount_debt_currency IS NOT NULL AND amount_debt_currency > 0 AND method <> 'debt')`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_debt_id ON payments(debt_id) WHERE debt_id IS NOT NULL;`);
+  // Traceability only: an INVOICE payment taken from the Debts page against
+  // an auto-tracked debt records which debt it was collected for. Never read
+  // by any balance computation (the invoice payment itself drives the
+  // auto-debt sync); used for debt payment history and "collected this month".
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS collected_via_debt_id INTEGER REFERENCES debts(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_collected_via_debt ON payments(collected_via_debt_id) WHERE collected_via_debt_id IS NOT NULL;`);
+
+  // debts.status gains 'written_off' (admin-only, reasoned, standalone/manual debts).
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS written_off_by INTEGER;`);
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS written_off_reason TEXT;`);
+  await pool.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;`);
+  const st = await pool.query(
+    `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+     WHERE conrelid = 'debts'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%status%'`);
+  const statusCheck = st.rows.find((r) => /'unpaid'/.test(r.def));
+  if (!statusCheck || !statusCheck.def.includes('written_off')) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('LOCK TABLE debts IN SHARE ROW EXCLUSIVE MODE');
+      if (statusCheck) await c.query(`ALTER TABLE debts DROP CONSTRAINT IF EXISTS ${statusCheck.conname}`);
+      await c.query(`ALTER TABLE debts DROP CONSTRAINT IF EXISTS debts_status_check`);
+      await c.query(`ALTER TABLE debts ADD CONSTRAINT debts_status_check CHECK (status IN ('unpaid','paid','written_off'))`);
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      c.release();
+    }
+  }
+  await addCheckIfMissing('debts', 'debts_write_off_reason_check', `status <> 'written_off' OR (written_off_reason IS NOT NULL AND written_off_at IS NOT NULL)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debts_created_at ON debts(created_at);`);
+
+  // Follow-up log (calls / visits / messages) with optional promise to pay.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debt_followups (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      debt_id INTEGER REFERENCES debts(id) ON DELETE SET NULL,
+      kind VARCHAR(20) NOT NULL CHECK (kind IN ('call','visit','message','other')),
+      note TEXT,
+      promise_date DATE,
+      promise_amount NUMERIC CHECK (promise_amount IS NULL OR promise_amount > 0),
+      promise_currency VARCHAR(4) CHECK (promise_currency IS NULL OR promise_currency IN ('USD','SLSH')),
+      created_by INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debt_followups_debt ON debt_followups(debt_id, created_at DESC) WHERE debt_id IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_debt_followups_customer ON debt_followups(customer_id, created_at DESC);`);
+
+  // Debt-marked -> real conversion links (fix round). A debt-marked row
+  // consumed by a debt collection is reversed with converted_by_payment_id =
+  // the real payment; a partly used remainder is re-recorded as a new
+  // debt-marked row with leftover_of_payment_id = the real payment. Reports,
+  // Transactions and pre-V2 cashout re-displays use these links so a
+  // conversion never changes a closed period's figures.
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS converted_by_payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS leftover_of_payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_converted_by ON payments(converted_by_payment_id) WHERE converted_by_payment_id IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_leftover_of ON payments(leftover_of_payment_id) WHERE leftover_of_payment_id IS NOT NULL;`);
+
+  // Idempotency for POST /debts/:id/collect: one stored outcome per
+  // (Idempotency-Key, user). Written in the payment's own transaction, so a
+  // failed attempt leaves no key behind and a retry is processed normally.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debt_collect_requests (
+      idem_key VARCHAR(100) NOT NULL,
+      user_id INTEGER NOT NULL,
+      debt_id INTEGER NOT NULL,
+      payment_id INTEGER,
+      response JSONB,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (idem_key, user_id)
+    );
+  `);
+
+  // One-time, idempotent backfill: open auto debts whose invoice was voided
+  // before voiding closed them (routes/invoices.js) are written off, so the
+  // Debts page, reports and the customer portal agree. settled_by stays NULL.
+  await pool.query(`
+    UPDATE debts d SET status = 'written_off', written_off_at = NOW(), written_off_by = NULL,
+           written_off_reason = 'Invoice voided (Debts V2 backfill)', updated_at = NOW()
+    FROM invoices i
+    WHERE i.id = d.invoice_id AND d.source = 'auto_invoice' AND d.status = 'unpaid' AND i.status = 'voided'`);
 }
 
 // ============================================================
@@ -2645,4 +2757,4 @@ async function logAudit({ actorId, actorUsername, action, entityType, entityId, 
   );
 }
 
-module.exports = { pool, runMigrations, runCashoutV2Migrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };
+module.exports = { pool, runMigrations, runCashoutV2Migrations, runDebtsV2Migrations, logAudit, logPortalAudit, ensureAuthEventsCheck, AUTH_EVENT_TYPES };
