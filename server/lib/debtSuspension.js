@@ -107,6 +107,49 @@ async function listCandidates({ zoneId = null, customerIds = null, client = pool
   };
 }
 
+// Debts V2 (read-only): per customer, where they stand against the
+// suspension rule — the same open-invoice / issue-date / setting logic as
+// listCandidates, without the "already past the threshold" filter, so the
+// Debts page can show "N days until suspension review". Returns
+// { days, map: Map(customer_id -> { state, oldest_unpaid_date, days_open, days_left }) }
+// state: 'suspended' | 'off' | 'none' (no open invoice) | 'review_due' | 'dismissed' | 'counting'.
+async function suspensionInfo(customerIds, { client = pool, now = new Date() } = {}) {
+  const map = new Map();
+  const ids = [...new Set((customerIds || []).map(Number).filter(Number.isInteger))];
+  const days = await getSuspendDays(client);
+  if (!ids.length) return { days, map };
+  const tz = await getTimezone();
+  const today = localParts(now, tz).date;
+  const rate = await currentRate(client);
+  const r = await client.query(`
+    WITH inv AS (${INVOICE_OUTSTANDING_SQL} AND i.customer_id = ANY($5::int[])),
+    agg AS (
+      SELECT customer_id, MIN((created_at AT TIME ZONE 'UTC' AT TIME ZONE $2)::date) AS oldest_unpaid
+      FROM inv WHERE outstanding > $4 GROUP BY customer_id
+    )
+    SELECT c.id, c.status, c.suspended_reason, to_char(a.oldest_unpaid, 'YYYY-MM-DD') AS oldest_unpaid_date,
+      ($3::date - a.oldest_unpaid) AS days_open,
+      EXISTS (SELECT 1 FROM debt_suspension_dismissals d WHERE d.customer_id = c.id AND d.dismissed_until > NOW()) AS dismissed
+    FROM customers c LEFT JOIN agg a ON a.customer_id = c.id
+    WHERE c.id = ANY($5::int[])`, [rate, tz, today, EPSILON, ids]);
+  for (const x of r.rows) {
+    const daysOpen = x.days_open === null ? null : Number(x.days_open);
+    let state;
+    let daysLeft = null;
+    if (x.status === 'suspended' && x.suspended_reason === 'debt') state = 'suspended';
+    else if (days <= 0) state = 'off';
+    else if (daysOpen === null) state = 'none';
+    else {
+      // listCandidates: candidate once days_open > setting.
+      daysLeft = days + 1 - daysOpen;
+      if (daysLeft <= 0) state = x.dismissed ? 'dismissed' : 'review_due';
+      else state = 'counting';
+    }
+    map.set(x.id, { state, oldest_unpaid_date: x.oldest_unpaid_date, days_open: daysOpen, days_left: daysLeft });
+  }
+  return { days, map };
+}
+
 // Customers currently suspended for debt, with their outstanding.
 async function listSuspended({ zoneId = null, client = pool } = {}) {
   const rate = await currentRate(client);
@@ -298,6 +341,6 @@ async function countDebtCandidates({ zoneId = null } = {}) {
 }
 
 module.exports = {
-  countDebtCandidates, listCandidates, listSuspended, customerOutstanding, approve, dismiss, reactivateIfCleared, afterPayment,
+  countDebtCandidates, listCandidates, listSuspended, suspensionInfo, customerOutstanding, approve, dismiss, reactivateIfCleared, afterPayment,
   nightlyCheck, schedulerTick, startMonitor, removeFromPendingAutoLists, getSuspendDays, DEFAULT_DAYS, DISMISS_DAYS,
 };
