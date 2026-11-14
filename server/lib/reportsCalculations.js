@@ -37,6 +37,10 @@ function resolvePeriod(period, customStart, customEnd) {
   }
 }
 
+// Recorded payments on one standalone debt, in the debt's own currency
+// (0 for invoice-linked debts — their payments are on the invoice).
+const DEBT_PAID_SQL = (alias) => `COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = ${alias}.id AND dp.status = 'recorded'), 0)`;
+
 // ---------- Revenue (OD-2/OD-4, the ONE authoritative revenue calc) ----------
 
 // Financial attribution only (payments.cashier_id) — never merged with
@@ -54,9 +58,14 @@ async function getRevenueForPeriod({ zoneId = null, cashierId = null, periodStar
   // excludes the uncollected portion of a Partial invoice (that portion
   // was never a payment row), preserving the frozen "amount - debt"
   // principle via a MORE precise mechanism, not a regression to it.
+  // Debts V2: payments on STANDALONE debts (invoice_id NULL, debt_id set)
+  // are real money received and count here too; the customer (zone scope)
+  // comes from the debt. A payment targets exactly one of the two
+  // (payments_target_check), so nothing is counted twice.
   const revenueRes = await client.query(
     `SELECT COALESCE(SUM(p.amount_usd), 0) AS collected, COUNT(*)::int AS payment_count
-     FROM payments p JOIN invoices i ON p.invoice_id = i.id JOIN customers c ON i.customer_id = c.id
+     FROM payments p LEFT JOIN invoices i ON p.invoice_id = i.id LEFT JOIN debts pd ON pd.id = p.debt_id
+     JOIN customers c ON c.id = COALESCE(i.customer_id, pd.customer_id)
      WHERE p.status = 'recorded' AND p.created_at >= $1 AND p.created_at < $2${zoneClause}${cashierClause}`,
     params
   );
@@ -79,11 +88,12 @@ async function getRevenueForPeriod({ zoneId = null, cashierId = null, periodStar
     [periodStart, periodEnd, ...(zoneId ? [zoneId] : []), curRate ? parseFloat(curRate.rate) : null]
   );
   // Debts may be SLSH (auto-debts on SLSH invoices): convert to USD at the
-  // current rate; with no rate they contribute 0.
+  // current rate; with no rate they contribute 0. Debts V2: a standalone
+  // debt counts by its REMAINING balance (amount - its recorded payments).
   const debtRes = await client.query(
     `SELECT COALESCE(SUM(CASE WHEN d.currency = 'SLSH'
-         THEN (CASE WHEN $${rateIdx}::numeric > 0 THEN d.amount / $${rateIdx}::numeric ELSE 0 END)
-         ELSE d.amount END), 0) AS total FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
+         THEN (CASE WHEN $${rateIdx}::numeric > 0 THEN GREATEST(d.amount - ${DEBT_PAID_SQL('d')}, 0) / $${rateIdx}::numeric ELSE 0 END)
+         ELSE GREATEST(d.amount - ${DEBT_PAID_SQL('d')}, 0) END), 0) AS total FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
      WHERE d.status = 'unpaid' AND d.created_at >= $1 AND d.created_at < $2${zoneClause}`,
     [periodStart, periodEnd, ...(zoneId ? [zoneId] : []), curRate ? parseFloat(curRate.rate) : null]
   );
@@ -442,8 +452,9 @@ async function getPaymentsSummary({ zoneId = null, cashierId = null, periodStart
   if (cashierId) { params.push(cashierId); clauses.push(`p.cashier_id = $${params.length}`); }
   params.push(limit, offset);
   const res = await client.query(
-    `SELECT p.id, p.amount, p.currency, p.amount_usd, p.method, p.status, p.created_at, i.invoice_number, c.name AS customer_name
-     FROM payments p JOIN invoices i ON p.invoice_id = i.id JOIN customers c ON i.customer_id = c.id
+    `SELECT p.id, p.amount, p.currency, p.amount_usd, p.method, p.status, p.created_at, COALESCE(i.invoice_number, 'Debt #' || p.debt_id) AS invoice_number, p.debt_id, c.name AS customer_name
+     FROM payments p LEFT JOIN invoices i ON p.invoice_id = i.id LEFT JOIN debts pd ON pd.id = p.debt_id
+     JOIN customers c ON c.id = COALESCE(i.customer_id, pd.customer_id)
      WHERE ${clauses.join(' AND ')} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -457,7 +468,8 @@ async function getDebtsSummary({ zoneId = null, status = null, periodStart, peri
   if (status) { params.push(status); clauses.push(`d.status = $${params.length}`); }
   params.push(limit, offset);
   const res = await client.query(
-    `SELECT d.id, d.amount, d.currency, d.status, d.created_at, d.invoice_id, d.cashout_id, c.name AS customer_name
+    `SELECT d.id, d.amount, d.currency, d.status, d.created_at, d.invoice_id, d.cashout_id, d.source, c.name AS customer_name,
+       CASE WHEN d.status = 'unpaid' THEN GREATEST(d.amount - ${DEBT_PAID_SQL('d')}, 0) ELSE 0 END AS remaining
      FROM debts d LEFT JOIN customers c ON d.customer_id = c.id
      WHERE ${clauses.join(' AND ')} ORDER BY d.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params

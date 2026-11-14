@@ -437,12 +437,13 @@ router.get('/summary', authenticateCustomerPortal, async (req, res) => {
     const outstanding = await portalInvoiceOutstanding(customerId, portalRate);
     const debtRes = await pool.query(
       `SELECT COALESCE(SUM(CASE WHEN currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN amount / $2::numeric ELSE 0 END) ELSE amount END), 0) AS outstanding_debt
-       FROM debts WHERE customer_id = $1 AND status = 'unpaid'`,
+       FROM (SELECT d.currency, GREATEST(d.amount - COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0), 0) AS amount
+             FROM debts d WHERE d.customer_id = $1 AND d.status = 'unpaid') debts`,
       [customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
     const lastPaymentRes = await pool.query(
-      `SELECT p.amount, p.currency, p.created_at FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE i.customer_id = $1 AND p.status = 'recorded' ORDER BY p.created_at DESC LIMIT 1`,
+      `SELECT p.amount, p.currency, p.created_at FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id LEFT JOIN debts d ON d.id = p.debt_id
+       WHERE COALESCE(i.customer_id, d.customer_id) = $1 AND p.status = 'recorded' ORDER BY p.created_at DESC LIMIT 1`,
       [customerId]
     );
     const lastCollectionRes = await pool.query(
@@ -836,9 +837,9 @@ router.get('/payments', authenticateCustomerPortal, async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT p.id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.channel, p.reference_code, p.created_at,
-              i.invoice_number, i.id AS invoice_id
-       FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE i.customer_id = $1 ORDER BY p.created_at DESC LIMIT 200`,
+              i.invoice_number, i.id AS invoice_id, p.debt_id
+       FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id LEFT JOIN debts d ON d.id = p.debt_id
+       WHERE COALESCE(i.customer_id, d.customer_id) = $1 ORDER BY p.created_at DESC LIMIT 200`,
       [req.customerId]
     );
     return res.json({ data: r.rows });
@@ -852,7 +853,10 @@ router.get('/balance', authenticateCustomerPortal, async (req, res) => {
     const portalRate = await getCurrentExchangeRate(pool);
     const outstanding = await portalInvoiceOutstanding(req.customerId, portalRate);
     const debtsRes = await pool.query(
-      `SELECT id, amount, currency, description, status, created_at FROM debts WHERE customer_id = $1 ORDER BY created_at DESC`,
+      `SELECT d.id, d.amount, d.currency, d.description, d.status, d.created_at,
+              CASE WHEN d.invoice_id IS NULL THEN COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0) ELSE NULL END AS paid_amount,
+              CASE WHEN d.status <> 'unpaid' THEN 0 WHEN d.invoice_id IS NULL THEN GREATEST(d.amount - COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0), 0) ELSE d.amount END AS remaining
+       FROM debts d WHERE d.customer_id = $1 ORDER BY d.created_at DESC`,
       [req.customerId]
     );
     return res.json({

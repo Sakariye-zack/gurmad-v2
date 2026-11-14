@@ -42,19 +42,22 @@ async function computeExpectedForPeriod(cashierId, periodStart, periodEnd, clien
   const totalRes = await client.query(
     `SELECT COALESCE(SUM(amount_usd), 0) AS total, COUNT(*)::int AS transaction_count
      FROM payments WHERE ${s.where}`, s.params);
+  // Debts V2: a standalone-debt payment (invoice_id NULL, debt_id set) is a
+  // real payment of this cashier — its customer comes from the debt.
   const customersRes = await client.query(
-    `SELECT COUNT(DISTINCT i.customer_id)::int AS customer_count
-     FROM payments p JOIN invoices i ON p.invoice_id = i.id WHERE ${sp.where}`, sp.params);
+    `SELECT COUNT(DISTINCT COALESCE(i.customer_id, d.customer_id))::int AS customer_count
+     FROM payments p LEFT JOIN invoices i ON p.invoice_id = i.id LEFT JOIN debts d ON d.id = p.debt_id WHERE ${sp.where}`, sp.params);
   const methodRes = await client.query(
     `SELECT method, COALESCE(SUM(amount_usd), 0) AS total FROM payments WHERE ${s.where} GROUP BY method`, s.params);
   // Collection-source breakdown (residential/commercial) — only where a real
   // ID link exists (invoices.batch_customer_id -> batch_customers -> batches
   // .customer_type, Module 5's own real classification, read-only).
-  // Unlinked invoices bucket as 'unlinked'.
+  // Unlinked invoices (and standalone-debt payments, which have no invoice)
+  // bucket as 'unlinked', so the breakdown still sums to the total.
   const sourceRes = await client.query(
     `SELECT COALESCE(b.customer_type, 'unlinked') AS source, COALESCE(SUM(p.amount_usd), 0) AS total
      FROM payments p
-     JOIN invoices i ON p.invoice_id = i.id
+     LEFT JOIN invoices i ON p.invoice_id = i.id
      LEFT JOIN batch_customers bc ON i.batch_customer_id = bc.id
      LEFT JOIN batches b ON bc.batch_id = b.id
      WHERE ${sp.where}
@@ -208,10 +211,11 @@ async function listElectronicPayments(cashierId, periodStart, periodEnd, client 
   const r = await client.query(
     `SELECT p.id, p.method, p.currency, p.amount, p.amount_usd, p.reference_code, p.created_at, p.status, p.channel,
             ${GATEWAY_SQL('p')} AS gateway_verified,
-            i.invoice_number, c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number
+            i.invoice_number, p.debt_id, c.name AS customer_name, COALESCE(i.customer_number_snapshot, c.customer_number) AS customer_number
      FROM payments p
-     JOIN invoices i ON i.id = p.invoice_id
-     JOIN customers c ON c.id = i.customer_id
+     LEFT JOIN invoices i ON i.id = p.invoice_id
+     LEFT JOIN debts d ON d.id = p.debt_id
+     JOIN customers c ON c.id = COALESCE(i.customer_id, d.customer_id)
      WHERE ${sc.where} AND p.method IN ('zaad', 'edahab')
      ORDER BY p.created_at ASC, p.id ASC`,
     sc.params

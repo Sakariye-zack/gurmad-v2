@@ -290,7 +290,9 @@ const BULK_MAX = 500;
 const HAS_LOCATION_SQL = 'COALESCE(c.lat IS NOT NULL AND c.lng IS NOT NULL AND NOT (c.lat = 0 AND c.lng = 0), FALSE)';
 // Effective work days: the customer's own override when set, else its Sub Zone's (lib/dailyLists.js rule).
 const WORK_DAYS_SQL = `CASE WHEN jsonb_typeof(c.work_days) = 'array' AND jsonb_array_length(c.work_days) > 0 THEN c.work_days ELSE rt.work_days END`;
-const LAST_PAYMENT_SQL = `(SELECT MAX(p.created_at) FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.customer_id = c.id AND p.status = 'recorded')`;
+// Debts V2: a payment on a standalone debt (invoice_id NULL) is a payment too.
+const LAST_PAYMENT_SQL = `GREATEST((SELECT MAX(p.created_at) FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.customer_id = c.id AND p.status = 'recorded'),
+  (SELECT MAX(p.created_at) FROM payments p JOIN debts d ON d.id = p.debt_id WHERE d.customer_id = c.id AND p.status = 'recorded'))`;
 const LIST_JOINS = `FROM customers c JOIN zones z ON c.zone_id = z.id
        LEFT JOIN groups g ON g.id = c.group_id
        LEFT JOIN routes rt ON rt.id = c.route_id

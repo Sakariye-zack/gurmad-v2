@@ -100,6 +100,17 @@ async function computeAssignment(cashierId, periodStart, periodEnd, client = poo
   const outside = { USD: 0, SLSH: 0, usd_equiv: 0, payment_count: 0 };
   for (const row of out) { outside[row.cur] = r2(row.amount); outside.usd_equiv += Number(row.usd); outside.payment_count += row.n; }
   outside.usd_equiv = r2(outside.usd_equiv);
+  // Debts V2: this cashier's payments on STANDALONE debts in the period
+  // (no invoice, so they belong to none of the invoice figures above), per
+  // payment currency. Information only, like the rest of this panel.
+  const dc = (await client.query(
+    `SELECT p.currency, COALESCE(SUM(p.amount), 0) AS amount, COALESCE(SUM(p.amount_usd), 0) AS usd, COUNT(*)::int AS n
+     FROM payments p
+     WHERE p.cashier_id = $1 AND p.debt_id IS NOT NULL AND p.status = 'recorded' AND p.created_at >= $2 AND p.created_at < $3
+     GROUP BY p.currency`, [cashierId, periodStart, periodEnd])).rows;
+  const debtCollections = { USD: 0, SLSH: 0, usd_equiv: 0, payment_count: 0 };
+  for (const row of dc) { const c = row.currency === 'SLSH' ? 'SLSH' : 'USD'; debtCollections[c] = r2(Number(debtCollections[c]) + Number(row.amount)); debtCollections.usd_equiv += Number(row.usd); debtCollections.payment_count += row.n; }
+  debtCollections.usd_equiv = r2(debtCollections.usd_equiv);
 
   for (const cur of ['USD', 'SLSH']) {
     const t = totals[cur];
@@ -111,7 +122,7 @@ async function computeAssignment(cashierId, periodStart, periodEnd, client = poo
     no_subzone: subzones.length === 0,
     subzones: subzones.map((s) => ({ id: s.id, name: s.name, code: s.code, group_id: s.group_id, path: s.path, customer_count: s.customer_count })),
     customer_count: subzones.reduce((a, s) => a + s.customer_count, 0),
-    totals, outside_area: outside,
+    totals, outside_area: outside, debt_collections: debtCollections,
   };
 }
 
