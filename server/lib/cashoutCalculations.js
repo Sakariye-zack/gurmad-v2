@@ -32,7 +32,14 @@ function paymentScope(alias, cashierId, periodStart, periodEnd, asOf, paymentIds
   if (Array.isArray(paymentIds)) return { where: `${a}id = ANY($1::int[])`, params: [paymentIds] };
   const asOfClause = asOf ? ` AND ${a}created_at < $4` : '';
   const params = asOf ? [cashierId, periodStart, periodEnd, asOf] : [cashierId, periodStart, periodEnd];
-  return { where: `${a}cashier_id = $1 AND ${a}status = 'recorded' AND ${a}created_at >= $2 AND ${a}created_at < $3${asOfClause}`, params };
+  // Debts V2: a historical (asOf) re-display still counts a debt-marked row
+  // that a LATER debt collection converted (reversed with
+  // converted_by_payment_id) exactly as it was at the snapshot, so a
+  // conversion never changes a pre-V2 cashout's figures.
+  const status = asOf
+    ? `(${a}status = 'recorded' OR (${a}converted_by_payment_id IS NOT NULL AND ${a}reversed_at >= $4))`
+    : `${a}status = 'recorded'`;
+  return { where: `${a}cashier_id = $1 AND ${status} AND ${a}created_at >= $2 AND ${a}created_at < $3${asOfClause}`, params };
 }
 
 async function computeExpectedForPeriod(cashierId, periodStart, periodEnd, client = pool, asOf = null, { paymentIds = null } = {}) {

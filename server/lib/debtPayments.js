@@ -31,6 +31,18 @@ const { PaymentError, sizePayment, fmtMoney } = require('./paymentRules');
 
 const curOf = (c) => (c === 'SLSH' ? 'SLSH' : 'USD');
 
+// THE remaining-balance rule of one debt row (alias `d`), in the debt's own
+// currency, shared by reports, the customer portal and routes/debts.js's
+// debt view so they always agree: 0 once paid / written off, 0 for an auto
+// debt whose invoice is voided, standalone = amount - recorded payments on
+// the debt, invoice-linked = amount (an auto debt's amount IS the mirrored
+// remaining part of its invoice).
+const DEBT_REMAINING_SQL = (d) => `(CASE
+  WHEN ${d}.status <> 'unpaid' THEN 0
+  WHEN ${d}.source = 'auto_invoice' AND EXISTS (SELECT 1 FROM invoices vi WHERE vi.id = ${d}.invoice_id AND vi.status = 'voided') THEN 0
+  WHEN ${d}.invoice_id IS NULL THEN GREATEST(${d}.amount - COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = ${d}.id AND dp.status = 'recorded'), 0), 0)
+  ELSE ${d}.amount END)`;
+
 // Sum of recorded payments on one standalone debt, in the debt's currency.
 async function debtPaidAmount(debtId, client = pool) {
   const r = await client.query(
@@ -152,4 +164,4 @@ async function reverseDebtPayment(client, user, payment, reason) {
   return { payment: updatedPayment, debtBefore: debt, debt: updated, remaining, reopened, warning };
 }
 
-module.exports = { debtPaidAmount, checkAutoDebtForCollection, autoDebtStateForInvoice, recordDebtPaymentCore, reverseDebtPayment };
+module.exports = { DEBT_REMAINING_SQL, debtPaidAmount, checkAutoDebtForCollection, autoDebtStateForInvoice, recordDebtPaymentCore, reverseDebtPayment };

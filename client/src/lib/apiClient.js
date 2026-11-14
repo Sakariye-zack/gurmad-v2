@@ -113,7 +113,7 @@ async function downloadAuthorizedFile(path, filename) {
 
 export const apiClient = {
   get: (path) => request(path),
-  post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
+  post: (path, data, headers) => request(path, { method: 'POST', body: JSON.stringify(data), ...(headers ? { headers } : {}) }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
   del: (path, data) => request(path, { method: 'DELETE', ...(data ? { body: JSON.stringify(data) } : {}) }),
   uploadFile,

@@ -153,7 +153,7 @@ export default function TransactionsPage() {
           <tr key={p.id} className={`fin-tx-row${p.status === 'reversed' ? ' reversed' : ''}`} onClick={() => navigate(txTarget(p))}
             tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') navigate(txTarget(p)); }}>
             <td style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(p.created_at)}</td>
-            <td><strong>{p.invoice_number || t('dv.debtRef', undefined, { id: p.debt_id })}</strong>{p.debt_id && <div className="fin-note">{t('dv.tx.standalone')}</div>}</td>
+            <td><strong>{p.invoice_number || t('dv.debtRef', undefined, { id: p.debt_id })}</strong>{p.debt_id && <div className="fin-note">{t('dv.tx.standalone')}</div>}{p.conversion && <div className="fin-note">{t(`dv.tx.${p.conversion}`)}</div>}</td>
             <td>{p.customer_name}<div className="fin-note">{p.customer_number}</div></td>
             <td>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}>

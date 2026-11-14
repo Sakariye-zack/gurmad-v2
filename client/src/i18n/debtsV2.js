@@ -200,6 +200,14 @@ export const DEBTS_V2 = {
   'dv.err.amount': { en: 'Enter a valid amount.', so: 'Geli qaddar sax ah.' },
   'dv.err.customer': { en: 'Select a customer.', so: 'Dooro macmiil.' },
 
+  // conversions / customer detail
+  'dv.conv.converted': { en: 'Converted → #{id}', so: 'Loo beddelay → #{id}' },
+  'dv.conv.leftover': { en: 'Remaining debt mark', so: 'Calaamadda deynta ee hartay' },
+  'dv.tx.converted': { en: 'Converted to a real payment (not a reversal)', so: 'Loo beddelay lacag dhab ah (dib-u-celin maaha)' },
+  'dv.tx.leftover': { en: 'Remaining debt mark after a collection', so: 'Calaamadda deynta ee hartay ururin kadib' },
+  'dv.cust.showing': { en: 'Showing {n} of {total} debts.', so: 'Waxaa la muujinayaa {n} ka mid ah {total} deymood.' },
+  'dv.cust.openAll': { en: 'Open all in Debts', so: 'Ka fur dhammaan Deymaha' },
+
   // cashout assignment panel
   'dv.asg.debtCollections': { en: 'Also collected on standalone debts in this period: {amount} ({n} payments) — included in the expected figures.', so: 'Sidoo kale laga ururiyay deymo gooni ah muddadan: {amount} ({n} lacag-bixin) — waxay ku jiraan tirooyinka la filayo.' },
 };

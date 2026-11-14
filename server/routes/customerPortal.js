@@ -22,6 +22,7 @@ const { sendPasswordResetWhatsApp } = require('../lib/whatsappService');
 const { createComplaint, getComplaintsForCustomer, getComplaintDetail } = require('../lib/complaintsService');
 const { rejectIfInfected } = require('../lib/virusScan');
 const paymentsRouter = require('./payments');
+const { DEBT_REMAINING_SQL } = require('../lib/debtPayments');
 const { createStaffNotification, logNotificationFailure } = require('../lib/staffNotifications');
 const { EPSILON } = require('../lib/financialCalculations');
 
@@ -437,7 +438,7 @@ router.get('/summary', authenticateCustomerPortal, async (req, res) => {
     const outstanding = await portalInvoiceOutstanding(customerId, portalRate);
     const debtRes = await pool.query(
       `SELECT COALESCE(SUM(CASE WHEN currency = 'SLSH' THEN (CASE WHEN $2::numeric > 0 THEN amount / $2::numeric ELSE 0 END) ELSE amount END), 0) AS outstanding_debt
-       FROM (SELECT d.currency, GREATEST(d.amount - COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0), 0) AS amount
+       FROM (SELECT d.currency, ${DEBT_REMAINING_SQL('d')} AS amount
              FROM debts d WHERE d.customer_id = $1 AND d.status = 'unpaid') debts`,
       [customerId, portalRate ? parseFloat(portalRate.rate) : null]
     );
@@ -855,7 +856,7 @@ router.get('/balance', authenticateCustomerPortal, async (req, res) => {
     const debtsRes = await pool.query(
       `SELECT d.id, d.amount, d.currency, d.description, d.status, d.created_at,
               CASE WHEN d.invoice_id IS NULL THEN COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0) ELSE NULL END AS paid_amount,
-              CASE WHEN d.status <> 'unpaid' THEN 0 WHEN d.invoice_id IS NULL THEN GREATEST(d.amount - COALESCE((SELECT SUM(dp.amount_debt_currency) FROM payments dp WHERE dp.debt_id = d.id AND dp.status = 'recorded'), 0), 0) ELSE d.amount END AS remaining
+              ${DEBT_REMAINING_SQL('d')} AS remaining
        FROM debts d WHERE d.customer_id = $1 ORDER BY d.created_at DESC`,
       [req.customerId]
     );

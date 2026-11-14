@@ -14,6 +14,10 @@ import {
 import { useZaadStore, getZaadEntry, setZaadEntry } from './zaadPendingStore.js';
 import { AgeChip, StateChip, SourceChip, SuspensionChip, PhoneLinks, pathText, isOpen, COLLECT_ROLES } from './debtsUi.jsx';
 
+const newKey = () => (window.crypto && typeof window.crypto.randomUUID === 'function'
+  ? window.crypto.randomUUID()
+  : `k${Date.now()}${Math.random().toString(36).slice(2, 12)}`);
+
 const METHODS = [
   { key: 'cash', icon: Banknote },
   { key: 'zaad', icon: Smartphone },
@@ -109,7 +113,7 @@ function DrawerBody({ debt, role, userId, onAction, refetch }) {
         {(role === 'admin' || (['cashier', 'gudoomiye'].includes(role) && debt.created_by === userId)) && (
           <button type="button" className="dv-btn" onClick={() => onAction('edit', debt)}><Pencil size={14} /> {t('dv.act.edit')}</button>
         )}
-        {role === 'admin' && isOpen(debt) && (
+        {role === 'admin' && isOpen(debt) && !auto && (
           <button type="button" className="dv-btn" onClick={() => onAction('writeoff', debt)}><Ban size={14} /> {t('dv.act.writeOff')}</button>
         )}
         {debt.collect_target === 'manual_invoice' && isOpen(debt) && canCollect && (
@@ -119,6 +123,8 @@ function DrawerBody({ debt, role, userId, onAction, refetch }) {
           <Link className="dv-btn" to={`/financial/invoices/${debt.invoice_id}`}><ExternalLink size={14} /> {t('dv.act.openInvoice')}</Link>
         )}
       </div>
+
+      {role === 'admin' && isOpen(debt) && auto && <div className="fin-note">{t('dv.wo.auto', undefined, { inv: invLabel })}</div>}
 
       <section>
         <span className="fin-section-label">{t('dv.c.title')}</span>
@@ -139,6 +145,8 @@ function DrawerBody({ debt, role, userId, onAction, refetch }) {
                 <div style={{ fontWeight: 700 }} className={p.status === 'reversed' ? 'fin-struck' : undefined}>
                   {fmtMoney(p.amount, p.currency)} · {p.channel === 'portal_zaad' ? t('fr.portalZaad') : methodLabel(t, p.method)}
                   {p.via_this_debt && debt.invoice_id ? <span className="cl-chip info" style={{ marginLeft: '6px' }}>{t('dv.history.viaDebt')}</span> : null}
+                  {p.converted_by_payment_id ? <span className="cl-chip" style={{ marginLeft: '6px' }}>{t('dv.conv.converted', undefined, { id: p.converted_by_payment_id })}</span> : null}
+                  {p.leftover_of_payment_id ? <span className="cl-chip" style={{ marginLeft: '6px' }}>{t('dv.conv.leftover')}</span> : null}
                 </div>
                 <div className="ref">{fmtDateTime(p.created_at)}{p.reference_code ? ` · ${p.reference_code}` : ''} · {recordedByLabel(t, p)}</div>
                 {p.status === 'reversed' && p.reversed_reason && <div className="ref">{p.reversed_reason}</div>}
@@ -188,6 +196,10 @@ function CollectForm({ debt, onDone }) {
   const [done, setDone] = useState(null);
   const [now, setNow] = useState(() => Date.now());
   const inFlight = useRef(false);
+  // A fresh Idempotency-Key per opened form (and after every success): a
+  // double tap or a network retry of the same submission can never record
+  // the same cash twice — the server replays the first result.
+  const idemKey = useRef(newKey());
 
   useEffect(() => {
     if (zaad?.phase !== 'waiting') return undefined;
@@ -224,7 +236,8 @@ function CollectForm({ debt, onDone }) {
     if ((method === 'zaad' || method === 'edahab') && !reference.trim()) { setFormError(t('fr.pay.referenceRequired')); return; }
     if (over) { setFormError(t('fr.pay.overOwedBlock')); return; }
     try {
-      const res = await collectM.mutateAsync({ id: debt.id, amount: amt, currency, method, ...(method === 'zaad' || method === 'edahab' ? { reference_code: reference.trim() } : {}) });
+      const res = await collectM.mutateAsync({ id: debt.id, idempotencyKey: idemKey.current, amount: amt, currency, method, ...(method === 'zaad' || method === 'edahab' ? { reference_code: reference.trim() } : {}) });
+      idemKey.current = newKey();
       const d = res.data?.debt || {};
       setDone({ amount: amt, currency, status: d.status, remaining: d.remaining, remainingCur: d.currency || tcur, ref: reference.trim() });
       setAmount(''); setReference('');

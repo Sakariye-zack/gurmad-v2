@@ -275,7 +275,8 @@ test('auto debt: collection is an invoice payment; the auto-debt sync reduces it
   assert.equal(left, 0);
   const tx = await api('GET', `/payments/transactions/summary?q=${encodeURIComponent(cust.name)}`, { token: w.tokens.admin });
   assert.ok(close(tx.data.filtered.by_currency.USD, 100), 'all real money, once');
-  assert.ok(close(tx.data.filtered.debt_usd, 0));
+  assert.ok(close(tx.data.filtered.debt_usd, 50), 'the original debt mark counts once in its own period; leftover rows never add to it');
+  assert.equal(tx.data.filtered.reversed_count, 0, 'conversions are not reversals');
 });
 
 test('auto debt from a plain partial payment: collection = invoice payment, debt follows; manual invoice-linked debt is not collectable here', async () => {
@@ -424,14 +425,15 @@ test('list: filters, sorting, pagination, aging buckets, promise states; zone sc
   assert.equal(p3.data.length, 2);
   assert.ok(!p3.data.some((r) => p1.data.some((x) => x.id === r.id)), 'pages do not overlap');
   assert.equal((await L('page_size=500')).body.meta.page_size, 100);
+  assert.equal((await L('page=99999999999')).body.meta.page, 1000000, 'page is clamped');
   // validation
   assert.equal((await api('GET', '/debts?status=bogus', { token: gudC })).status, 400);
   assert.equal((await api('GET', '/debts?age=1_2', { token: gudC })).status, 400);
   assert.equal((await api('GET', '/debts?sort=nope', { token: gudC })).status, 400);
-  // zone scope: zone A users never see zone C debts, detail is 403
+  // zone scope: other zones never see zone C debts, detail is 404 (no existence leak)
   const za = await L('page_size=100', gudD);
   assert.ok(!za.data.some((r) => r.customer_id === C.c1.id));
-  assert.equal((await api('GET', `/debts/${C.d1.id}`, { token: gudD })).status, 403);
+  assert.equal((await api('GET', `/debts/${C.d1.id}`, { token: gudD })).status, 404);
   assert.equal((await api('GET', `/debts/${C.d1.id}`, { token: w.tokens.head })).status, 200, 'head of cashiers is not zone scoped');
   assert.equal((await api('GET', '/debts', { token: w.tokens.collector })).status, 403);
   // a zone-scoped user without a resolvable zone sees nothing
@@ -545,7 +547,7 @@ test('edit: description only, creator or admin; amounts immutable; audited', asy
   const a = (await db.query("SELECT COUNT(*)::int AS n FROM v2_audit_log WHERE action = 'debt.update' AND entity_id = $1", [debt.id])).rows[0].n;
   assert.equal(a, 2);
   // out-of-zone collect is refused
-  assert.equal((await collect(w.tokens.cashierB, debt.id, { amount: 1, currency: 'USD', method: 'cash' })).status, 403);
+  assert.equal((await collect(w.tokens.cashierB, debt.id, { amount: 1, currency: 'USD', method: 'cash' })).status, 404);
 });
 
 test('cashier assignment panel lists the cashier\'s standalone debt collections (information only)', async () => {
@@ -595,4 +597,209 @@ test('ledger guard: a payment targets exactly one invoice OR one debt; Debts V2 
   await assert.rejects(db.query(`INSERT INTO payments (invoice_id, debt_id, amount, currency, method, amount_usd, status) VALUES (NULL,$1,1,'USD','cash',1,'recorded')`, [debt.id]), /payments_debt_amount_check/);
   const st = (await db.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'debts'::regclass AND conname = 'debts_status_check'`)).rows[0];
   assert.match(st.def, /written_off/);
+});
+
+
+// ======================= fix round =======================
+
+const setRate = async (rate) => assert.equal((await api('POST', '/exchange-rates', { token: w.tokens.admin, body: { rate } })).status, 201);
+
+test('fix P1-1: legacy settle is scoped and only for manual debts linked to an invoice', async () => {
+  const cust = await mkCustomer(zoneD, 'DV LegacySettle');
+  const standalone = await mkDebt(gudD, cust, 4);
+  const r1 = await api('PUT', `/debts/${standalone.id}/status`, { token: cashierD.token, body: { status: 'paid' } });
+  assert.equal(r1.status, 409);
+  assert.equal(r1.body.error.code, 'USE_COLLECT');
+  const inv = await createInvoiceFor(cust, 10);
+  await pay(cashierD.token, inv.id, 4, 'cash');
+  const auto = await autoDebt(inv.id);
+  const r2 = await api('PUT', `/debts/${auto.id}/status`, { token: cashierD.token, body: { status: 'paid' } });
+  assert.equal(r2.status, 409);
+  assert.equal(r2.body.error.code, 'AUTO_DEBT');
+  const manual = (await api('POST', '/debts', { token: gudD, body: { customer_id: cust.id, invoice_id: inv.id, amount: 6, currency: 'USD' } })).data;
+  assert.equal((await api('PUT', `/debts/${manual.id}/status`, { token: w.tokens.cashierB, body: { status: 'paid' } })).status, 404, 'other zone');
+  await insertUser('t_dv_cash_nozone', 'cashier', null);
+  assert.equal((await api('PUT', `/debts/${manual.id}/status`, { token: await tokenFor('t_dv_cash_nozone'), body: { status: 'paid' } })).status, 404, 'zoneless scoped role: fail closed');
+  assert.equal((await api('PUT', `/debts/${manual.id}/status`, { token: cashierD.token, body: { status: 'paid' } })).status, 409, 'invoice still outstanding needs a reason');
+  const ok = await api('PUT', `/debts/${manual.id}/status`, { token: cashierD.token, body: { status: 'paid', settlement_override_reason: 'forgiven' } });
+  assert.equal(ok.status, 200);
+  const a = (await db.query("SELECT after_data FROM v2_audit_log WHERE action = 'debt.settle' AND entity_id = $1 ORDER BY id DESC LIMIT 1", [manual.id])).rows[0];
+  assert.equal(a.after_data.settled_without_payment, true);
+});
+
+test('fix P1-2(a): revenue "collected" excludes debt-marked rows; a conversion never changes a past period', async () => {
+  const cust = await mkCustomer(zoneD, 'DV RevFreeze');
+  const inv = await createInvoiceFor(cust, 50);
+  await new Promise((r) => setTimeout(r, 20));
+  const t0 = new Date();
+  assert.equal((await pay(cashierD.token, inv.id, 50, 'debt')).status, 201);
+  await new Promise((r) => setTimeout(r, 1100));
+  const t1 = new Date();
+  const past = { periodStart: t0, periodEnd: t1, zoneId: zoneD.id };
+  const before = await getRevenueForPeriod(past);
+  assert.ok(close(before.collected, 0), 'debt-marked is not collected money');
+  assert.ok(close(before.debtMarked, 50));
+  const d = await autoDebt(inv.id);
+  const nowWin = { periodStart: t1, periodEnd: new Date(Date.now() + 86400000), zoneId: zoneD.id };
+  const nowBefore = await getRevenueForPeriod(nowWin);
+  const c = await collect(cashierD.token, d.id, { amount: 20, currency: 'USD', method: 'cash' });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  const after = await getRevenueForPeriod(past);
+  assert.ok(close(after.collected, before.collected) && close(after.debtMarked, before.debtMarked) && after.paymentCount === before.paymentCount, 'closed period unchanged');
+  const nowAfter = await getRevenueForPeriod(nowWin);
+  assert.ok(close(nowAfter.collected - nowBefore.collected, 20), 'current period gains only the real money');
+  assert.ok(close(nowAfter.debtMarked, nowBefore.debtMarked), 'the leftover debt-marked row does not inflate the current period');
+  // Transactions: the converted row is labelled and not a "reversal"; past-day debt stays.
+  const sum = (await api('GET', `/payments/transactions/summary?q=${encodeURIComponent(cust.name)}`, { token: w.tokens.admin })).data.filtered;
+  assert.ok(close(sum.debt_usd, 50), 'debt-marked counted once, as originally recorded');
+  assert.equal(sum.reversed_count, 0, 'a conversion is not a reversal');
+  assert.ok(close(sum.total_usd, 20));
+  const list = (await api('GET', `/payments/transactions?q=${encodeURIComponent(cust.name)}`, { token: w.tokens.admin })).data;
+  assert.ok(list.some((p) => p.conversion === 'converted'));
+  assert.ok(list.some((p) => p.conversion === 'leftover'));
+});
+
+test('fix P1-2(b): a pre-V2 cashout (no covered ids) shows the same figures after a conversion', async () => {
+  const cust = await mkCustomer(zoneD, 'DV LegacyCashout');
+  const marker = await mkCashier(`t_dv_mark_${rnd()}`, zoneD.name);
+  const start = iso(Date.now() - 1000);
+  const inv = await createInvoiceFor(cust, 40);
+  assert.equal((await pay(marker.token, inv.id, 10, 'cash')).status, 201);
+  assert.equal((await pay(marker.token, inv.id, 30, 'debt')).status, 201);
+  await new Promise((r) => setTimeout(r, 50));
+  const co = await api('POST', '/cashouts', { token: w.tokens.head, body: {
+    zone_id: zoneD.id, cashier_id: marker.id, period_start: start, period_end: iso(Date.now() + 1000),
+    cash_count: { USD: { mode: 'manual', total: 10, remark: 'counted' }, SLSH: { mode: 'manual', total: 0, remark: 'counted' } },
+  } });
+  assert.equal(co.status, 201, JSON.stringify(co.body));
+  await db.query('UPDATE cashouts SET covered_payment_ids = NULL WHERE id = $1', [co.data.id]); // simulate a pre-V2 row
+  const view = async () => (await api('GET', `/cashouts/${co.data.id}`, { token: w.tokens.head })).data;
+  const b = await view();
+  const bTx = (await api('GET', `/cashouts/${co.data.id}/transactions`, { token: w.tokens.head })).data.length;
+  const d = await autoDebt(inv.id);
+  assert.equal((await collect(cashierD.token, d.id, { amount: 12, currency: 'USD', method: 'cash' })).status, 201);
+  const a = await view();
+  assert.ok(close(a.reconciliation.expectedAmount, b.reconciliation.expectedAmount), 'expected unchanged');
+  assert.equal(a.reconciliation.transactionCount, b.reconciliation.transactionCount);
+  assert.deepEqual(a.reconciliation.methodBreakdown, b.reconciliation.methodBreakdown);
+  assert.ok(close(a.surplus, b.surplus) && close(a.shortage, b.shortage));
+  assert.equal((await api('GET', `/cashouts/${co.data.id}/transactions`, { token: w.tokens.head })).data.length, bTx);
+});
+
+test('fix P1-2(c,d): the leftover debt-marked row keeps the original cashier, is rounded to cents, and leaves the invoice paid', async () => {
+  await setRate(8500);
+  try {
+    const cust = await mkCustomer(zoneD, 'DV Leftover');
+    const collector = await mkCashier(`t_dv_col_${rnd()}`, zoneD.name);
+    const inv = await createInvoiceFor(cust, 10);
+    const mark = await pay(cashierD.token, inv.id, 10, 'debt');
+    assert.equal(mark.status, 201);
+    const d = await autoDebt(inv.id);
+    const c = await collect(collector.token, d.id, { amount: 20000, currency: 'SLSH', method: 'slsh' }); // = $2.352941
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    const lo = (await db.query('SELECT * FROM payments WHERE leftover_of_payment_id = $1', [c.data.payment.id])).rows[0];
+    assert.ok(lo, 'leftover row linked to the real payment');
+    assert.equal(num(lo.amount), 7.65, 'rounded UP to whole cents');
+    assert.equal(lo.cashier_id, (await db.query("SELECT id FROM v2_users WHERE username = 't_dv_cashier_d'")).rows[0].id, 'original cashier kept');
+    const orig = (await db.query('SELECT status, converted_by_payment_id FROM payments WHERE id = $1', [mark.data.id])).rows[0];
+    assert.equal(orig.status, 'reversed');
+    assert.equal(orig.converted_by_payment_id, c.data.payment.id);
+    const ib = (await api('GET', `/invoices/${inv.id}`, { token: w.tokens.admin })).data;
+    assert.equal(ib.status, 'paid');
+    assert.ok(close(ib.balance.outstanding, 0));
+    // SLSH invoice: whole shillings
+    const inv2 = await createInvoiceFor(cust, 100000, 'SLSH');
+    await pay(cashierD.token, inv2.id, 100000, 'debt', 'SLSH');
+    const d2 = await autoDebt(inv2.id);
+    const c2 = await collect(collector.token, d2.id, { amount: 3.33, currency: 'USD', method: 'cash' }); // 28,305 SLSH
+    assert.equal(c2.status, 201, JSON.stringify(c2.body));
+    const lo2 = (await db.query('SELECT amount FROM payments WHERE leftover_of_payment_id = $1', [c2.data.payment.id])).rows[0];
+    assert.ok(Number.isInteger(num(lo2.amount)), `whole SLSH: ${lo2.amount}`);
+    assert.equal((await api('GET', `/invoices/${inv2.id}`, { token: w.tokens.admin })).data.status, 'paid');
+  } finally {
+    await setRate(10000);
+  }
+});
+
+test('fix P2-5: reversing a conversion payment restores the debt-marked rows exactly; blocked once the invoice moved on', async () => {
+  const cust = await mkCustomer(zoneD, 'DV UndoConv');
+  const inv = await createInvoiceFor(cust, 30);
+  const mark = await pay(cashierD.token, inv.id, 30, 'debt');
+  const d = await autoDebt(inv.id);
+  const c = await collect(cashierD.token, d.id, { amount: 10, currency: 'USD', method: 'cash' });
+  assert.equal(c.status, 201);
+  const rv = await api('PUT', `/payments/${c.data.payment.id}/reverse`, { token: w.tokens.admin, body: { reason: 'bounced' } });
+  assert.equal(rv.status, 200, JSON.stringify(rv.body));
+  assert.deepEqual(rv.data.restored_debt_marked_payment_ids, [mark.data.id]);
+  const rows = (await db.query('SELECT id, method, status, leftover_of_payment_id FROM payments WHERE invoice_id = $1 ORDER BY id', [inv.id])).rows;
+  assert.equal(rows.find((r) => r.id === mark.data.id).status, 'recorded', 'original debt mark restored');
+  assert.equal(rows.find((r) => r.leftover_of_payment_id === c.data.payment.id).status, 'reversed', 'leftover undone');
+  const ib = (await api('GET', `/invoices/${inv.id}`, { token: w.tokens.admin })).data;
+  assert.equal(ib.status, 'paid');
+  assert.ok(close(ib.balance.paid, 30));
+  assert.ok(close((await autoDebt(inv.id)).amount, 30), 'auto debt back to the full debt-marked amount');
+  const sum = (await api('GET', `/payments/transactions/summary?q=${encodeURIComponent(cust.name)}`, { token: w.tokens.admin })).data.filtered;
+  assert.ok(close(sum.debt_usd, 30));
+  assert.equal(sum.reversed_count, 1, 'only the real payment counts as reversed');
+
+  // a later collection makes the earlier one non-reversible
+  const d2 = await autoDebt(inv.id);
+  const c1 = await collect(cashierD.token, d2.id, { amount: 5, currency: 'USD', method: 'cash' });
+  const c2 = await collect(cashierD.token, d2.id, { amount: 5, currency: 'USD', method: 'cash' });
+  assert.equal(c2.status, 201);
+  const blocked = await api('PUT', `/payments/${c1.data.payment.id}/reverse`, { token: w.tokens.admin, body: { reason: 'x' } });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.code, 'CONVERSION_NOT_REVERSIBLE');
+  assert.equal((await api('PUT', `/payments/${c2.data.payment.id}/reverse`, { token: w.tokens.admin, body: { reason: 'x' } })).status, 200, 'latest one can be undone');
+});
+
+test('fix P2-1/P2-2: voided-invoice auto debts are written off by the backfill; reversing on a voided invoice skips the auto-debt sync', async () => {
+  const cust = await mkCustomer(zoneD, 'DV Voided');
+  const inv = await createInvoiceFor(cust, 30);
+  await pay(cashierD.token, inv.id, 10, 'cash');
+  const d = await autoDebt(inv.id);
+  await db.query("UPDATE invoices SET status = 'voided', voided_at = NOW() WHERE id = $1", [inv.id]); // legacy void (before Debts V2)
+  const { getDebtsSummary } = require('../lib/reportsCalculations');
+  const rows = await getDebtsSummary({ zoneId: zoneD.id, periodStart: new Date(Date.now() - 86400000), periodEnd: new Date(Date.now() + 86400000) });
+  assert.ok(close(rows.find((r) => r.id === d.id).remaining, 0), 'reports agree with the Debts page before the backfill');
+  const { runDebtsV2Migrations } = require('../db');
+  await runDebtsV2Migrations();
+  const after = (await db.query('SELECT status, written_off_reason, written_off_by, settled_by FROM debts WHERE id = $1', [d.id])).rows[0];
+  assert.equal(after.status, 'written_off');
+  assert.equal(after.written_off_reason, 'Invoice voided (Debts V2 backfill)');
+  assert.equal(after.written_off_by, null);
+  assert.equal(after.settled_by, null);
+
+  const inv2 = await createInvoiceFor(cust, 30);
+  const p = await pay(cashierD.token, inv2.id, 10, 'cash');
+  assert.equal((await api('PUT', `/invoices/${inv2.id}/void`, { token: w.tokens.admin, body: { reason: 'wrong customer' } })).status, 200);
+  assert.equal((await api('PUT', `/payments/${p.data.id}/reverse`, { token: w.tokens.admin, body: { reason: 'refund' } })).status, 200);
+  const open = (await db.query("SELECT COUNT(*)::int AS n FROM debts WHERE invoice_id = $1 AND status = 'unpaid'", [inv2.id])).rows[0].n;
+  assert.equal(open, 0, 'no new auto debt on a voided invoice');
+});
+
+test('fix P2-7: Idempotency-Key replays a retried collection instead of recording it twice', async () => {
+  const cust = await mkCustomer(zoneD, 'DV Idem');
+  const debt = await mkDebt(gudD, cust, 20);
+  const other = await mkDebt(gudD, cust, 20);
+  const key = `k-${rnd()}`;
+  const send = (id, k = key) => api('POST', `/debts/${id}/collect`, { token: cashierD.token, body: { amount: 5, currency: 'USD', method: 'cash' }, headers: { 'Idempotency-Key': k } });
+  const [a, b] = await Promise.all([send(debt.id), send(debt.id)]);
+  assert.equal(a.status, 201, JSON.stringify(a.body));
+  assert.equal(b.status, 201, JSON.stringify(b.body));
+  assert.equal(a.data.payment.id, b.data.payment.id, 'same outcome replayed');
+  const c = await send(debt.id);
+  assert.equal(c.data.payment.id, a.data.payment.id);
+  const n = (await db.query("SELECT COUNT(*)::int AS n FROM payments WHERE debt_id = $1 AND status = 'recorded'", [debt.id])).rows[0].n;
+  assert.equal(n, 1, 'recorded once');
+  assert.equal((await send(other.id)).status, 409, 'key reused for another debt');
+  assert.equal((await send(debt.id, 'short')).status, 400);
+  assert.equal((await send(debt.id, `k-${rnd()}`)).status, 201, 'a fresh key is a new payment');
+});
+
+test('fix P2-8: ZAAD reconciliation message for a debt collection points at Collect payment', () => {
+  const pr = require('../routes/payments');
+  const m = pr.reconciliationMessageForDebt('TX123', 'race', 77);
+  assert.match(m, /POST \/debts\/77\/collect/);
+  assert.match(m, /TX123/);
 });

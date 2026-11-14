@@ -514,7 +514,7 @@ function RowActions({ d, canCollect, role, userId, onAction }) {
             <button type="button" role="menuitem" onClick={run('details')}><ExternalLink size={14} /> {t('dv.act.details')}</button>
             <button type="button" role="menuitem" onClick={run('followup')}><MessageSquarePlus size={14} /> {t('dv.act.followup')}</button>
             {(role === 'admin' || (['cashier', 'gudoomiye'].includes(role) && d.created_by === userId)) && <button type="button" role="menuitem" onClick={run('edit')}><Pencil size={14} /> {t('dv.act.edit')}</button>}
-            {role === 'admin' && isOpen(d) && <button type="button" role="menuitem" className="pay" onClick={run('writeoff')}><Ban size={14} /> {t('dv.act.writeOff')}</button>}
+            {role === 'admin' && isOpen(d) && d.source !== 'auto_invoice' && <button type="button" role="menuitem" className="pay" onClick={run('writeoff')}><Ban size={14} /> {t('dv.act.writeOff')}</button>}
           </div>
         )}
       </div>

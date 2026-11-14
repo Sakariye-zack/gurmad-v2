@@ -217,9 +217,16 @@ function CustomerDebtsSection({ customerId }) {
   const navigate = useNavigate();
   const { data, isLoading, error } = useDebts({ customer_id: customerId, page_size: 100 });
   const debts = data?.data || [];
+  const total = data?.meta?.total ?? debts.length;
   return (
     <Card style={{ ...cardPad, marginTop: '16px' }}>
       <SectionHeader icon={HandCoins} title={t('nav.debts')} />
+      {total > debts.length && (
+        <p style={{ margin: '0 0 8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+          {t('dv.cust.showing', undefined, { n: debts.length, total })}{' '}
+          <a href={`/financial/debts?customer_id=${customerId}`} onClick={(e) => { e.preventDefault(); navigate(`/financial/debts?customer_id=${customerId}`); }}>{t('dv.cust.openAll')}</a>
+        </p>
+      )}
       {isLoading && <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>{t('common.loading')}</p>}
       {error && <p style={{ margin: 0, fontSize: '13px', color: 'var(--danger)' }}>{error.message}</p>}
       {!isLoading && !error && debts.length === 0 && (

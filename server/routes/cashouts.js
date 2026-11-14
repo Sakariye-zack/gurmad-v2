@@ -566,7 +566,7 @@ router.get('/:id/transactions', authenticateToken, requireRole(...VIEW_ROLES), a
        LEFT JOIN invoices ON payments.invoice_id = invoices.id
        LEFT JOIN debts ON debts.id = payments.debt_id
        JOIN customers ON customers.id = COALESCE(invoices.customer_id, debts.customer_id)
-       WHERE ${byIds ? 'payments.id = ANY($1::int[])' : `payments.cashier_id = $1 AND payments.status = 'recorded'
+       WHERE ${byIds ? 'payments.id = ANY($1::int[])' : `payments.cashier_id = $1 AND (payments.status = 'recorded' OR (payments.converted_by_payment_id IS NOT NULL AND payments.reversed_at >= $4))
          AND payments.created_at >= $2 AND payments.created_at < $3 AND payments.created_at < $4`}
        ORDER BY payments.created_at ASC`,
       byIds ? [cashout.covered_payment_ids] : [cashout.cashier_id, cashout.period_start, cashout.period_end, cashout.created_at]

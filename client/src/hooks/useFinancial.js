@@ -164,7 +164,7 @@ function invalidateMoney(qc) {
 }
 export function useCollectDebt() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, ...body }) => apiClient.post(`/v2/debts/${id}/collect`, body), onSuccess: () => invalidateMoney(qc) });
+  return useMutation({ mutationFn: ({ id, idempotencyKey, ...body }) => apiClient.post(`/v2/debts/${id}/collect`, body, idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined), onSuccess: () => invalidateMoney(qc) });
 }
 export function useWriteOffDebt() {
   const qc = useQueryClient();

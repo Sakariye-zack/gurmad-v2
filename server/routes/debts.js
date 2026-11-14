@@ -12,6 +12,10 @@ const paymentsRouter = require('./payments');
 
 const router = express.Router();
 
+// Post-commit audit: logged, never thrown — a failing audit write must not
+// turn an already committed change into an error response.
+const audit = (entry) => logAudit(entry).catch((e) => console.error('audit failed:', entry && entry.action, e && e.message));
+
 // Debts V2. The debts REGISTER: receivables owed by customers, separate
 // from invoice balances.
 //  - AUTO debts (source 'auto_invoice') mirror the debt-marked / unpaid part
@@ -154,6 +158,14 @@ async function viewContext(req) {
 }
 
 // List / export / by-customer filters on the debt view. Returns { where } or { error }.
+// status (derived, NOT the stored debts.status):
+//   open        = unpaid + partial (everything still owed)
+//   unpaid      = still owed and NOTHING paid on the debt yet (a partly paid
+//                 standalone debt is 'partial', not 'unpaid'; auto debts are
+//                 always 'unpaid' while open — their paid part lives on the invoice)
+//   partial     = standalone debt with some payment recorded, still owed
+//   paid        = settled (fully paid, or legacy settle)
+//   written_off = written off (incl. an auto debt whose invoice was voided)
 function buildFilters(q, params) {
   const where = [];
   const push = (v) => { params.push(v); return `$${params.length}`; };
@@ -220,7 +232,7 @@ function buildFilters(q, params) {
 }
 
 const pageArgs = (q) => {
-  const page = Math.max(1, parseInt(q.page, 10) || 1);
+  const page = Math.min(1000000, Math.max(1, parseInt(q.page, 10) || 1));
   const pageSize = Math.min(100, Math.max(1, parseInt(q.page_size, 10) || 25));
   return { page, pageSize };
 };
@@ -455,7 +467,7 @@ router.post('/followups', authenticateToken, requireRole(...VIEW_ROLES), async (
       `INSERT INTO debt_followups (customer_id, debt_id, kind, note, promise_date, promise_amount, promise_currency, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *, to_char(promise_date, 'YYYY-MM-DD') AS promise_date`,
       [customerId, debtId, b.kind, note || null, promiseDate, promiseAmount, promiseCurrency, req.user.id ?? null])).rows[0];
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.followup', entityType: debtId ? 'debt' : 'customer', entityId: debtId || customerId, before: null, after: row });
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.followup', entityType: debtId ? 'debt' : 'customer', entityId: debtId || customerId, before: null, after: row });
     res.status(201).json({ data: { ...row, promise_amount: row.promise_amount === null ? null : Number(row.promise_amount) } });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to save the follow-up.', code: 'INTERNAL' } });
@@ -557,7 +569,7 @@ router.post('/', authenticateToken, requireRole(...CREATE_ROLES), async (req, re
       [custId, invId, amt, cur, desc || null, req.user.id]
     );
     const debt = inserted.rows[0];
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.create', entityType: 'debt', entityId: debt.id, before: null, after: debt });
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.create', entityType: 'debt', entityId: debt.id, before: null, after: debt });
     res.status(201).json({ data: debt });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to create debt.', code: 'INTERNAL' } });
@@ -576,8 +588,8 @@ router.get('/:id', authenticateToken, requireRole(...VIEW_ROLES), async (req, re
     ctx.params.push(id);
     const row = (await pool.query(`${debtViewSql([...ctx.scopeWhere, `d.id = $${ctx.params.length}`])} SELECT dv.* FROM dv`, ctx.params)).rows[0];
     if (!row) {
-      const exists = (await pool.query('SELECT 1 FROM debts WHERE id = $1', [id])).rows.length > 0;
-      return exists ? bad(res, 'You do not have access to this debt.', 'FORBIDDEN', 403) : bad(res, 'Debt not found.', 'NOT_FOUND', 404);
+      // Out-of-scope ids look exactly like missing ones (no existence leak).
+      return bad(res, 'Debt not found.', 'NOT_FOUND', 404);
     }
     const debt = shapeRow(row);
     const payCols = `p.id, p.invoice_id, p.debt_id, p.collected_via_debt_id, p.amount, p.currency, p.method, p.amount_usd, p.status, p.reference_code, p.channel,
@@ -639,7 +651,7 @@ router.put('/:id', authenticateToken, requireRole(...CREATE_ROLES), async (req, 
       return bad(res, 'Only the person who created this debt, or an admin, can edit it.', 'FORBIDDEN', 403);
     }
     const upd = (await pool.query('UPDATE debts SET description = $1, updated_at = NOW() WHERE id = $2 RETURNING *', [desc || null, id])).rows[0];
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.update', entityType: 'debt', entityId: id, before: { description: cur.description }, after: { description: upd.description } });
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.update', entityType: 'debt', entityId: id, before: { description: cur.description }, after: { description: upd.description } });
     res.json({ data: upd });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to update the debt.', code: 'INTERNAL' } });
@@ -669,13 +681,32 @@ router.post('/:id/collect', authenticateToken, requireRole(...COLLECT_ROLES), as
   if (method === 'zaad' && !ref) return bad(res, 'reference_code (the ZAAD transaction code) is required for a ZAAD payment.');
   if (method === 'edahab' && !ref) return bad(res, 'reference_code (the eDahab transaction code) is required for an eDahab payment.');
 
+  // Optional Idempotency-Key (one stored outcome per key + user): a retried
+  // request (double tap, network retry) replays the first result instead of
+  // recording the money twice.
+  const idemRaw = req.get('Idempotency-Key');
+  const idemKey = idemRaw === undefined ? null : String(idemRaw).trim();
+  if (idemKey !== null && !/^[A-Za-z0-9_.:-]{8,100}$/.test(idemKey)) return bad(res, 'Idempotency-Key must be 8-100 characters (letters, digits, _ . : -).');
+  const replay = async (row) => {
+    if (row.debt_id !== id) return bad(res, 'This Idempotency-Key was already used for another debt.', 'IDEMPOTENCY_MISMATCH', 409);
+    res.set('Idempotent-Replay', 'true');
+    return res.status(201).json(row.response);
+  };
+  if (idemKey !== null) {
+    try {
+      const prior = (await pool.query('SELECT debt_id, response FROM debt_collect_requests WHERE idem_key = $1 AND user_id = $2', [idemKey, req.user.id])).rows[0];
+      if (prior && prior.response) return replay(prior);
+    } catch (err) {
+      return res.status(500).json({ error: { message: 'Failed to record the payment.', code: 'INTERNAL' } });
+    }
+  }
+
   let debt;
   let scope;
   try {
     scope = await resolveScope(req.user);
     debt = (await pool.query('SELECT * FROM debts WHERE id = $1', [id])).rows[0];
-    if (!debt) return bad(res, 'Debt not found.', 'NOT_FOUND', 404);
-    if (!(await customerInScope(scope, debt.customer_id))) return bad(res, 'You do not have access to this debt.', 'FORBIDDEN', 403);
+    if (!debt || !(await customerInScope(scope, debt.customer_id))) return bad(res, 'Debt not found.', 'NOT_FOUND', 404);
   } catch (err) {
     return res.status(500).json({ error: { message: 'Failed to record the payment.', code: 'INTERNAL' } });
   }
@@ -690,27 +721,48 @@ router.post('/:id/collect', authenticateToken, requireRole(...COLLECT_ROLES), as
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (idemKey !== null) {
+      // Claim the key in THIS transaction: a concurrent duplicate waits here
+      // until this one commits (then replays) or rolls back (then proceeds).
+      const claimed = await client.query(
+        'INSERT INTO debt_collect_requests (idem_key, user_id, debt_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING idem_key',
+        [idemKey, req.user.id, id]);
+      if (!claimed.rows.length) {
+        await client.query('ROLLBACK');
+        const prior = (await pool.query('SELECT debt_id, response FROM debt_collect_requests WHERE idem_key = $1 AND user_id = $2', [idemKey, req.user.id])).rows[0];
+        if (prior && prior.response) return replay(prior);
+        return bad(res, 'This request is already being processed.', 'IDEMPOTENCY_IN_PROGRESS', 409);
+      }
+    }
+    const remember = async (paymentId, body) => {
+      if (idemKey !== null) await client.query('UPDATE debt_collect_requests SET payment_id = $3, response = $4 WHERE idem_key = $1 AND user_id = $2', [idemKey, req.user.id, paymentId, JSON.stringify(body)]);
+    };
     if (debt.invoice_id === null) {
       const out = await debtPayments.recordDebtPaymentCore(client, req.user, { debtId: id, amt, cur, method, referenceCode: ref || null, zoneId: scope.zoneId });
+      const body = { data: { target: 'debt', payment: out.payment, debt: { id, status: out.debt.status, currency: out.currency, paid: out.paid, remaining: out.remaining } } };
+      await remember(out.payment.id, body);
       await client.query('COMMIT');
-      await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: out.payment.id, before: null, after: out.payment });
+      // Audits run after COMMIT and can never turn a recorded payment into an error.
+      await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: out.payment.id, before: null, after: out.payment });
       if (out.debt.status === 'paid') {
-        await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.settle', entityType: 'debt', entityId: id, before: out.debtBefore, after: { ...out.debt, settled_by_payment_id: out.payment.id } });
+        await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.settle', entityType: 'debt', entityId: id, before: out.debtBefore, after: { ...out.debt, settled_by_payment_id: out.payment.id } });
       }
-      return res.status(201).json({ data: { target: 'debt', payment: out.payment, debt: { id, status: out.debt.status, currency: out.currency, paid: out.paid, remaining: out.remaining } } });
+      return res.status(201).json(body);
     }
     const rec = await paymentsRouter.recordPaymentCore(client, req.user, {
       invoiceId: debt.invoice_id, amt, cur, method, referenceCode: ref || null, collectDebt: true, viaDebtId: id,
     });
-    await client.query('COMMIT');
-    await debtSuspension.afterPayment(rec.invoice.customer_id);
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: rec.payment.id, before: null, after: rec.payment });
-    if (rec.conversion) await paymentsRouter.auditConversion(req.user, rec.payment, rec.conversion);
-    const after = await debtPayments.autoDebtStateForInvoice(debt.invoice_id);
-    return res.status(201).json({ data: {
+    const after = await debtPayments.autoDebtStateForInvoice(debt.invoice_id, client);
+    const body = { data: {
       target: 'invoice', payment: rec.payment, invoice_status: rec.recalculated.status, outstanding: rec.recalculated.outstanding,
       outstanding_currency: rec.recalculated.currency, debt: after, conversion: rec.conversion || null,
-    } });
+    } };
+    await remember(rec.payment.id, body);
+    await client.query('COMMIT');
+    await debtSuspension.afterPayment(rec.invoice.customer_id);
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'payment.create', entityType: 'payment', entityId: rec.payment.id, before: null, after: rec.payment });
+    if (rec.conversion) await paymentsRouter.auditConversion(req.user, rec.payment, rec.conversion).catch((e) => console.error('debt conversion audit failed:', e && e.message));
+    return res.status(201).json(body);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err instanceof PaymentError || err instanceof paymentsRouter.PaymentError) return bad(res, err.message, err.code, err.status);
@@ -751,7 +803,7 @@ router.put('/:id/write-off', authenticateToken, requireRole('admin'), async (req
       `UPDATE debts SET status = 'written_off', written_off_at = NOW(), written_off_by = $1, written_off_reason = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
       [req.user.id, reason, id])).rows[0];
     await client.query('COMMIT');
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.write_off', entityType: 'debt', entityId: id,
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.write_off', entityType: 'debt', entityId: id,
       before: { status: cur.status, amount: cur.amount, currency: cur.currency, paid }, after: { status: 'written_off', reason, remaining_written_off: remaining, currency: curOf(cur.currency) } });
     res.json({ data: { ...upd, remaining_written_off: remaining } });
   } catch (err) {
@@ -762,12 +814,13 @@ router.put('/:id/write-off', authenticateToken, requireRole('admin'), async (req
   }
 });
 
-// PUT /:id/status — LEGACY settle to 'paid' (kept for API compatibility; the
-// Debts page no longer offers it except for manual debts linked to an
-// invoice). OD-1's soft-block-with-reason: if the linked invoice is still
-// outstanding, settlement_override_reason is required. Settling a standalone
-// debt here records NO payment — the audit entry says so explicitly; use
-// POST /:id/collect for money actually received.
+// PUT /:id/status — LEGACY settle to 'paid', allowed ONLY for a MANUAL debt
+// linked to an invoice (the money is taken on that invoice in Billing). A
+// standalone debt gets 409 USE_COLLECT (collect or write off), an auto debt
+// 409 AUTO_DEBT. Zone scope fails closed (out of scope = 404). OD-1's
+// soft-block-with-reason: if the linked invoice is still outstanding,
+// settlement_override_reason is required. The audit entry records
+// settled_without_payment: this action itself records no money.
 router.put('/:id/status', authenticateToken, requireRole(...SETTLE_ROLES), async (req, res) => {
   const id = parseStrictId(req.params.id);
   if (id === null) return res.status(400).json({ error: { message: 'Invalid debt id.', code: 'VALIDATION' } });
@@ -783,6 +836,22 @@ router.put('/:id/status', authenticateToken, requireRole(...SETTLE_ROLES), async
       return res.status(404).json({ error: { message: 'Debt not found.', code: 'NOT_FOUND' } });
     }
     const debt = existing.rows[0];
+    // Fix round: fail-closed zone scope (out of scope = not found).
+    if (!(await customerInScope(await resolveScope(req.user), debt.customer_id))) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'Debt not found.', code: 'NOT_FOUND' } });
+    }
+    // Only a MANUAL debt linked to an invoice may be settled here (its money
+    // is taken on the invoice). A standalone debt must be collected (a real
+    // payment) or written off; an auto debt follows its invoice.
+    if (debt.invoice_id === null) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'A standalone debt cannot be marked settled without money: use Collect payment (POST /debts/:id/collect) or Write off (PUT /debts/:id/write-off).', code: 'USE_COLLECT' } });
+    }
+    if (debt.source === 'auto_invoice') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'An auto debt follows its invoice: collect it with Collect payment, or void / adjust the invoice.', code: 'AUTO_DEBT' } });
+    }
     if (debt.status === 'paid') {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: { message: 'This debt is already settled.', code: 'CONFLICT' } });
@@ -809,15 +878,15 @@ router.put('/:id/status', authenticateToken, requireRole(...SETTLE_ROLES), async
         overrideReason = reason;
       }
     }
-    const unpaidRemainder = debt.invoice_id === null ? Math.max(parseFloat(debt.amount) - await debtPayments.debtPaidAmount(id, client), 0) : null;
+    // This action records no payment itself (the money was taken on the invoice).
 
     const updated = await client.query(
       `UPDATE debts SET status = 'paid', settled_at = NOW(), settled_by = $1, settlement_override_reason = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
       [req.user.id, overrideReason, id]
     );
     await client.query('COMMIT');
-    await logAudit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.settle', entityType: 'debt', entityId: id, before: debt,
-      after: { ...updated.rows[0], ...(unpaidRemainder !== null && unpaidRemainder > EPSILON ? { settled_without_payment: true, unpaid_remainder: unpaidRemainder } : {}) } });
+    await audit({ actorId: req.user.id, actorUsername: req.user.username, action: 'debt.settle', entityType: 'debt', entityId: id, before: debt,
+      after: { ...updated.rows[0], settled_without_payment: true, debt_amount: debt.amount, linked_invoice_id: debt.invoice_id } });
     res.json({ data: updated.rows[0] });
   } catch (err) {
     await client.query('ROLLBACK');

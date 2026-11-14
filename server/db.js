@@ -2212,6 +2212,41 @@ async function runDebtsV2Migrations() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debt_followups_debt ON debt_followups(debt_id, created_at DESC) WHERE debt_id IS NOT NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_debt_followups_customer ON debt_followups(customer_id, created_at DESC);`);
+
+  // Debt-marked -> real conversion links (fix round). A debt-marked row
+  // consumed by a debt collection is reversed with converted_by_payment_id =
+  // the real payment; a partly used remainder is re-recorded as a new
+  // debt-marked row with leftover_of_payment_id = the real payment. Reports,
+  // Transactions and pre-V2 cashout re-displays use these links so a
+  // conversion never changes a closed period's figures.
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS converted_by_payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS leftover_of_payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_converted_by ON payments(converted_by_payment_id) WHERE converted_by_payment_id IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_leftover_of ON payments(leftover_of_payment_id) WHERE leftover_of_payment_id IS NOT NULL;`);
+
+  // Idempotency for POST /debts/:id/collect: one stored outcome per
+  // (Idempotency-Key, user). Written in the payment's own transaction, so a
+  // failed attempt leaves no key behind and a retry is processed normally.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS debt_collect_requests (
+      idem_key VARCHAR(100) NOT NULL,
+      user_id INTEGER NOT NULL,
+      debt_id INTEGER NOT NULL,
+      payment_id INTEGER,
+      response JSONB,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (idem_key, user_id)
+    );
+  `);
+
+  // One-time, idempotent backfill: open auto debts whose invoice was voided
+  // before voiding closed them (routes/invoices.js) are written off, so the
+  // Debts page, reports and the customer portal agree. settled_by stays NULL.
+  await pool.query(`
+    UPDATE debts d SET status = 'written_off', written_off_at = NOW(), written_off_by = NULL,
+           written_off_reason = 'Invoice voided (Debts V2 backfill)', updated_at = NOW()
+    FROM invoices i
+    WHERE i.id = d.invoice_id AND d.source = 'auto_invoice' AND d.status = 'unpaid' AND i.status = 'voided'`);
 }
 
 // ============================================================
